@@ -6,11 +6,10 @@ import { getMenuItems, updateMenuItem, addMenuItem, deleteMenuItem } from '../db
 // ⭐️ 靜態資料定義 ⭐️
 // ======================================================================
 
-const CATEGORIES = ['主餐', '小點', '飲品', '冷凍包']; 
+const CATEGORIES = ['主餐', '小點', '飲品', '冷凍包', '單點']; 
 
 const ALL_INVENTORY_ITEMS = [
-    // 庫存項目定義 (略)
-    { id: 'rice_stock', name: '飯量庫存 (份)', category: '其他庫存' },
+    // 庫存項目定義    
     { id: 'beef', name: '紅燒牛腩筋', category: '主食庫存' },
     { id: 'pork_ribs', name: '無錫排骨', category: '主食庫存' },
     { id: 'pork_shoulder', name: '松阪豬', category: '主食庫存' },
@@ -41,6 +40,7 @@ const getCategoryStyles = (category) => {
         case '小點': return 'bg-amber-50 text-amber-700 border-amber-200';
         case '飲品': return 'bg-lime-50 text-lime-700 border-lime-200';
         case '冷凍包': return 'bg-indigo-50 text-indigo-700 border-indigo-200';
+        case '單點': return 'bg-purple-50 text-purple-700 border-purple-200';
         default: return 'bg-gray-100 text-gray-800 border-gray-300';
     }
 };

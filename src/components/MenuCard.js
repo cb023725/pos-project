@@ -9,15 +9,7 @@ const formatCurrency = (number) => {
 // 輔助函式：判斷商品是否需追蹤庫存
 const itemNeedsStockTracking = (item) => item.stock !== undefined && item.stock !== null;
 
-/**
- * 菜單卡片元件 (修正版：完美適應 3:2 圖片比例)
- * 修正重點：
- * 1. 使用 aspect-[3/2] 確保任何裝置下比例不跑掉。
- * 2. 圖片改用 absolute 填滿容器，避免渲染誤差。
- * 3. 保持資訊區高度一致。
- */
 const MenuCard = React.memo(({ item, onAddItem }) => {
-    
     const needsStockManagement = itemNeedsStockTracking(item); 
     const currentStock = needsStockManagement ? (item.stock || 0) : Infinity; 
     const isOutOfStock = needsStockManagement && currentStock <= 0;
@@ -34,13 +26,12 @@ const MenuCard = React.memo(({ item, onAddItem }) => {
                 }
             `}
         >
-            {/* 圖片區域： aspect-[3/2] 確保比例，移除固定 h-28 */}
+            {/* 圖片區域：保持 3:2 */}
             <div className="w-full aspect-[3/2] relative overflow-hidden bg-gray-100">
                 {item.imageUrl ? (
                     <img
                         src={item.imageUrl}
                         alt={item.name}
-                        // 使用 absolute inset-0 配合 aspect 比例最為精準
                         className="absolute inset-0 w-full h-full object-cover transition-transform duration-300 hover:scale-105"
                         onError={(e) => { 
                             e.target.onerror = null; 
@@ -49,11 +40,9 @@ const MenuCard = React.memo(({ item, onAddItem }) => {
                         }}
                     />
                 ) : (
-                    // 留白容器同樣保持 3:2
                     <div className="absolute inset-0 w-full h-full bg-gray-100"></div>
                 )}
                 
-                {/* 庫存標籤 */}
                 {needsStockManagement && (
                     <span className={`absolute top-1 right-1 px-2 py-0.5 rounded-full text-xs font-bold shadow-md z-10 ${
                         isOutOfStock ? 'bg-red-600 text-white' : 
@@ -64,32 +53,50 @@ const MenuCard = React.memo(({ item, onAddItem }) => {
                 )}
             </div>
 
-            {/* 底部資訊區：保持高度固定以整齊排列 */}
-            <div className="p-2 flex flex-col h-16 justify-center"> 
-                {/* 菜名 */}
-                <p 
-                    className={`
-                        text-l font-black leading-snug 
-                        ${isOutOfStock ? 'text-gray-500' : 'text-gray-900'} 
-                        truncate
-                    `}
-                    title={item.name} 
-                >
-                    {item.name}
-                </p>
-                
-                {/* 價格區域 */}
-                <div className="flex justify-between items-center mt-0.5"> 
-                    <span className="text-sm font-extrabold text-blue-600">
-                        NT$ {formatCurrency(item.price)}
-                    </span>
-                    {!isOutOfStock && (
-                         <span className="text-blue-500 font-bold text-sm opacity-0"></span>
+            {/* 底部資訊區：稍微加大高度從 h-16 -> h-27，並增加內距 */}
+            <div className="p-1.5 flex flex-col h-25 justify-center"> 
+                <div className="relative w-full mb-1"> {/* 改為 relative 以便內部 absolute 定位 */}
+                    
+                    {/* 編號標籤：改用 absolute 定位 */}
+                    {item.category === '主餐' && item.sortOrder && (
+                        <div className="
+                            absolute left-0 top-0.5
+                            flex items-center justify-center 
+                            w-6 h-6 
+                            bg-black rounded-md 
+                            z-10
+                        ">
+                            <span className="text-white font-bold text-[12px] leading-none">
+                                {Number(item.sortOrder)}
+                            </span>
+                        </div>
                     )}
+                    
+                    {/* 菜名：使用 indent 讓第一行空出編號的位置 */}
+                    <p 
+                        className={`
+                            text-[23px] font-black leading-tight
+                            ${isOutOfStock ? 'text-gray-500' : 'text-gray-900'} 
+                            line-clamp-2 break-words
+                        `}
+                        style={{ 
+                            // 24px (方塊寬度) + 4px (間距) = 28px
+                            textIndent: item.category === '主餐' && item.sortOrder ? '28px' : '0px' 
+                        }}
+                    >
+                        {item.name}
+                    </p>
                 </div>
-            </div>
-        </button>
-    );
-});
+                                
+                                <div className="flex justify-between items-center"> 
+                                    <span className="text-base font-extrabold text-blue-600">
+                                        NT$ {formatCurrency(item.price)}
+                                    </span>
+                                </div>
+                            </div>
+                        </button>
+                    );
+                });
+
 
 export default MenuCard;

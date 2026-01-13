@@ -72,7 +72,7 @@ const useDynamicVh = () => {
 
 // --- 常數定義 ---
 const TABLE_OPTIONS = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', '外帶'];
-const CATEGORY_ORDER = ['小點', '主餐', '飲品', '冷凍包'];
+const CATEGORY_ORDER = ['小點', '主餐', '飲品', '冷凍包', '單點'];
 
 // --- 輔助函數 ---
 const formatCurrency = (number) => {
@@ -376,7 +376,8 @@ const OrderPage = () => {
                     ...item,
                     isSent: !!item.isSent, // 載入時保留 DB 中的手動註記狀態
                     isPaid: !!item.isPaid,
-                    internalId: item.internalId || Math.random().toString(36).substr(2, 9)
+                    internalId: item.internalId || Math.random().toString(36).substr(2, 9),
+                    sortOrder: item.sortOrder
                 }));
                 dispatch({ type: ACTION_TYPE.SET_ORDER_AND_RICE, payload: { newOrder: loadedItems } });
                 setCurrentOrderId(openOrder.id);
@@ -420,7 +421,7 @@ const OrderPage = () => {
         const orderData = {
             orderId, table: targetTable, customerCount: count,
             // 🚨 重點：將帶有最新數量、isSent 註記、isPaid 狀態的 orderItems 列表傳入 DB 儲存
-            items: orderItems.map(({ id, name, price, quantity, isSent, isPaid, category, internalId }) => ({ id, name, price, quantity, isSent: !!isSent, isPaid: !!isPaid, category, internalId })),
+            items: orderItems.map(({ id, name, price, quantity, isSent, isPaid, category, internalId, sortOrder }) => ({ id, name, price, quantity, isSent: !!isSent, isPaid: !!isPaid, category, internalId, sortOrder })),
             subTotal: total, total, timestamp: new Date(openTimestamp).toISOString(),
             status: status || 'new', sendTime: currentSendTime, finishTime: currentFinishTime,
         };
@@ -874,7 +875,7 @@ const OrderPage = () => {
                                     <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2H7a2 2 0 00-2 2v2M7 7a2 2 0 012-2h6a2 2 0 012 2v2H7V7z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
                                     <span className="text-base">{formatOrderId(currentOrderId)}</span>
                                 </div>
-                                <div className="text-right">
+                                <div className="text-right pr-1">
                                     <span>商品總數 {totalItems}</span>
                                 </div>
                             </div>
@@ -907,7 +908,7 @@ const OrderPage = () => {
                                                 }
                                             </div>
                                             {/* 未結帳金額放在同一列尾巴 */}
-                                            <span className="text-base font-black">${formatCurrency(unpaidTotal)}</span>
+                                            <span className="text-base font-black pr-2">${formatCurrency(unpaidTotal)}</span>
                                         </div>
                                         {unpaidItems.map(item => (
                                             <div 
@@ -939,7 +940,19 @@ const OrderPage = () => {
                                                 
                                                 {/* 2. 餐點名稱 */}
                                                 <div className="flex flex-col flex-grow">
-                                                    <span className="font-bold text-sm">{item.name}</span>
+                                                    <div className="flex items-center gap-1">
+                                                        {/* 判斷：如果是主餐，且有 sortOrder，就顯示黑色小標籤 */}
+                                                        {item.category === '主餐' && item.sortOrder && (
+                                                            <div 
+                                                                className="flex-shrink-0 flex items-center justify-center w-5 h-5 bg-black rounded-md"
+                                                            >
+                                                                <span className="text-white font-bold text-[10px] leading-none">
+                                                                    {item.sortOrder}
+                                                                </span>
+                                                            </div>
+                                                        )}
+                                                        <span className="font-bold text-[16px]">{item.name}</span>
+                                                    </div>
                                                 </div>
                                                 
                                                 {/* 3. 數量控制與金額 */}
@@ -949,7 +962,7 @@ const OrderPage = () => {
                                                         {/* 數量減按鈕 (灰底半透明) */}
                                                         <button
                                                             onClick={(e) => { e.stopPropagation(); handleChangeItemQuantity(item.internalId, -1); }}
-                                                            className="w-6 h-6 bg-gray-200/60 text-gray-700 rounded-full transition-colors hover:bg-gray-300 flex items-center justify-center text-sm leading-none font-bold shadow-sm"
+                                                            className="w-6 h-6 bg-black/5 text-gray-700 rounded-full transition-colors hover:bg-gray-300 flex items-center justify-center text-sm leading-none font-bold shadow-sm"
                                                             disabled={isLoading || isPartialCheckoutMode}
                                                         >-</button>
                                                         
@@ -964,7 +977,7 @@ const OrderPage = () => {
                                                         {/* 數量加按鈕 (灰底半透明) */}
                                                         <button
                                                             onClick={(e) => { e.stopPropagation(); handleChangeItemQuantity(item.internalId, 1); }}
-                                                            className="w-6 h-6 bg-gray-200/60 text-gray-700 rounded-full transition-colors hover:bg-gray-300 flex items-center justify-center text-sm leading-none font-bold shadow-sm"
+                                                            className="w-6 h-6 bg-black/5 text-gray-700 rounded-full transition-colors hover:bg-gray-300 flex items-center justify-center text-sm leading-none font-bold shadow-sm"
                                                             disabled={isLoading || isPartialCheckoutMode}
                                                         >+</button>
                                                     </div>
@@ -988,7 +1001,7 @@ const OrderPage = () => {
                                                 已結帳
                                             </div>
                                             {/* 已結帳金額放在同一列尾巴 */}
-                                            <span className="text-base font-black">${formatCurrency(paidTotal)}</span>
+                                            <span className="text-base font-black pr-2">${formatCurrency(paidTotal)}</span>
                                         </div>
                                         {paidItems.map(item => (
                                             <div key={item.internalId} className="flex items-center justify-between p-2 border border-green-200 rounded-xl mb-1 bg-white shadow-sm">
@@ -1001,10 +1014,24 @@ const OrderPage = () => {
                                                     )}
                                                 </div>
                                                 <div className="flex flex-col flex-grow">
-                                                    <span className="font-bold text-sm">{item.name}</span>
+                                                    {/* 使用 block 確保內部元素可以浮動繞排 */}
+                                                    <div className="block w-full">
+                                                        {item.category === '主餐' && item.sortOrder && (
+                                                            <div 
+                                                                className="float-left flex items-center justify-center w-5 h-5 bg-black rounded-md mr-1 mt-0.5"
+                                                            >
+                                                                <span className="text-white font-bold text-[10px] leading-none">
+                                                                    {Number(item.sortOrder)}
+                                                                </span>
+                                                            </div>
+                                                        )}
+                                                        <span className="font-bold text-[16px] leading-tight inline">
+                                                            {item.name}
+                                                        </span>
+                                                    </div>
                                                 </div>
                                                 <div className="flex flex-col items-end space-y-1">
-                                                    <span className="text-xl font-black text-gray-800 px-1">{item.quantity}</span>
+                                                    <span className="text-xl font-black text-gray-800 px-1 pr-2">{item.quantity}</span>
                                                     {/* 單項總金額 (向下移動，與右側拉開距離) */}
                                                     <span className="text-xs font-black text-gray-800 self-end pr-2">${formatCurrency(item.price * item.quantity)}</span>
                                                 </div>
@@ -1083,15 +1110,15 @@ const OrderPage = () => {
                 </div>
 
                 {/* 右側區塊：菜單選擇區 */}
-                <div className="w-[70%] flex flex-col bg-white rounded-xl p-4 h-full">
+                <div className="w-[70%] flex flex-col bg-white rounded-xl p-2 h-full">
                     {/* 菜單類別 Tabs 區塊 */}
-                    <div className="flex items-center mb-3 border-b pb-3 flex-shrink-0">
+                    <div className="flex items-center mb-3 flex-shrink-0">
                         <div className="flex space-x-2 overflow-x-auto scrollbar-hide flex-grow">
                             {categories.map(cat => (
                                 <button 
                                     key={cat} 
                                     onClick={() => setSelectedCategory(cat)} 
-                                    className={`px-5 py-2.5 rounded-xl font-bold transition-all whitespace-nowrap text-sm ${selectedCategory === cat ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-100'}`}
+                                    className={`px-8 py-2.5 rounded-xl font-bold transition-all whitespace-nowrap text-m ${selectedCategory === cat ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-100'}`}
                                 >
                                     {cat}
                                 </button>
@@ -1101,18 +1128,48 @@ const OrderPage = () => {
                     
                     {/* 菜單內容區塊 (滾動區) */}
                     <div className="flex-grow overflow-y-auto">
-                        <div className="grid grid-cols-5 gap-4"> 
-                            {filteredMenu.map(item => (
-                                <MenuCard
-                                    key={item.id}
-                                    item={item}
-                                    onAddItem={(i) => {
-                                        dispatch({ type: ACTION_TYPE.ADD_ITEM, payload: { item: i, setIsDirty, menuItems } });
-                                    }}
-                                />
-                            ))}
+                        {/* 移除左右 padding (px-0)，並確保寬度為 full */}
+                        <div className="w-full px-0 py-2"> 
+                            {/* 設定 gap-3 並確保 grid 撐滿全寬 */}
+                            <div className="grid grid-cols-5 gap-3 w-full"> 
+    {filteredMenu.flatMap(item => {
+        // 判斷條件：當前是主餐 Tab，且項目編號是 10
+        if (item.category === '主餐' && Number(item.sortOrder) === 10 || item.category === '單點' && Number(item.sortOrder) === 46) {
+            return [
+                // 1. 插入一個完全空白的佔位格子 (對應 grid-cols-5 的最後一格)
+                <div key="gap-10" className="w-full" aria-hidden="true" />,
+                
+                // 2. 渲染原本的 10 號 MenuCard (會自動跳到下一排第一格)
+                <MenuCard
+                    key={item.id}
+                    item={item}
+                    onAddItem={(i) => {
+                        dispatch({ 
+                            type: ACTION_TYPE.ADD_ITEM, 
+                            payload: { item: i, setIsDirty, menuItems } 
+                        });
+                    }}
+                />
+            ];
+        }
+
+        // 一般情況：正常渲染
+        return (
+            <MenuCard
+                key={item.id}
+                item={item}
+                onAddItem={(i) => {
+                    dispatch({ 
+                        type: ACTION_TYPE.ADD_ITEM, 
+                        payload: { item: i, setIsDirty, menuItems } 
+                    });
+                }}
+            />
+        );
+    })}
+</div>
                         </div>
-                    </div>        
+                    </div>
                 </div>
             </div>
 
