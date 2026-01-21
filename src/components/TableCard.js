@@ -5,52 +5,20 @@ import React, { useEffect, useState } from 'react';
 // 【輔助函式 A】正計時器邏輯
 // ----------------------------------------------------------------------
 const useTimer = (startTime) => {
-    const [elapsedTime, setElapsedTime] = useState(0);
-    
+    const [elapsedMinutes, setElapsedMinutes] = useState(0);
     useEffect(() => {
-        if (!startTime) {
-            setElapsedTime(0);
-            return;
-        }
-
+        if (!startTime) { setElapsedMinutes(0); return; }
         const start = new Date(startTime).getTime();
-        if (isNaN(start)) {
-            setElapsedTime(0);
-            return;
-        }
-        
         const updateTimer = () => {
             const now = Date.now();
-            const diff = Math.floor((now - start) / 1000); 
-            setElapsedTime(Math.max(0, diff)); 
+            const diff = Math.floor((now - start) / 60000); 
+            setElapsedMinutes(Math.max(0, diff)); 
         };
-
-        const intervalId = setInterval(updateTimer, 1000);
+        const intervalId = setInterval(updateTimer, 10000);
         updateTimer(); 
-
         return () => clearInterval(intervalId);
     }, [startTime]);
-
-    const formatTime = (totalSeconds) => {
-        const minutes = Math.floor(totalSeconds / 60);
-        const seconds = totalSeconds % 60;
-        return `(${minutes}分${seconds < 10 ? '0' : ''}${seconds}秒)`;
-    };
-
-    return formatTime(elapsedTime);
-};
-
-// ----------------------------------------------------------------------
-// 【輔助函式 B】獲取實際開桌時間
-// ----------------------------------------------------------------------
-const getDisplayStartTime = (startTime) => {
-    if (!startTime) return '';
-    const date = new Date(startTime);
-    if (isNaN(date.getTime())) return '';
-    
-    const hours = date.getHours().toString().padStart(2, '0');
-    const minutes = date.getMinutes().toString().padStart(2, '0');
-    return `${hours}:${minutes}`;
+    return `${elapsedMinutes} min`;
 };
 
 // ----------------------------------------------------------------------
@@ -67,196 +35,169 @@ const formatCurrency = (number) => {
 const mapOrderStatus = (status) => {
     switch (status) {
         case 'open':
-            return { label: '點餐中', color: 'bg-yellow-400', borderColor: 'border-yellow-400' };
+            return { color: 'bg-yellow-400', borderColor: 'border-yellow-400' };
         case 'served':
-            // served: 已送單，可能部分結帳或完全未結帳 (尚未完全結清)
-            return { label: '出餐中', color: 'bg-orange-500', borderColor: 'border-orange-500' };
+            return { color: 'bg-[#2FB8B8]', borderColor: 'border-[#2FB8B8]' };
         case 'paid': 
-            // paid: 所有品項皆已結帳
-            return { label: '💰出餐中', color: 'bg-teal-600', borderColor: 'border-teal-600' }; 
+            return { color: 'bg-[#5A7D85]', borderColor: 'border-[#5A7D85]' }; 
         default:
-            return { label: '空桌', color: 'bg-gray-300', borderColor: 'border-gray-200' }; 
+            return { color: 'bg-gray-300', borderColor: 'border-gray-200' }; 
     }
 };
 
-// ----------------------------------------------------------------------
-// 桌位卡片元件 (TableCard)
-// ----------------------------------------------------------------------
 const TableCard = ({ tableData, handleTableClick, handleToggleItemSentOnTable, handleResetTable, isLoading }) => {
-    
     const { id: tableId, status = 'idle', order = null } = tableData;
     const statusInfo = mapOrderStatus(status); 
-    
     const orderItems = order?.items || [];
+    
+    // --- 【修正】僅顯示未結帳金額之邏輯 ---
+    const unpaidAmount = orderItems.reduce((acc, item) => {
+        return !item.isPaid ? acc + ((item.price || 0) * (item.quantity || 0)) : acc;
+    }, 0);
+    const hasUnpaid = unpaidAmount > 0;
     const totalAmount = order?.total || order?.subTotal || 0;
-    const orderTimestamp = order?.timestamp || null;
-    const elapsedTime = useTimer(orderTimestamp); 
-    const displayStartTime = getDisplayStartTime(orderTimestamp); 
+    // ----------------------------------
 
-    /**
-     * 【判斷顯示邏輯】
-     */
+    const orderIdDisplay = order?.orderId 
+        ? order.orderId.toString().slice(-3).padStart(3, '0') 
+        : '000';
+    
+    const openTimestamp = order?.timestamp || null;
+    const sendTime = order?.sendTime || null;
+    const elapsedTimeDisplay = useTimer(openTimestamp); 
+    const serviceTimeDisplay = useTimer(sendTime); 
+
     const isDetailedStatus = ['served', 'paid'].includes(status);
     const shouldShowItems = isDetailedStatus && orderItems.length > 0;
-
-    // 定義核取方塊是否可點擊 (僅在 served/paid 狀態，且非讀取中時可操作)
     const canToggleItems = isDetailedStatus && !isLoading;
-    
-    // 檢查是否已**完全**結帳 (用於清桌)
-    // 只有當 status === 'paid' 時，才視為完全結帳，可以清桌。
     const isFullyPaid = status === 'paid'; 
-    
-    // 實際可清桌的條件
-    const canResetTable = isFullyPaid; 
-    
-    // 顯示按鈕的條件：非閒置狀態
+    const isUnpaid = status === 'served' || status === 'open';
     const shouldShowActionButton = status !== 'idle';
 
+    const goToOrder = () => { if (!isLoading) handleTableClick(tableId, status, order); };
 
-    /**
-     * 處理底部按鈕點擊事件
-     */
-    const handleActionButtonClick = () => {
+    const handleQuickReset = (e) => {
+        e.stopPropagation();
         if (isLoading) return;
-
-        if (status === 'open') {
-             // open 狀態：導向訂單/點餐
-            handleTableClick(tableId, status, order);
-            return;
-        }
-
-        if (status === 'served') {
-            // served 狀態：尚未完全結帳，導向結帳頁面（無論部分或全部未結）
-            
-            handleTableClick(tableId, status, order); 
-            return;
-        } 
-        
-        if (status === 'paid') {
-            // paid 狀態：執行清桌
-            if (canResetTable) {
-                handleResetTable(tableId);
-            } else {
-                 // 訂單狀態為 paid，但 canResetTable 為 false (邏輯上的防護)
-                window.alert('訂單尚未完全結帳，無法清桌。');
-                handleTableClick(tableId, status, order); 
-            }
-            return;
+        if (isUnpaid && window.confirm('⚠️ 確定要執行清桌嗎？')) {
+            handleResetTable(tableId);
+        } else if (!isUnpaid) {
+            handleResetTable(tableId);
         }
     };
 
+    const handleActionButtonClick = (e) => {
+        e.stopPropagation();
+        if (isLoading) return;
+        if (isUnpaid) { goToOrder(); } 
+        else if (isFullyPaid) { handleResetTable(tableId); }
+    };
 
     return (
-        <div 
-            className={`rounded-2xl shadow-xl overflow-hidden flex flex-col transition-all border-4 h-full min-h-[380px] bg-white ${status === 'idle' ? 'border-gray-100' : statusInfo.borderColor}`}
-        >
-            {/* 頂部 Header */}
+        /* 外層容器固定高度 h-[350px] */
+        // 將 h-[350px] 改為 h-full
+<div className={`rounded-2xl shadow-lg overflow-hidden flex flex-col transition-all border-4 h-full bg-white ${status === 'idle' ? 'border-gray-100' : statusInfo.borderColor}`}>
+            
+            {/* Header 區塊 - 固定高度不縮放 flex-shrink-0 */}
             <div 
-                className={`p-3 text-white font-black flex justify-between items-center ${statusInfo.color} cursor-pointer hover:brightness-95`}
-                onClick={() => handleTableClick(tableId, status, order)}
+                className={`px-3 py-1 text-white font-black flex flex-col justify-center gap-1 min-h-[60px] flex-shrink-0 ${statusInfo.color} cursor-pointer hover:brightness-95`}
+                onClick={goToOrder}
             >
-                <h2 className="text-2xl font-mono tracking-tighter">{tableId}</h2>
-                <span className="text-base font-bold">{statusInfo.label}</span>
+                {/* 第一列：桌號與計時 */}
+                <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-3">
+                        <h2 className="text-3xl font-mono tracking-tighter leading-none">{tableId}</h2>
+                        {status !== 'idle' && (
+                            <div className="flex flex-col text-[10px] font-mono leading-tight border-l border-white/30 pl-2 text-right">
+                                <span>{elapsedTimeDisplay}</span>
+                                <span>{sendTime ? serviceTimeDisplay : '-- min'}</span>
+                            </div>
+                        )}
+                    </div>
+                    {status !== 'idle' && (
+                        <button onClick={handleQuickReset} className="p-1 hover:bg-black/10 rounded-full transition-colors">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" /><polyline points="10 17 15 12 10 7" /><line x1="15" y1="12" x2="3" y2="12" />
+                            </svg>
+                        </button>
+                    )}
+                </div>
+
+                {/* 第二列：單號與金額狀態 (修正：status 為 open 時不顯示金額區域) */}
+                {status !== 'idle' && status !== 'open' ? (
+                    <div className="flex justify-between items-center border-t border-white/20 mt-0.5 pt-1 leading-none">
+                        <div className="flex items-center gap-1 opacity-90 text-xs font-mono">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                <polyline points="14 2 14 8 20 8"></polyline>
+                                <line x1="16" y1="13" x2="8" y2="13"></line>
+                                <line x1="16" y1="17" x2="8" y2="17"></line>
+                            </svg>
+                            <span>{orderIdDisplay}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-xs font-mono">
+                            <span className="opacity-80">{hasUnpaid ? '未結帳' : '已結帳'}</span>
+                            <span className={`font-black ${hasUnpaid ? 'text-yellow-200' : 'text-white'}`}>
+                                ${formatCurrency(hasUnpaid ? unpaidAmount : totalAmount)}
+                            </span>
+                        </div>
+                    </div>
+                ) : (
+                    /* open 狀態下渲染空 div 佔位以保持 border-t 效果不存在但高度結構一致 */
+                    <div className="mt-0.5 pt-1 h-[1.25rem]"></div>
+                )}
             </div>
 
             {/* 中間主內容區 */}
-            <div className="flex-grow p-4 flex flex-col">
-                
+            <div className={`flex-grow px-2 py-2 flex flex-col cursor-pointer transition-colors hover:bg-gray-50/50 overflow-hidden`} onClick={goToOrder}>
                 {status === 'idle' ? (
-                    <div className="flex-grow flex items-center justify-center text-gray-400 font-bold italic">
-                        空閒中
-                    </div>
+                    <div className="flex-grow flex items-center justify-center text-gray-400 font-bold italic">空閒中</div>
                 ) : (
-                    <>
-                        {/* 頂部時間條 */}
-                        <div className="mb-3 text-sm font-semibold border-b pb-2 border-gray-100 flex justify-between items-center"> 
-                            <span className="text-gray-500 text-xs">開桌 {displayStartTime}</span>
-                            <span className="text-blue-500 font-mono font-bold">{elapsedTime}</span>
-                        </div>
-
-                        {/* 品項列表區域 */}
-                        <div className="flex-grow overflow-y-auto pr-1 mb-2 space-y-2 max-h-[180px]">
-                            {shouldShowItems ? (
-                                // 【正確顯示：品項清單】
-                                orderItems.map((item, index) => {
-                                    const itemUniqueId = item.internalId || item.id || `item-${index}`;
-                                    // isSent 來自 TableManagement.js 的強制重設，或手動點擊
-                                    const isSent = !!item.isSent; 
-
-                                    return (
-                                        <div key={itemUniqueId} className="flex items-center justify-between group py-0.5">
-                                            <label className="flex items-center flex-grow cursor-pointer min-w-0">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={isSent} 
-                                                    disabled={!canToggleItems}
-                                                    // 點擊後，呼叫父元件函式，更新 isSent
-                                                    onChange={() => handleToggleItemSentOnTable(tableId, order.orderId, itemUniqueId, isSent)}
-                                                    className={`w-5 h-5 rounded border-2 border-gray-300 text-green-600 focus:ring-green-500 transition-all ${!canToggleItems ? 'cursor-not-allowed' : 'cursor-pointer'}`}
-                                                />
-                                                <span className={`ml-3 truncate text-sm font-bold ${isSent ? 'text-gray-300 line-through' : 'text-gray-700'}`}>
-                                                    {item.name}
-                                                </span>
-                                            </label>
-                                            <span className={`ml-2 text-sm font-black ${isSent ? 'text-gray-300' : 'text-gray-500'}`}>
-                                                x{item.quantity}
+                    <div className="flex-grow overflow-y-auto px-1 space-y-2">
+                        {shouldShowItems ? (
+                            orderItems.map((item, index) => {
+                                const itemUniqueId = item.internalId || item.id || `item-${index}`;
+                                const isSent = !!item.isSent; 
+                                return (
+                                    <div key={itemUniqueId} className="flex items-center justify-between group py-0.5" onClick={(e) => e.stopPropagation()}>
+                                        <label className="flex items-center flex-grow cursor-pointer min-w-0">
+                                            <input
+                                                type="checkbox"
+                                                checked={isSent} 
+                                                disabled={!canToggleItems}
+                                                onChange={() => handleToggleItemSentOnTable(tableId, order.orderId, itemUniqueId, isSent)}
+                                                className={`w-5 h-5 rounded border-2 border-gray-300 text-green-600 focus:ring-green-500 transition-all ${!canToggleItems ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+                                            />
+                                            <span className={`ml-1.5 text-sm font-bold flex-grow overflow-hidden ${isSent ? 'text-gray-300 line-through' : 'text-gray-700'}`}>
+                                                {item.name}
                                             </span>
-                                        </div>
-                                    );
-                                })
-                            ) : (
-                                // 【判斷顯示何種提示】
-                                <div className={`h-full flex flex-col items-center justify-center rounded-xl border p-4 ${status === 'open' ? 'text-yellow-600 bg-yellow-50 border-yellow-100' : 'text-red-400 bg-red-50 border-red-100'}`}>
-                                    {status === 'open' ? (
-                                        <span className="text-sm font-bold">點餐中 / 尚未送單</span>
-                                    ) : (
-                                        <div className="text-center">
-                                            <span className="text-sm font-bold">⚠️ 訂單資料遺失</span>
-                                            <p className="text-[10px] mt-1 opacity-70">請確認資料庫中此桌品項是否存在</p>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-
-                        {/* 金額展示：隨狀態變化顏色 */}
-                        <div className="mt-auto pt-2 border-t border-gray-100 flex justify-between items-end">
-                            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${isFullyPaid ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-500'}`}>
-                                {isFullyPaid ? '已結帳' : '小計'}
-                            </span>
-                            <span className={`text-2xl font-black tracking-tight ${isFullyPaid ? 'text-purple-600' : 'text-red-600'}`}>
-                                ${formatCurrency(totalAmount)}
-                            </span>
-                        </div>
-                    </>
+                                        </label>
+                                        <span className={`ml-1 text-sm font-black whitespace-nowrap ${isSent ? 'text-gray-300' : 'text-gray-500'}`}>x{item.quantity}</span>
+                                    </div>
+                                );
+                            })
+                        ) : (
+                            <div className={`h-full flex flex-col items-center justify-center rounded-xl border p-4 ${status === 'open' ? 'text-yellow-600 bg-yellow-50 border-yellow-100' : 'text-red-400 bg-red-50 border-red-100'}`}>
+                                <span className="text-sm font-bold">{status === 'open' ? '點餐中 / 尚未送單' : '⚠️ 訂單資料遺失'}</span>
+                            </div>
+                        )}
+                    </div>
                 )}
             </div>
             
-            {/* 底部按鈕區 - 修正按鈕邏輯和標籤 */}
-            <div className="p-3 bg-gray-50 border-t border-gray-100">
+            {/* 底部按鈕區 */}
+            <div className="p-3 bg-gray-50 border-t border-gray-100 flex-shrink-0">
                 {shouldShowActionButton ? ( 
                     <button
                         onClick={handleActionButtonClick} 
                         disabled={isLoading}
                         className={`w-full py-3 text-white font-black rounded-xl shadow-lg hover:brightness-110 active:scale-95 transition-all disabled:opacity-50
-                            ${status === 'paid' ? 'bg-teal-600 hover:bg-teal-700' : (status === 'served' ? 'bg-red-500 hover:bg-red-600' : 'bg-yellow-600')}`
-                        }
+                            ${status === 'paid' ? 'bg-[#5A7D85]' : (status === 'served' ? 'bg-[#2FB8B8]' : 'bg-yellow-600')}`}
                     >
-                        {status === 'paid' ? 
-                            '確認離開 (清桌)' // 只有完全結帳 (paid) 才顯示清桌
-                            : status === 'served' ?
-                                '尚未結帳 (去結帳)' // served/部分結帳 狀態
-                            : 
-                                '繼續點餐' // open 狀態
-                        }
+                        {status === 'paid' ? '確認離開 (清桌)' : status === 'served' ? '尚未結帳 (去結帳)' : '繼續點餐'}
                     </button>
                 ) : (
-                     // 閒置狀態按鈕
-                    <button
-                        onClick={() => handleTableClick(tableId, status, order)} 
-                        disabled={isLoading}
-                        className={`w-full py-3 bg-blue-600 text-white font-black rounded-xl shadow-lg hover:brightness-110 active:scale-95 transition-all disabled:opacity-50`}
-                    >
+                    <button onClick={(e) => { e.stopPropagation(); goToOrder(); }} disabled={isLoading} className="w-full py-3 bg-blue-600 text-white font-black rounded-xl shadow-lg hover:brightness-110 active:scale-95 transition-all">
                         開桌 / 點餐
                     </button>
                 )}

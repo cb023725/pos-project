@@ -1,4 +1,4 @@
-// src/db.js (最終清理版本：移除飯量追蹤，強制區分 served/paid 狀態)
+// src/db.js (最終清理版本：修正結帳計時 sendTime 邏輯)
 
 import { openDB } from 'idb';
 
@@ -337,7 +337,7 @@ export async function updateTableStatusByOrder({ tableNumber, orderId, status, t
  * 處理訂單結帳。
  * @param {boolean} isFullyPaid - 必須明確指定 true (完全結帳) 或 false (部分結帳)。
  */
-export async function completeOrderAndReport({ orderId, newItems, tableNumber, isFullyPaid }) {
+export async function completeOrderAndReport({ orderId, newItems, tableNumber, isFullyPaid, sendTime }) {
     if (!orderId) return false;
 
     // 🚨 關鍵修正：檢查 isFullyPaid 參數，確保不是因為預設值導致狀態錯誤。
@@ -369,6 +369,8 @@ export async function completeOrderAndReport({ orderId, newItems, tableNumber, i
     const updatedOrder = { 
         ...existingOrder, 
         status: finalStatus, 
+        // 🚨 【關鍵修正】：確保 sendTime 被寫入以利計時
+        sendTime: sendTime || existingOrder.sendTime || Date.now(),
         leaveTime: isFullyPaid ? new Date().toISOString() : existingOrder.leaveTime, 
         items: finalItemsToStore, 
         subTotal: newSubTotal, 
@@ -410,19 +412,36 @@ export async function resetTableStatus(tableNumber) {
     const dbInstance = await openDB(DB_NAME, DB_VERSION, dbConfig);
     const tx = dbInstance.transaction([STORE_TABLES, STORE_ORDERS], 'readwrite');
     
-    const table = await tx.objectStore(STORE_TABLES).get(tableNumber);
+    const tableStore = tx.objectStore(STORE_TABLES);
+    const orderStore = tx.objectStore(STORE_ORDERS);
+
+    const table = await tableStore.get(tableNumber);
+    
     if (table?.orderId) {
-        const order = await tx.objectStore(STORE_ORDERS).get(table.orderId);
+        const order = await orderStore.get(table.orderId);
         if (order) {
-            // 只有當狀態為 'paid' (完全結帳) 時，才將其歸檔
             if (order.status === 'paid') {
+                // 正常流程：已結帳，轉為報表完成狀態
                 order.status = 'paid_report_complete';
-                await tx.objectStore(STORE_ORDERS).put(order);
+                await orderStore.put(order);
+            } else {
+                // 強制清桌流程 (served/open)：客人反悔離開或逃單
+                // 為了不讓這筆「未結帳」的廢單留在 activeOrders 影響 UI，
+                // 我們將其狀態改為 'cancelled' 或直接從 STORE_ORDERS 刪除。
+                // 這裡選擇刪除，以符合您「刪除此單」的需求：
+                await orderStore.delete(table.orderId);
             }
         }
     }
 
-    await tx.objectStore(STORE_TABLES).put({ tableNumber, status: 'idle', orderId: null, lastOrderTime: Date.now() });
+    // 確保桌位變回空閒狀態
+    await tableStore.put({ 
+        tableNumber, 
+        status: 'idle', 
+        orderId: null, 
+        lastOrderTime: Date.now() 
+    });
+    
     await tx.done;
     return true;
 }

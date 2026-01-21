@@ -104,25 +104,30 @@ const Layout = ({ children }) => {
 
     // 點餐與列印頁面隱藏 Sidebar
     const hideSidebar = ['/order', '/print'].includes(location.pathname);
+    // 檢查是否為桌位管理頁面，若是則移除 main 的內距
+    const isTablePage = location.pathname === '/tables';
 
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const toggleSidebar = () => setIsSidebarOpen(prev => !prev);
 
     return (
-        <div className="flex bg-gray-50 overflow-x-hidden">
+        /* 1. 使用 h-[100dvh] 鎖定整體高度為視窗高度，避免瀏覽器工具列撐開捲軸
+           2. overflow-hidden 強制不出現外部捲軸 */
+        <div className="flex bg-gray-50 h-[100dvh] w-full overflow-hidden">
             {!hideSidebar && (
                 <Sidebar 
                     isSidebarOpen={isSidebarOpen} 
                     toggleSidebar={toggleSidebar} 
                 />
             )}
-
-            <div className="flex-grow min-h-screen"> 
-                <main className={hideSidebar ? 'h-full' : 'p-6'}>
-                    {children}
-                </main>
-            </div>
+        <div className="flex-grow h-full relative"> 
+            <main className={`h-full ${
+                hideSidebar || isTablePage ? 'p-0' : 'p-6 overflow-y-auto'
+            }`}>
+                {children}
+            </main>
         </div>
+    </div>
     );
 };
 

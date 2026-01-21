@@ -339,8 +339,7 @@ const OrderPage = () => {
         if (!sendTime) return null;
         let diff = (currentTime - sendTime);
         return { 
-            minutes: Math.floor(Math.max(0, diff) / 60000), 
-            reference: '點餐' 
+            minutes: Math.floor(Math.max(0, diff) / 60000)
         };
     }, [sendTime, currentTime]);
 
@@ -511,7 +510,7 @@ const OrderPage = () => {
         } catch (e) { alert("操作失敗"); } finally { setIsLoading(false); }
     };
 
-    const handleConfirmOrder = async () => {
+const handleConfirmOrder = async () => {
         // ... (此處保留原邏輯，不添加開錢櫃功能)
         if (currentOrder.length === 0) return alert("請先點餐");
         
@@ -536,6 +535,7 @@ const OrderPage = () => {
             // 2. 如果訂單原本是 'new'/'open'，狀態應變為 'served'。
             const targetStatus = (orderStatus === 'paid' || orderStatus === 'new' || orderStatus === 'open') ? 'served' : orderStatus; 
             
+            // 【關鍵修正】：如果目前沒有計時起點，則以現在時間作為 sendTime
             const newSendTime = sendTime || now; 
             const newFinishTime = null; 
 
@@ -547,7 +547,7 @@ const OrderPage = () => {
             
             if (orderId) {
                 setOrderStatus(targetStatus);
-                setSendTime(newSendTime);
+                setSendTime(newSendTime); // 更新本地狀態以啟動計時
                 setFinishTime(newFinishTime);
                 navigate('/tables'); // 儲存成功後返回桌位頁
             }
@@ -602,6 +602,8 @@ const OrderPage = () => {
             }
             
             const newFinishTime = isFullyPaid ? now : finishTime; 
+            
+            // 【關鍵修正】：結帳時若尚未計時，直接開始計時
             const newSendTime = sendTime || now; 
             
             // 2. 【DB 主訂單狀態更新】儲存訂單到 DB
@@ -624,7 +626,6 @@ const OrderPage = () => {
             }
             
             // 4. 【新增】調用開錢櫃功能
-            // 由於錢櫃開啟不是關鍵業務邏輯，我們不等待它的結果，也不因其失敗而中斷結帳
             openCashDrawer(); 
             
             // 5. 【前端狀態更新】只有在 DB 操作 100% 成功後，才 dispatch 到 Reducer
@@ -638,12 +639,15 @@ const OrderPage = () => {
                 setCurrentOrderId(orderId);
             }
             
+            // 同步更新本地 sendTime 狀態，確保 UI 計時器即刻運作
+            setSendTime(newSendTime);
+
             if (finalStatus === 'paid') {
                 setOrderStatus('paid');
                 if (tableNumber !== '外帶') navigate('/tables', { replace: true });
             } else {
                 setOrderStatus('served'); 
-                setSendTime(newSendTime);
+                // 此處已在上方統一處理 setSendTime
             }
             
             setIsDirty(false); 
@@ -655,6 +659,8 @@ const OrderPage = () => {
             setIsLoading(false);
         }
     };
+    
+    // ...其餘代碼保持不變
     
     const handleFullCheckout = async () => {
         setIsCheckoutOptionModalOpen(false);
@@ -858,11 +864,11 @@ const OrderPage = () => {
                                 <div className="flex flex-col text-right">
                                     <span className="text-[10px]">
                                         <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/70 mr-1" />
-                                        {elapsedTimeMin} min (開桌)
+                                        {elapsedTimeMin} min
                                     </span>
                                     {serviceTimeMin && <span className="text-[10px]">
                                         <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/70 mr-1" />
-                                        {serviceTimeMin.minutes} min ({serviceTimeMin.reference})
+                                        {serviceTimeMin.minutes} min
                                     </span>}
                                 </div>
                             </div>
@@ -1101,9 +1107,9 @@ const OrderPage = () => {
                             <button 
                                 onClick={handleAbortOrder} 
                                 className={`w-full py-1 font-bold text-xs transition-colors ${canAbortOrder ? 'text-blue-600 hover:bg-blue-50' : 'text-gray-400 cursor-not-allowed'}`} 
-                                disabled={isLoading || !canAbortOrder}
+                                disabled={isLoading}
                             >
-                                客人離開 ({canAbortOrder ? '清空桌位' : '尚有未結帳項目'})
+                                客人離開 ({canAbortOrder ? '清空桌位' : '請先結清或手動移除所有項目'})
                             </button>
                         </div>
                     </div>

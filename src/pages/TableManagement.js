@@ -1,4 +1,4 @@
-// src/pages/TableManagement.js (最終修正版本：強化清桌提示)
+// src/pages/TableManagement.js (平板優化版本：全螢幕無捲軸)
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -11,9 +11,9 @@ import {
 
 import TableCard from '../components/TableCard'; 
 
+// 假設固定為 8 桌以符合兩排佈局 (4x2)
 const TABLE_OPTIONS = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8'];
 
-// TableManagementPage 組件開始
 const TableManagementPage = () => {
     const navigate = useNavigate();
     const [tableStatuses, setTableStatuses] = useState({});
@@ -25,19 +25,15 @@ const TableManagementPage = () => {
         tableStatusesRef.current = tableStatuses;
     }, [tableStatuses]);
 
-
     /**
-     * 載入並刷新所有桌位的實時狀態。
+     * 載入並刷新所有桌位的實時狀態
      */
     const loadTableStatuses = useCallback(async (manualRefresh = false) => {
-        console.log(`[LOAD] 載入桌位狀態 (手動刷新: ${manualRefresh})`);
-
         if (manualRefresh || Object.keys(tableStatusesRef.current).length === 0) {
              setIsLoading(true);
         }
         
         try {
-            // 1. 獲取桌位基礎狀態 (來自 STORE_TABLES)
             const dbTableRecords = await getTableStatuses();
             const dbTableMap = new Map();
             dbTableRecords.forEach(record => dbTableMap.set(record.tableNumber, record));
@@ -45,29 +41,23 @@ const TableManagementPage = () => {
             const statuses = {};
             TABLE_OPTIONS.forEach(tableId => {
                 const dbRecord = dbTableMap.get(tableId);
-                
                 statuses[tableId] = { 
                     id: tableId, 
                     status: dbRecord?.status || 'idle', 
                     order: dbRecord?.lastOrderTime ? { 
-                        orderId: dbRecord?.orderId || null, // 確保 orderId 欄位存在
+                        orderId: dbRecord?.orderId || null,
                         timestamp: dbRecord.lastOrderTime,
                         items: [] 
                     } : null, 
                 };
             });
 
-            // 2. 獲取活躍訂單 (來自 STORE_ORDERS)，並以訂單數據覆蓋
             const activeOrders = await getActiveOrders(); 
-            
             activeOrders.forEach(order => {
                 const tableId = order.table;
-                
                 if (statuses.hasOwnProperty(tableId)) {
-                    
                     const normalizedItems = (order.items || []).map((item) => ({
                         ...item,
-                        // 修正：讓 isSent 狀態完全依賴後端儲存的值
                         isSent: !!item.isSent, 
                     }));
 
@@ -76,16 +66,14 @@ const TableManagementPage = () => {
                         status: order.status, 
                         order: { 
                             ...order, 
-                            orderId: order.id, // 確保使用 order.id 作為 orderId
+                            orderId: order.id,
                             items: normalizedItems,
                             timestamp: order.timestamp || statuses[tableId].order?.timestamp
                         }
                     };
                 }
             });
-            
             setTableStatuses(statuses);
-            
         } catch (error) {
             console.error("載入桌位狀態失敗:", error);
         } finally {
@@ -93,18 +81,13 @@ const TableManagementPage = () => {
         }
     }, []); 
 
-    // 初始載入及設定定時刷新
     useEffect(() => {
         loadTableStatuses(true);
     }, [loadTableStatuses]); 
 
-    /**
-     * 點擊桌位處理 (保持不變)
-     */
     const handleTableClick = useCallback((tableId, status, currentOrder) => {
         const OCCUPIED_STATUSES = ['open', 'served', 'paid']; 
         const isOccupied = OCCUPIED_STATUSES.includes(status);
-        
         const openTimestamp = currentOrder?.timestamp || Date.now();
 
         if (isOccupied) {
@@ -120,7 +103,6 @@ const TableManagementPage = () => {
             return;
         }
 
-        // 閒置桌位點擊進入
         navigate('/order', { 
             state: { 
                 initialTableNumber: tableId,
@@ -129,34 +111,24 @@ const TableManagementPage = () => {
         });
     }, [navigate]);
     
-    /**
-     * 出餐切換邏輯 (純註記，將新狀態儲存回後端) (保持不變)
-     */
     const handleToggleItemSentOnTable = useCallback(async (tableId, orderId, itemId, currentIsSent) => {
         if (!orderId || !tableId) return;
-
         const currentData = tableStatusesRef.current[tableId]; 
         if (!currentData?.order) return;
         
         const order = currentData.order;
         const newItems = order.items.map(item => {
             const itemUniqueId = item.internalId || item.id;
-            // 傳入的 currentIsSent 是舊值，所以我們傳入 !currentIsSent 才是新值
             return (itemUniqueId === itemId) ? { ...item, isSent: !currentIsSent } : item;
         });
         
-        let updatedStatus = order.status; 
-        
         setIsLoading(true);
         try {
-             // 儲存操作員的手動勾選狀態
              await updateOrderStatus({ 
                 orderId: orderId, 
-                newStatus: updatedStatus, 
+                newStatus: order.status, 
                 newItems: newItems,   
              });
-             
-             // 重新載入
              await loadTableStatuses(true); 
         } catch (error) {
             console.error("更新失敗:", error);
@@ -165,44 +137,31 @@ const TableManagementPage = () => {
         }
     }, [loadTableStatuses]); 
 
-    /**
-     * 處理清桌 
-     * 只有在 status === 'paid' (完全結帳) 或 'open' 且無訂單 (僅佔位) 時才允許清桌。
-     */
     const handleResetTable = useCallback(async (tableNumber) => {
         const currentTableData = tableStatusesRef.current[tableNumber];
         const currentStatus = currentTableData?.status;
-        const currentOrderId = currentTableData?.order?.orderId; // 檢查是否有 orderId
+        const currentOrderId = currentTableData?.order?.orderId;
         
-        // 1. 允許：僅佔位 (open 且無 orderId)
         const isOnlyOccupied = currentStatus === 'open' && !currentOrderId;
-        
-        // 2. 允許：已完全結帳 (paid)
         const isFullyPaid = currentStatus === 'paid'; 
+        const isServed = currentStatus === 'served'; 
         
-        // 只有這兩種情況可以清桌
-        const isReadyToReset = isFullyPaid || isOnlyOccupied;
-
-        if (!isReadyToReset) {
-             let message = '';
-             if (currentStatus === 'served') {
-                 // served 狀態代表仍有未結帳項目 (或未清桌的已結帳項目)
-                 message = `桌位 ${tableNumber} 狀態為「已點餐/部分結帳」（served），請先到訂單頁面完成所有款項結清，或確認是否仍有未出餐點。`;
-             } else {
-                 message = `桌位 ${tableNumber} 狀態為 ${currentStatus}，無法清桌。`;
-             }
-             alert(message);
-             return;
+        let msg = '';
+        
+        if (isFullyPaid) {
+            msg = `確定要將 ${tableNumber} 訂單結案並清桌嗎？`;
+        } else if (isOnlyOccupied) {
+            msg = `確定要取消 ${tableNumber} 的佔位嗎？`;
+        } else if (isServed) {
+            msg = `⚠️ 桌位 ${tableNumber} 尚未結帳 (出餐中)。\n若客人已離開，點擊「確定」將強制刪除此單並清桌。`;
+        } else {
+            alert(`桌位 ${tableNumber} 目前狀態為點餐中，無法直接清桌。`);
+            return;
         }
-
-        const msg = isOnlyOccupied 
-            ? `桌位 ${tableNumber} 尚未點餐，確定要取消佔位嗎？`
-            : `桌位 ${tableNumber} 已結帳，確定要清桌並將訂單歸檔嗎？`;
 
         if (window.confirm(msg)) {
             setIsLoading(true);
             try {
-                // resetTableStatus 會處理訂單歸檔和桌位狀態重置
                 await resetTableStatus(tableNumber); 
                 await loadTableStatuses(true); 
             } catch (error) {
@@ -213,49 +172,51 @@ const TableManagementPage = () => {
         }
     }, [loadTableStatuses]);
 
-    // 渲染部分 (保持不變)
-    return (
-        <div className="p-8 min-h-screen bg-gray-100 flex flex-col font-sans">
-            <div className="flex justify-between items-center mb-6">
-                <div>
-                    <h1 className="text-3xl font-black text-gray-800 tracking-tight">桌位管理系統</h1>
-                </div>
-                <button
-                    onClick={() => navigate('/order', { state: { initialTableNumber: '外帶', openTimestamp: Date.now() } })}
-                    className="px-8 py-3 bg-blue-600 text-white font-black rounded-2xl shadow-xl hover:bg-blue-700 active:scale-95 transition-all flex items-center gap-2"
-                >
-                    <span className="text-xl">+</span> 新增外帶訂單
-                </button>
-            </div>
+return (
+        /* 修正點：
+           1. 加入 p-2：讓整體內容與螢幕邊緣保持適度距離。
+           2. gap-2：微調間距，讓卡片之間呼吸空間更自然。
+        */
+        <div className="h-[100dvh] w-full overflow-hidden grid grid-rows-2 font-sans gap-3 p-3 bg-gray-50">
             
             {isLoading && Object.keys(tableStatuses).length === 0 ? (
-                <div className="flex-grow flex items-center justify-center">
-                    <div className="text-center">
-                        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-                        <p className="text-gray-500 font-bold">載入桌況中...</p>
-                    </div>
+                <div className="h-full w-full flex items-center justify-center">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
                 </div>
             ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                    {TABLE_OPTIONS.map(tableId => (
-                        <TableCard
-                            key={tableId}
-                            tableData={tableStatuses[tableId] || { id: tableId, status: 'idle', order: null }}
-                            handleTableClick={handleTableClick}
-                            handleToggleItemSentOnTable={handleToggleItemSentOnTable}
-                            handleResetTable={handleResetTable} 
-                            isLoading={isLoading} 
-                        />
-                    ))}
-                </div>
-            )}
-        
-            {isLoading && (
-                <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-50 flex items-center justify-center">
-                    <div className="bg-white px-8 py-4 rounded-2xl shadow-2xl font-black text-blue-600 animate-pulse">
-                        資料同步中...
+                <>
+                    {/* 上排：A1 ~ A5 */}
+                    <div className="grid grid-cols-5 gap-2 min-h-0">
+                        {['A1', 'A2', 'A3', 'A4', 'A5'].map(tableId => (
+                            <div key={tableId} className="h-full min-h-0 overflow-hidden">
+                                <TableCard
+                                    tableData={tableStatuses[tableId] || { id: tableId, status: 'idle', order: null }}
+                                    handleTableClick={handleTableClick}
+                                    handleToggleItemSentOnTable={handleToggleItemSentOnTable}
+                                    handleResetTable={handleResetTable} 
+                                    isLoading={isLoading} 
+                                />
+                            </div>
+                        ))}
                     </div>
-                </div>
+
+                    {/* 下排：A6 ~ A8 */}
+                    <div className="grid grid-cols-5 gap-2 min-h-0">
+                        <div className="col-start-2 col-span-3 grid grid-cols-3 gap-2 h-full min-h-0">
+                            {['A6', 'A7', 'A8'].map(tableId => (
+                                <div key={tableId} className="h-full min-h-0 overflow-hidden">
+                                    <TableCard
+                                        tableData={tableStatuses[tableId] || { id: tableId, status: 'idle', order: null }}
+                                        handleTableClick={handleTableClick}
+                                        handleToggleItemSentOnTable={handleToggleItemSentOnTable}
+                                        handleResetTable={handleResetTable} 
+                                        isLoading={isLoading} 
+                                    />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </>
             )}
         </div>
     );
