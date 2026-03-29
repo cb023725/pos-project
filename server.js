@@ -151,17 +151,28 @@ const REMARK_FONT_SZ = 12;
 const REMARK_LINE_H  = 15;
 
 // 計算頁面高度
+function calcRemarkH(remarks, measureDoc) {
+    if (!remarks || remarks.length === 0) return 0;
+    measureDoc.font('Reg').fontSize(REMARK_FONT_SZ);
+    let h = 0;
+    for (let ri = 0; ri < remarks.length; ri += 3) {
+        const trio = remarks.slice(ri, ri + 3).join('  ');
+        h += measureDoc.heightOfString(trio, { width: CONT_W - 10 });
+    }
+    return h;
+}
+
 function calcPageHeight(groups, measureDoc, extraFooterH = 0) {
-    measureDoc.font('Bold').fontSize(ITEM_FONT_SZ);
     let contentH = 0;
     groups.forEach((g, gi) => {
         if (gi > 0) contentH += CAT_GAP;
         contentH += CAT_HEAD_H + CAT_LINE_H;
         g.items.forEach(item => {
             const name    = truncateName(item.printName || item.name);
+            measureDoc.font('Bold').fontSize(ITEM_FONT_SZ);
             const textH   = measureDoc.heightOfString(name, { width: TEXT_W });
             const remarks = item.remarks || [];
-            const remarkH = remarks.length > 0 ? (REMARK_LINE_H * Math.ceil(remarks.length / 3)) : 0;
+            const remarkH = calcRemarkH(remarks, measureDoc);
             contentH += Math.max(textH, QTY_BOX_H) + ITEM_PAD + remarkH;
         });
     });
@@ -250,10 +261,11 @@ function buildReceiptPDF(data, filePath, groups) {
 
                 doc.font('Bold').fontSize(ITEM_FONT_SZ).fillColor('black');
                 const textH   = doc.heightOfString(name, { width: TEXT_W });
-                const remarkH = remarks.length > 0 ? (REMARK_LINE_H * Math.ceil(remarks.length / 3)) : 0;
+                const remarkH = calcRemarkH(remarks, doc);
                 const rowH    = Math.max(textH, QTY_BOX_H) + ITEM_PAD + remarkH;
 
                 // 品項名稱靠左
+                doc.font('Bold').fontSize(ITEM_FONT_SZ).fillColor('black');
                 doc.text(name, MARGIN_SIDE, y, { width: TEXT_W, lineBreak: true });
 
                 // 數量框：1→黑框白底；>1→黑底白字加粗（更醒目）
@@ -273,14 +285,16 @@ function buildReceiptPDF(data, filePath, groups) {
                              { width: QTY_BOX_W, align: 'center', lineBreak: false });
                 }
 
-                // 備註（最多三個一行，深色小字體）
+                // 備註（縮排，自動換行，高度動態計算）
                 if (remarks.length > 0) {
-                    const remarkY = y + Math.max(textH, QTY_BOX_H) + 1;
+                    let remarkY = y + Math.max(textH, QTY_BOX_H) + 1;
                     doc.font('Reg').fontSize(REMARK_FONT_SZ).fillColor('black');
                     for (let ri = 0; ri < remarks.length; ri += 3) {
                         const trio = remarks.slice(ri, ri + 3).join('  ');
-                        doc.text('▸ ' + trio, MARGIN_SIDE + 6, remarkY + Math.floor(ri / 3) * REMARK_LINE_H,
-                                 { width: CONT_W - 8, lineBreak: false });
+                        const trioH = doc.heightOfString(trio, { width: CONT_W - 10 });
+                        doc.text(trio, MARGIN_SIDE + 8, remarkY,
+                                 { width: CONT_W - 10, lineBreak: true });
+                        remarkY += trioH;
                     }
                 }
 
@@ -724,15 +738,16 @@ function buildCustomerReceiptPDF(data, filePath) {
 
         let h = (C_STO_SZ + 3) + (C_HDR_SZ + 3) + (C_SUB_SZ + 3) + 4 + (C_COL_SZ + 3) + 3;
         for (const row of rows) {
+            mDoc.font('Bold').fontSize(C_ITEM_SZ);  // reset each iteration
             const nameH = mDoc.heightOfString(getCustomerItemName(row), { width: C_NAME_W });
             const rems  = row.remarks || [];
             mDoc.font('Reg').fontSize(C_REM_SZ);
             const remH  = rems.length > 0
-                ? mDoc.heightOfString('  ' + rems.join('  '), { width: C_NAME_W - 4 })
+                ? mDoc.heightOfString(rems.join('  '), { width: C_NAME_W - 4 })
                 : 0;
             h += Math.max(nameH, C_ITEM_SZ + 3) + 2 + remH + 1; // +1 for item divider
         }
-        h += 6 + (C_TOT_SZ + 6);
+        h += 10 + (C_TOT_SZ + 8); // 合計 section: line + gap + text + bottom buffer
 
         // ── 建立 PDF ──────────────────────────────────────────────────────────
         const doc = new PDFDocument({
@@ -819,10 +834,10 @@ function buildCustomerReceiptPDF(data, filePath) {
                      { width: C_PRI_W, align: 'right', lineBreak: false });
             y += rowH + 2;
 
-            // 備註（平行排列，空白分隔）
+            // 備註（平行排列，自動換行）
             if (rems.length > 0) {
                 doc.font('Reg').fontSize(C_REM_SZ).fillColor('black');
-                const remText = '  ' + rems.join('  ');
+                const remText = rems.join('  ');
                 const remH = doc.heightOfString(remText, { width: C_NAME_W - 4 });
                 doc.text(remText, C_NAME_X + 4, y, { width: C_NAME_W - 4, lineBreak: true });
                 y += remH;
@@ -839,14 +854,15 @@ function buildCustomerReceiptPDF(data, filePath) {
         // 下實線
         hLine(y, 0.8); y += 5;
 
-        // 合計
+        // 合計（同一列：左側「合計」右側金額，用同一 y 絕對定位）
         const total = data.total != null
             ? data.total
             : rows.reduce((s, r) => s + (r.price || 0) * (r.qty || 1), 0);
+        const totY = y;
         doc.font('Reg').fontSize(C_TOT_SZ - 1).fillColor('black')
-           .text('合計', CM, y, { lineBreak: false });
+           .text('合計', CM, totY, { lineBreak: false });
         doc.font('Bold').fontSize(C_TOT_SZ).fillColor('black')
-           .text(`$${total.toLocaleString('en-US')}`, CM, y,
+           .text(`$${total.toLocaleString('en-US')}`, CM, totY,
                  { width: CCW, align: 'right', lineBreak: false });
 
         doc.end();
