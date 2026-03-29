@@ -890,6 +890,14 @@ app.post('/print', async (req, res) => {
         const kitchenGroups = groupByCategory(kitchenItems);
         const barGroups     = groupByCategory(barItems);
 
+        // 顧客聯（最先印，交給顧客）
+        {
+            const f = path.join(os.tmpdir(), `receipt_c_${Date.now()}.pdf`);
+            const h = await buildCustomerReceiptPDF(data, f);
+            await printPDF(f, h);
+            console.log('顧客聯已送出');
+        }
+
         // 廚房單（小點→主餐→單點，若有品項才印）
         if (kitchenGroups.length > 0) {
             const f = path.join(os.tmpdir(), `receipt_k_${Date.now()}.pdf`);
@@ -904,14 +912,6 @@ app.post('/print', async (req, res) => {
             const h = await buildReceiptPDF(data, f, barGroups);
             await printPDF(f, h);
             console.log('吧台單已送出');
-        }
-
-        // 顧客聯（每次印單都列印）
-        {
-            const f = path.join(os.tmpdir(), `receipt_c_${Date.now()}.pdf`);
-            const h = await buildCustomerReceiptPDF(data, f);
-            await printPDF(f, h);
-            console.log('顧客聯已送出');
         }
 
         res.json({ status: '列印請求已送出' });

@@ -662,6 +662,7 @@ const OrderPage = () => {
     const [finishTime, setFinishTime] = useState(location.state?.finishTime || null);
     const [currentTime, setCurrentTime] = useState(Date.now());
     const checkoutLockRef = useRef(false);
+    const pendingDailyOrderNoRef = useRef(null); // 儲存剛建立訂單的 dailyOrderNo 供印單使用
     const [isQuantityModalOpen, setIsQuantityModalOpen] = useState(false);
     const [quantityTarget, setQuantityTarget] = useState(null); // 用於 QuantityPadModal
 
@@ -904,7 +905,10 @@ const OrderPage = () => {
                 const result = await createNewOrder({ ...orderData, status: finalStatus });
                 if (result) {
                     setCurrentOrderId(result.id);
-                    if (result.dailyOrderNo) setDailyOrderNo(result.dailyOrderNo);
+                    if (result.dailyOrderNo) {
+                        setDailyOrderNo(result.dailyOrderNo);
+                        pendingDailyOrderNoRef.current = result.dailyOrderNo;
+                    }
                 }
                 return result ? result.id : false;
             } else {
@@ -977,57 +981,76 @@ const isContentChanged = JSON.stringify(currentOrder) !== JSON.stringify(origina
     };
 
 const handleConfirmOrder = async () => {
-        // ... (此處保留原邏輯，不添加開錢櫃功能)
         if (currentOrder.length === 0) return alert("請先點餐");
-        
-        // 如果目前沒有未結帳的項目 (unpaidItems.length === 0)，則無需點餐
-        if (unpaidItems.length === 0) {
-             return alert("目前沒有新的未結帳項目需要送出。");
-        }
-        
-        // 如果是 Served/Served-Complete 狀態，且沒有新的變動，提示即可
-        if ((orderStatus === 'served' || orderStatus === 'served-complete') && !isDirty) {
-             return alert("訂單已送出，且沒有新的變動需要儲存。");
-        }
-        
-        // 狀態為 'new', 'open', 或 'paid' (有新加點) 時，都允許執行儲存
-        
+        if (unpaidItems.length === 0) return alert("目前沒有新的未結帳項目需要送出。");
+        if ((orderStatus === 'served' || orderStatus === 'served-complete') && !isDirty)
+            return alert("訂單已送出，且沒有新的變動需要儲存。");
+
         setIsLoading(true);
         try {
             const now = Date.now();
-            
-            // 狀態邏輯：
-            // 1. 如果訂單原本是 'paid'，但有新加點，狀態應變為 'served'。
-            // 2. 如果訂單原本是 'new'/'open'，狀態應變為 'served'。
-            const targetStatus = (orderStatus === 'paid' || orderStatus === 'new' || orderStatus === 'open') ? 'served' : orderStatus; 
-            
-            // 【關鍵修正】：如果目前沒有計時起點，則以現在時間作為 sendTime
-            const newSendTime = sendTime || now; 
-            const newFinishTime = null; 
+            const targetStatus = (orderStatus === 'paid' || orderStatus === 'new' || orderStatus === 'open') ? 'served' : orderStatus;
+            const newSendTime = sendTime || now;
+            const newFinishTime = null;
 
-            // 將最新的 currentOrder 數據（包含已結帳項目、數量、isSent註記、新加入的項目）傳遞給儲存函數
-            const itemsToSave = currentOrder; 
-            
-            // 儲存訂單：會將整個 items 列表更新到 DB，並更新訂單狀態為 targetStatus
-            const orderId = await saveOrderBeforeNavigate(tableNumber, itemsToSave, currentOrderId, customerCount, subTotal, targetStatus, newSendTime, newFinishTime);
-            
+            // 儲存訂單（同時在 saveOrderBeforeNavigate 內設定 pendingDailyOrderNoRef）
+            const orderId = await saveOrderBeforeNavigate(
+                tableNumber, currentOrder, currentOrderId,
+                customerCount, subTotal, targetStatus, newSendTime, newFinishTime
+            );
+
             if (orderId) {
-                // 外帶訂單：自動儲存顧客資料
+                // 外帶：自動儲存顧客資料
                 if (isTakeout && (customerPhone || customerName)) {
                     const cid = await autoSaveCustomer(customerName, customerPhone);
-                    if (cid) {
-                        await updateOrderStatus({ orderId: currentOrderId || orderId, newStatus: targetStatus, customerId: cid });
-                    }
+                    if (cid) await updateOrderStatus({ orderId: currentOrderId || orderId, newStatus: targetStatus, customerId: cid });
                 }
+
                 setOrderStatus(targetStatus);
                 setSendTime(newSendTime);
                 setFinishTime(newFinishTime);
-                navigate(isTakeout ? '/takeout' : '/tables');
                 setOriginalCustomerCount(customerCount);
                 setOriginalItems(currentOrder);
+                setIsDirty(false);
+
+                // 列印（顧客聯 + 廚房單）
+                const orderNo = pendingDailyOrderNoRef.current || dailyOrderNo || orderId;
+                pendingDailyOrderNoRef.current = null;
+                try {
+                    await fetch('http://localhost:3000/print', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            table: tableNumber || '外帶',
+                            orderNo,
+                            total: subTotal,
+                            items: currentOrder.map(i => ({
+                                id: i.id,
+                                name: i.name,
+                                printName: i.printName || null,
+                                category: i.category || null,
+                                sortOrder: i.sortOrder != null ? i.sortOrder : null,
+                                price: i.price || 0,
+                                qty: i.quantity,
+                                remarks: i.remarks || [],
+                            })),
+                            customerName: customerName || null,
+                            customerPhone: customerPhone || null,
+                            pickupTime: pickupTime || null,
+                            needsUtensils: needsUtensils,
+                        }),
+                    });
+                } catch (printErr) {
+                    console.warn('列印失敗：', printErr);
+                }
+                // 停留在原頁面（不 navigate）
             }
-            setIsDirty(false);
-        } catch (e) { alert("儲存失敗"); } finally { setIsLoading(false); }
+        } catch (e) {
+            alert("儲存失敗");
+            console.error(e);
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     const handlePreCheckout = () => {
@@ -1509,12 +1532,13 @@ const handleTableChange = async (event) => {
                                         JSON.stringify((item.remarks || []).slice().sort());
                                     const mergeKey = (item) => `${item.id}:::${remarkKey(item)}`;
 
-                                    // 依合併模式決定顯示列表
+                                    // 新點的在上、先點的在下：反轉後處理
+                                    const reversedUnpaid = [...unpaidItems].reverse();
                                     let displayRows;
                                     if (isOrderMerged) {
                                         const map = new Map();
                                         const order = [];
-                                        for (const item of unpaidItems) {
+                                        for (const item of reversedUnpaid) {
                                             const k = mergeKey(item);
                                             if (map.has(k)) {
                                                 map.get(k).quantity += item.quantity;
@@ -1526,7 +1550,7 @@ const handleTableChange = async (event) => {
                                         }
                                         displayRows = order;
                                     } else {
-                                        displayRows = unpaidItems;
+                                        displayRows = reversedUnpaid;
                                     }
 
                                     return (
