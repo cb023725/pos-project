@@ -9,12 +9,18 @@ import {
     completeOrderAndReport,
     occupyTableWithoutOrder,
     resetTableStatus,
+    getTableStatuses,
+    searchCustomer,
+    autoSaveCustomer,
+    updateMenuItem,
+    resetAllSoldOut,
+    getRemarkGroups,
 } from '../db';
 
 // ----------------------------------------------------------------------
 // 【新增功能】開錢櫃 API 呼叫輔助函式 (直接整合在 OrderPage.js 內部)
 // ----------------------------------------------------------------------
-const BACKEND_URL = 'http://localhost:3000'; 
+const BACKEND_URL = ''; // 相對路徑，支援任何裝置（電腦/平板）
 
 /**
  * 呼叫後端 API 以開啟錢櫃。
@@ -92,8 +98,8 @@ const ACTION_TYPE = {
     ADD_ITEM: 'ADD_ITEM',
     CHANGE_QUANTITY: 'CHANGE_QUANTITY',
     MARK_ITEM_PAID: 'MARK_ITEM_PAID',
-    // 僅保留類型定義，OrderPage 內不使用此 action
-    TOGGLE_ITEM_SENT: 'TOGGLE_ITEM_SENT', 
+    UPDATE_REMARKS: 'UPDATE_REMARKS',
+    TOGGLE_ITEM_SENT: 'TOGGLE_ITEM_SENT',
 };
 
 const initialOrderState = {
@@ -120,29 +126,22 @@ const orderReducer = (state, action) => {
             };
         }
         case ACTION_TYPE.ADD_ITEM: {
-            const { item: itemToAdd, setIsDirty, menuItems } = action.payload;
+            const { item: itemToAdd, setIsDirty, menuItems, remarks } = action.payload;
             const updatedOrder = [...state.currentOrder];
-            // 檢查是否已存在未結帳的相同餐點
-            const existingIndex = updatedOrder.findIndex(oi => oi.id === itemToAdd.id && !oi.isPaid);
-
-            if (existingIndex !== -1) {
-                updatedOrder[existingIndex] = {
-                    ...updatedOrder[existingIndex],
-                    quantity: updatedOrder[existingIndex].quantity + 1
-                };
-            } else {
-                const dbItem = menuItems.find(i => i.id === itemToAdd.id);
-                updatedOrder.push({
-                    ...itemToAdd,
-                    quantity: 1,
-                    isSent: false, // 預設未勾選 (作為註記)
-                    isPaid: false,
-                    stock: dbItem?.stock,
-                    consumes: dbItem?.consumes,
-                    category: dbItem?.category || '未分類',
-                    internalId: Date.now() + Math.random().toString(36).substring(2, 9),
-                });
-            }
+            const itemRemarks = remarks || [];
+            // 每次點擊都建立獨立一行（qty=1），讓每個品項可以單獨設定備註
+            const dbItem = menuItems.find(i => i.id === itemToAdd.id);
+            updatedOrder.push({
+                ...itemToAdd,
+                quantity: 1,
+                isSent: false,
+                isPaid: false,
+                stock: dbItem?.stock,
+                consumes: dbItem?.consumes,
+                category: dbItem?.category || '未分類',
+                internalId: Date.now() + Math.random().toString(36).substring(2, 9),
+                remarks: itemRemarks,
+            });
             setIsDirty(true);
             return { ...state, currentOrder: updatedOrder };
         }
@@ -193,21 +192,30 @@ const orderReducer = (state, action) => {
             };
         }
         
+        case ACTION_TYPE.UPDATE_REMARKS: {
+            const { internalId, remarks, setIsDirty } = action.payload;
+            const updatedOrder = state.currentOrder.map(item =>
+                item.internalId === internalId ? { ...item, remarks: remarks || [] } : item
+            );
+            if (setIsDirty) setIsDirty(true);
+            return { ...state, currentOrder: updatedOrder };
+        }
+
         case ACTION_TYPE.TOGGLE_ITEM_SENT: {
             // OrderPage 不應觸發此 action
             return state;
         }
-        
+
         default: return state;
     }
 };
 
 // --- Modal Components (保持不變) ---
-const QuantityPadModal = ({ isOpen, onClose, currentValue, onSave, title = '設定數量', isItem = false }) => {
+const QuantityPadModal = ({ isOpen, onClose, currentValue, onSave, title = '設定數量', isItem = false, allowZero = false }) => {
     const [inputValue, setInputValue] = useState(String(currentValue));
-    
+
     useEffect(() => { if (isOpen) setInputValue(String(currentValue)); }, [isOpen, currentValue]);
-    
+
     const handleInput = (digit) => setInputValue(prev => {
         if (prev === '0' && digit !== '0') return digit;
         if (prev === '0' && digit === '0') return '0';
@@ -216,7 +224,7 @@ const QuantityPadModal = ({ isOpen, onClose, currentValue, onSave, title = '設�
 
     const handleQuickChange = (diff) => {
         let newQty = Math.max(0, (Number(inputValue) || 0) + diff);
-        if (!isItem) newQty = Math.max(1, newQty); // 人數至少為 1
+        if (!isItem && !allowZero) newQty = Math.max(1, newQty); // 人數至少為 1（除非 allowZero）
         setInputValue(String(newQty));
     }
 
@@ -228,10 +236,10 @@ const QuantityPadModal = ({ isOpen, onClose, currentValue, onSave, title = '設�
                 
                 {/* 顯示和 +/- 按鈕 */}
                 <div className="flex items-center justify-between border-4 p-1 mb-4 rounded-xl bg-gray-50 text-blue-700">
-                    <button 
-                        onClick={() => handleQuickChange(-1)} 
+                    <button
+                        onClick={() => handleQuickChange(-1)}
                         className="w-10 h-10 bg-red-100 text-red-600 rounded-lg text-2xl font-black transition-colors hover:bg-red-200"
-                        disabled={!isItem && (Number(inputValue) <= 1)} // 人數不能減到 0
+                        disabled={!isItem && !allowZero && (Number(inputValue) <= 1)}
                     >-</button>
                     <div className="text-4xl font-black text-center flex-grow">{inputValue}</div>
                     <button 
@@ -249,14 +257,13 @@ const QuantityPadModal = ({ isOpen, onClose, currentValue, onSave, title = '設�
                 </div>
                 
                 {/* 確定按鈕 */}
-                <button 
-                    onClick={() => { 
-                        // 確保傳回的數量符合規則 (人數 >= 1，餐點 >= 0)
+                <button
+                    onClick={() => {
                         let finalQty = Number(inputValue) || 0;
-                        if (!isItem) finalQty = Math.max(1, finalQty);
-                        onSave(finalQty); 
-                        onClose(); 
-                    }} 
+                        if (!isItem && !allowZero) finalQty = Math.max(1, finalQty);
+                        onSave(finalQty);
+                        onClose();
+                    }}
                     className="w-full mt-4 bg-blue-600 text-white p-3 rounded-xl font-bold"
                 >確定</button>
             </div>
@@ -264,8 +271,53 @@ const QuantityPadModal = ({ isOpen, onClose, currentValue, onSave, title = '設�
     );
 };
 
-// --- 結帳選項 Modal (保持不變) ---
-const CheckoutOptionModal = ({ isOpen, onClose, onFullCheckout, onStartPartialCheckout }) => {
+// --- 停售確認 Modal ---
+const SoldOutModal = ({ item, onConfirm, onCancel }) => {
+    if (!item) return null;
+    const isSoldOut = !!item.soldOut;
+    const isMain    = item.category === '主餐';
+    const isSingle  = item.category === '單點';
+    const hasCascade = isMain || (isSingle && item.id.endsWith('1'));
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+            <div className="bg-white p-6 rounded-2xl shadow-2xl w-80">
+                <h3 className="text-xl font-black mb-2 border-b pb-2">
+                    {isSoldOut ? '取消停售' : '停售確認'}
+                </h3>
+                <p className="text-gray-800 font-bold text-lg mb-1">{item.name}</p>
+                {hasCascade && !isSoldOut && (
+                    <p className="text-xs text-orange-500 mb-4">
+                        ⚠️ {isMain ? '對應的單點版本' : '對應的主餐版本'}也會一併停售
+                    </p>
+                )}
+                {hasCascade && isSoldOut && (
+                    <p className="text-xs text-green-600 mb-4">
+                        {isMain ? '對應的單點版本' : '對應的主餐版本'}也會一併恢復
+                    </p>
+                )}
+                {!hasCascade && <div className="mb-4" />}
+                <div className="flex gap-3">
+                    <button
+                        onClick={onConfirm}
+                        className={`flex-1 py-3 rounded-xl font-black text-white transition-colors
+                            ${isSoldOut ? 'bg-green-500 hover:bg-green-600' : 'bg-red-500 hover:bg-red-600'}`}
+                    >
+                        {isSoldOut ? '恢復販售' : '確認停售'}
+                    </button>
+                    <button
+                        onClick={onCancel}
+                        className="flex-1 py-3 rounded-xl font-bold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
+                    >
+                        取消
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// --- 結帳選項 Modal ---
+const CheckoutOptionModal = ({ isOpen, onClose, onFullCheckout, onStartPartialCheckout, onPrint }) => {
     if (!isOpen) return null;
     return (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
@@ -278,9 +330,282 @@ const CheckoutOptionModal = ({ isOpen, onClose, onFullCheckout, onStartPartialCh
                     <button onClick={onStartPartialCheckout} className="py-3 rounded-xl bg-orange-500 text-white font-black">
                         分開結帳
                     </button>
+                    <button onClick={onPrint} className="py-3 rounded-xl bg-teal-600 text-white font-black">
+                        印單
+                    </button>
                     <button onClick={onClose} className="py-2 rounded-xl bg-gray-200 text-gray-700 font-bold">
                         取消
                     </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// --- 外帶顧客資訊元件 ---
+const TakeoutCustomerInfo = ({ customerName, setCustomerName, customerPhone, setCustomerPhone, needsUtensils, setNeedsUtensils, pickupTime, setPickupTime, customerSuggestions, setCustomerSuggestions }) => {
+    const phoneSearchTimeout = React.useRef(null);
+
+    const pickupTimeStr = React.useMemo(() => {
+        const d = new Date(pickupTime || Date.now() + 20 * 60000);
+        return d.toTimeString().substring(0, 5);
+    }, [pickupTime]);
+
+    const handlePhoneChange = (val) => {
+        setCustomerPhone(val);
+        clearTimeout(phoneSearchTimeout.current);
+        if (val.length >= 1) {
+            phoneSearchTimeout.current = setTimeout(async () => {
+                const results = await searchCustomer(val);
+                setCustomerSuggestions(results);
+            }, 300);
+        } else {
+            setCustomerSuggestions([]);
+        }
+    };
+
+    const handleNameChange = (val) => {
+        setCustomerName(val);
+        clearTimeout(phoneSearchTimeout.current);
+        if (val.length >= 1) {
+            phoneSearchTimeout.current = setTimeout(async () => {
+                const results = await searchCustomer(val);
+                setCustomerSuggestions(results);
+            }, 300);
+        } else {
+            setCustomerSuggestions([]);
+        }
+    };
+
+    const handleSelectSuggestion = (c) => {
+        const names = c.names || (c.name ? [c.name] : []);
+        const phones = c.phones || (c.phone ? [c.phone] : []);
+        setCustomerName(names[0] || '');
+        setCustomerPhone(phones[0] || '');
+        setCustomerSuggestions([]);
+    };
+
+    const handlePickupTimeInput = (e) => {
+        const [h, m] = e.target.value.split(':').map(Number);
+        if (isNaN(h) || isNaN(m)) return;
+        const d = new Date();
+        d.setHours(h, m, 0, 0);
+        setPickupTime(d.getTime());
+    };
+
+    const addMinutes = (mins) => {
+        setPickupTime(prev => (prev || Date.now() + 20 * 60000) + mins * 60000);
+    };
+
+    return (
+        <div className="bg-white border-b border-gray-200 px-3 py-2 flex flex-col gap-2">
+            {/* 姓名 + 電話 row */}
+            <div className="flex gap-2 relative">
+                <div className="flex flex-col flex-1 min-w-0">
+                    <span className="text-[10px] font-bold text-gray-500 mb-0.5">姓名</span>
+                    <input
+                        type="text"
+                        value={customerName}
+                        onChange={e => handleNameChange(e.target.value)}
+                        placeholder="顧客姓名"
+                        className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-bold outline-none focus:border-orange-400 w-full"
+                    />
+                </div>
+                <div className="flex flex-col flex-1 min-w-0">
+                    <span className="text-[10px] font-bold text-gray-500 mb-0.5">電話</span>
+                    <input
+                        type="tel"
+                        value={customerPhone}
+                        onChange={e => handlePhoneChange(e.target.value)}
+                        placeholder="輸入電話搜尋"
+                        className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-bold outline-none focus:border-orange-400 w-full"
+                    />
+                    {customerSuggestions.length > 0 && (
+                        <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg z-50 mt-0.5">
+                            {customerSuggestions.map(c => (
+                                <div
+                                    key={c.id}
+                                    onClick={() => handleSelectSuggestion(c)}
+                                    className="px-3 py-2 hover:bg-orange-50 cursor-pointer text-sm font-bold border-b last:border-b-0"
+                                >
+                                    <span className="text-gray-800">{(c.names || [c.name]).filter(Boolean).join(' / ')}</span>
+                                    <span className="text-gray-400 ml-2 text-xs">{(c.phones || [c.phone]).filter(Boolean).join(', ')}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* 餐具 + 取餐時間 row */}
+            <div className="flex items-end gap-2">
+                {/* 餐具 toggle */}
+                <div className="flex flex-col flex-1 min-w-0">
+                    <span className="text-[10px] font-bold text-gray-500 mb-0.5">餐具</span>
+                    <button
+                        type="button"
+                        onClick={() => setNeedsUtensils(v => !v)}
+                        className={`flex items-center justify-center gap-1.5 px-2.5 h-9 rounded-lg border-2 font-bold text-sm transition-colors w-full
+                            ${needsUtensils ? 'bg-orange-500 border-orange-500 text-white' : 'bg-white border-gray-300 text-gray-500'}`}
+                    >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 002-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 00-5 5v6c0 1.1.9 2 2 2h3zm0 0v7"/></svg>
+                        <span>{needsUtensils ? '需要餐具' : '不需餐具'}</span>
+                    </button>
+                </div>
+
+                {/* 取餐時間 */}
+                <div className="flex flex-col flex-1 min-w-0">
+                    <span className="text-[10px] font-bold text-gray-500 mb-0.5">取餐時間</span>
+                    <div className="flex items-center gap-1 h-9">
+                        <input
+                            type="time"
+                            value={pickupTimeStr}
+                            onChange={handlePickupTimeInput}
+                            className="border border-gray-300 rounded-lg px-1.5 h-full text-sm font-bold outline-none focus:border-orange-400 flex-1 min-w-0"
+                        />
+                        <button onClick={() => addMinutes(5)} className="h-full px-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-xs font-bold text-gray-600 flex-shrink-0">+5</button>
+                        <button onClick={() => addMinutes(10)} className="h-full px-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-xs font-bold text-gray-600 flex-shrink-0">+10</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// ─── 備註排序順序（依品項類型） ─────────────────────────────────────────────
+const PASTA_ITEM_IDS = new Set([
+    'pork_noodle','mentaiko_pasta','shrimp_pasta','salted_pork_pasta','mushroom_pasta',
+    'pork_noodle1','mentaiko_pasta1','shrimp_pasta1','salted_pork_pasta1','mushroom_pasta1',
+    'fried_egg',
+]);
+const PASTA_GROUP_ORDER  = ['bread_rice','egg_type','side_choice','side_veg','noodle','flavor','other','drink_temp','coke_ice','honey_ver','clam_shrimp','rice_amount'];
+const DEFAULT_GROUP_ORDER = ['bread_rice','rice_amount','side_choice','side_veg','other','flavor','egg_type','noodle','drink_temp','coke_ice','honey_ver','clam_shrimp'];
+
+const sortRemarkGroups = (groups, itemId) => {
+    const order = PASTA_ITEM_IDS.has(itemId) ? PASTA_GROUP_ORDER : DEFAULT_GROUP_ORDER;
+    return [...groups].sort((a, b) => {
+        const ai = order.indexOf(a.id);
+        const bi = order.indexOf(b.id);
+        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    });
+};
+
+// 根據 optionItemMap 過濾出該品項可看到的選項
+const getVisibleOptions = (group, itemId) => {
+    if (!group.optionItemMap) return group.options;
+    return group.options.filter(opt => {
+        const allowed = group.optionItemMap[opt];
+        return !allowed || allowed.includes(itemId);
+    });
+};
+
+// ─── 備註標籤元件（3個一行） ────────────────────────────────────────────────
+const RemarkBadges = ({ remarks }) => {
+    if (!remarks || remarks.length === 0) return null;
+    return (
+        <div className="grid mt-1" style={{ gridTemplateColumns: 'repeat(3,auto)', gap: '3px', justifyContent: 'start' }}>
+            {remarks.map((r, i) => (
+                <span key={i} className="text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded-full font-bold leading-tight whitespace-nowrap">
+                    {r}
+                </span>
+            ))}
+        </div>
+    );
+};
+
+// ─── 註記選擇 Modal（即時儲存，無確認按鈕，再點品項即關閉） ──────────────
+const RemarkSelectionModal = ({ item, groups, initialRemarks, onToggle, onCancel }) => {
+    const [selections, setSelections] = useState({});
+
+    // 初始化：從現有備註還原選擇狀態
+    useEffect(() => {
+        if (!item) return;
+        const init = {};
+        const existing = initialRemarks || [];
+        for (const g of groups) {
+            if (g.type === 'multi') {
+                init[g.id] = g.options.filter(opt => existing.includes(opt));
+            } else {
+                init[g.id] = g.options.find(opt => existing.includes(opt)) || '';
+            }
+        }
+        setSelections(init);
+    }, [item]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    if (!item) return null;
+
+    const sortedGroups = sortRemarkGroups(groups, item.id);
+
+    // 計算目前 selections 對應的備註陣列
+    const computeRemarks = (sels) => {
+        const remarks = [];
+        for (const g of sortedGroups) {
+            const sel = sels[g.id];
+            if (!sel) continue;
+            if (Array.isArray(sel)) remarks.push(...sel);
+            else if (sel) remarks.push(sel);
+        }
+        return remarks;
+    };
+
+    const handleSingle = (groupId, opt) => {
+        const newSels = { ...selections, [groupId]: selections[groupId] === opt ? '' : opt };
+        setSelections(newSels);
+        onToggle(computeRemarks(newSels));
+    };
+
+    const handleMulti = (groupId, opt) => {
+        const cur = selections[groupId] || [];
+        const newCur = cur.includes(opt) ? cur.filter(x => x !== opt) : [...cur, opt];
+        const newSels = { ...selections, [groupId]: newCur };
+        setSelections(newSels);
+        onToggle(computeRemarks(newSels));
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onCancel}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                {/* Header */}
+                <div className="p-4 border-b flex items-center justify-between flex-shrink-0">
+                    <div>
+                        <div className="text-xs text-gray-500 mb-0.5">備註設定・即時儲存・再點品項關閉</div>
+                        <div className="font-black text-xl text-gray-800">{item.name}</div>
+                    </div>
+                    <button onClick={onCancel} className="w-9 h-9 flex items-center justify-center rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+
+                {/* Body */}
+                <div className="flex-grow overflow-y-auto p-5 space-y-6">
+                    {sortedGroups.map(g => {
+                        const visibleOptions = getVisibleOptions(g, item.id);
+                        if (visibleOptions.length === 0) return null;
+                        const sel = selections[g.id] || (g.type === 'multi' ? [] : '');
+                        return (
+                            <div key={g.id}>
+                                <div className="flex items-center gap-2 mb-3">
+                                    <span className="font-bold text-gray-800">{g.name}</span>
+                                    {g.type === 'multi' && <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded-full font-bold">可多選</span>}
+                                </div>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {visibleOptions.map(opt => {
+                                        const active = g.type === 'multi' ? sel.includes(opt) : sel === opt;
+                                        return (
+                                            <button key={opt}
+                                                onClick={() => g.type === 'multi' ? handleMulti(g.id, opt) : handleSingle(g.id, opt)}
+                                                className={`px-3 py-2.5 rounded-xl text-base font-bold border-2 transition-all whitespace-nowrap ${
+                                                    active ? 'bg-teal-500 text-white border-teal-500 shadow-sm' : 'bg-white text-gray-600 border-gray-200 hover:border-teal-300'
+                                                }`}
+                                            >{opt}</button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        );
+                    })}
                 </div>
             </div>
         </div>
@@ -294,6 +619,10 @@ const OrderPage = () => {
     const initialTableNumber = location.state?.initialTableNumber || '';
     const initialOrderId = location.state?.orderId || null;
     const initialOpenTime = location.state?.openTimestamp || Date.now();
+    const isTakeout = location.state?.isTakeout || false;
+
+    // 建立一個 State 來追蹤「已存檔」的桌號
+    const [originalTableId, setOriginalTableId] = useState(initialTableNumber);
 
     useDynamicVh(); 
 
@@ -302,10 +631,30 @@ const OrderPage = () => {
 
     // --- 狀態與 Hooks ---
     const [selectedCategory, setSelectedCategory] = useState(CATEGORY_ORDER[1] || CATEGORY_ORDER[0]);
+    const [soldOutItem, setSoldOutItem] = useState(null); // 停售確認 modal
+    const [showResumeConfirm, setShowResumeConfirm] = useState(false); // 恢復供應確認 modal
     const [currentOrderId, setCurrentOrderId] = useState(initialOrderId);
+    const [dailyOrderNo, setDailyOrderNo] = useState(null);
     const [orderStatus, setOrderStatus] = useState(location.state?.orderStatus || (initialOrderId ? 'open' : 'new')); 
-    const [tableNumber, setTableNumber] = useState(initialTableNumber);
-    const [customerCount, setCustomerCount] = useState(location.state?.customerCount || 1);
+    const [tableNumber, setTableNumber] = useState(isTakeout ? '外帶' : initialTableNumber);
+    const [customerCount, setCustomerCount] = useState(
+        isTakeout ? (location.state?.customerCount ?? 0) : (location.state?.customerCount || 1)
+    );
+    const [customerName, setCustomerName] = useState('');
+    const [customerPhone, setCustomerPhone] = useState('');
+    const [needsUtensils, setNeedsUtensils] = useState(false);
+    const [pickupTime, setPickupTime] = useState(() => Date.now() + 20 * 60000);
+    const [customerSuggestions, setCustomerSuggestions] = useState([]);
+
+    // 請在您的 const [customerCount, setCustomerCount] = useState(...) 下方加入：
+    const [originalCustomerCount, setOriginalCustomerCount] = useState(
+        isTakeout ? (location.state?.customerCount ?? 0) : (location.state?.customerCount || 1)
+    );
+    const [originalNeedsUtensils, setOriginalNeedsUtensils] = useState(false);
+    const [originalPickupTime, setOriginalPickupTime] = useState(() => Date.now() + 20 * 60000);
+
+    const [originalItems, setOriginalItems] = useState([]);
+
     const [isLoading, setIsLoading] = useState(true);
     const [isDirty, setIsDirty] = useState(false); // 標記訂單是否有變動
     const [openTimestamp, setOpenTimestamp] = useState(initialOpenTime);
@@ -319,6 +668,11 @@ const OrderPage = () => {
     const [isCheckoutOptionModalOpen, setIsCheckoutOptionModalOpen] = useState(false);
     const [isPartialCheckoutMode, setIsPartialCheckoutMode] = useState(false);
     const [selectedItemsForCheckout, setSelectedItemsForCheckout] = useState([]); // 部分結帳時選中的項目 internalId
+
+    // 註記相關
+    const [remarkGroups, setRemarkGroups] = useState([]);
+    const [pendingRemarkItem, setPendingRemarkItem] = useState(null); // { item, applicableGroups, editingInternalId? }
+    const [isOrderMerged, setIsOrderMerged] = useState(true); // true=合併顯示（預設），false=全部展開逐列
 
     useEffect(() => {
         const timer = setInterval(() => setCurrentTime(Date.now()), 60000); // 每分鐘更新時間
@@ -357,19 +711,86 @@ const OrderPage = () => {
         return currentOrder.length === 0 || currentOrder.every(item => item.isPaid);
     }, [currentOrder]);
 
-    // --- 資料載入邏輯 (保持不變) ---
+    const hasSoldOut = useMemo(() => menuItems.some(i => i.soldOut), [menuItems]);
+
+    // --- 資料載入邏輯 ---
     const loadMenuData = useCallback(async () => {
         try {
             const items = await getMenuItems();
             dispatch({ type: ACTION_TYPE.SET_MENU, payload: items });
+            const rg = await getRemarkGroups();
+            setRemarkGroups(rg);
         } catch (e) { console.error(e); }
     }, []);
+
+    // --- 停售 handlers ---
+    const handleLongPressMenu = useCallback((item) => {
+        setSoldOutItem(item);
+    }, []);
+
+    // --- 菜單點擊：直接加入購物車（不開備註彈窗）---
+    const handleAddItemClick = useCallback((item) => {
+        dispatch({ type: ACTION_TYPE.ADD_ITEM, payload: { item, setIsDirty, menuItems, remarks: [] } });
+    }, [menuItems, setIsDirty]);
+
+    // --- 點擊購物車品項：開啟/關閉備註編輯（再點相同品項即關閉） ---
+    const getApplicableRemarkGroups = useCallback((item) => {
+        return remarkGroups.filter(g => g.appliesTo && g.appliesTo.includes(item.id));
+    }, [remarkGroups]);
+
+    const handleCartItemClick = useCallback((item) => {
+        if (isPartialCheckoutMode) return; // 分帳模式下由 handleItemClick 處理
+        // 再點同一品項 → 關閉彈窗
+        if (pendingRemarkItem?.editingInternalId === item.internalId) {
+            setPendingRemarkItem(null);
+            return;
+        }
+        const applicable = getApplicableRemarkGroups(item);
+        if (applicable.length === 0) return; // 無備註群組 → 不開彈窗
+        setPendingRemarkItem({ item, applicableGroups: applicable, editingInternalId: item.internalId });
+    }, [isPartialCheckoutMode, getApplicableRemarkGroups, pendingRemarkItem]);
+
+    // --- 備註即時儲存（每次勾選即觸發）---
+    const handleRemarkToggle = useCallback((remarks) => {
+        if (!pendingRemarkItem) return;
+        const { editingInternalId } = pendingRemarkItem;
+        if (editingInternalId) {
+            dispatch({ type: ACTION_TYPE.UPDATE_REMARKS, payload: { internalId: editingInternalId, remarks, setIsDirty } });
+        }
+    }, [pendingRemarkItem, setIsDirty]);
+
+    const handleRemarkCancel = useCallback(() => setPendingRemarkItem(null), []);
+
+
+    const handleConfirmSoldOut = useCallback(async () => {
+        if (!soldOutItem) return;
+        const newSoldOut = !soldOutItem.soldOut;
+        await updateMenuItem(soldOutItem.id, { soldOut: newSoldOut });
+        // 主餐 → 同步停售/恢復對應單點 (id + '1')
+        if (soldOutItem.category === '主餐') {
+            await updateMenuItem(soldOutItem.id + '1', { soldOut: newSoldOut });
+        }
+        // 單點 → 同步停售/恢復對應主餐 (移除結尾的 '1')
+        if (soldOutItem.category === '單點' && soldOutItem.id.endsWith('1')) {
+            await updateMenuItem(soldOutItem.id.slice(0, -1), { soldOut: newSoldOut });
+        }
+        setSoldOutItem(null);
+        await loadMenuData();
+    }, [soldOutItem, loadMenuData]);
+
+    const handleResetAllSoldOut = useCallback(async () => {
+        await resetAllSoldOut();
+        await loadMenuData();
+        setShowResumeConfirm(false);
+    }, [loadMenuData]);
 
     const loadOpenOrder = useCallback(async (tableId) => {
         if (!tableId) return;
         try {
             const allActive = await getActiveOrders();
-            const openOrder = initialOrderId ? allActive.find(o => o.id === initialOrderId) : allActive.find(o => o.table === tableId);
+            const openOrder = initialOrderId
+                ? allActive.find(o => o.id === initialOrderId)
+                : (isTakeout ? null : allActive.find(o => o.table === tableId));
             if (openOrder) {
                 const loadedItems = openOrder.items.map(item => ({
                     ...item,
@@ -381,10 +802,26 @@ const OrderPage = () => {
                 dispatch({ type: ACTION_TYPE.SET_ORDER_AND_RICE, payload: { newOrder: loadedItems } });
                 setCurrentOrderId(openOrder.id);
                 setOrderStatus(openOrder.status);
-                setCustomerCount(openOrder.customerCount || 1);
+                setCustomerCount(isTakeout ? (openOrder.customerCount ?? 0) : (openOrder.customerCount || 1));
+                if (openOrder.customerName) setCustomerName(openOrder.customerName);
+                if (openOrder.customerPhone) setCustomerPhone(openOrder.customerPhone);
+                if (openOrder.needsUtensils !== undefined) {
+                    setNeedsUtensils(!!openOrder.needsUtensils);
+                    setOriginalNeedsUtensils(!!openOrder.needsUtensils);
+                }
+                if (openOrder.pickupTime) {
+                    setPickupTime(openOrder.pickupTime);
+                    setOriginalPickupTime(openOrder.pickupTime);
+                }
+
+                setOriginalCustomerCount(isTakeout ? (openOrder.customerCount ?? 0) : (openOrder.customerCount || 1));
+
+                setOriginalItems(loadedItems);
+
                 setOpenTimestamp(new Date(openOrder.timestamp).getTime());
                 setSendTime(openOrder.sendTime);
                 setFinishTime(openOrder.finishTime);
+                if (openOrder.dailyOrderNo) setDailyOrderNo(openOrder.dailyOrderNo);
             }
         } catch (e) { console.error(e); } finally { setIsLoading(false); }
     }, [initialOrderId]);
@@ -419,8 +856,12 @@ const OrderPage = () => {
     const saveOrderBeforeNavigate = useCallback(async (targetTable, orderItems, orderId, count, total, status, currentSendTime, currentFinishTime) => {
         const orderData = {
             orderId, table: targetTable, customerCount: count,
+            customerName: customerName,
+            customerPhone: customerPhone,
+            needsUtensils: needsUtensils,
+            pickupTime: pickupTime,
             // 🚨 重點：將帶有最新數量、isSent 註記、isPaid 狀態的 orderItems 列表傳入 DB 儲存
-            items: orderItems.map(({ id, name, price, quantity, isSent, isPaid, category, internalId, sortOrder }) => ({ id, name, price, quantity, isSent: !!isSent, isPaid: !!isPaid, category, internalId, sortOrder })),
+            items: orderItems.map(({ id, name, price, quantity, isSent, isPaid, category, internalId, sortOrder, remarks }) => ({ id, name, price, quantity, isSent: !!isSent, isPaid: !!isPaid, category, internalId, sortOrder, remarks: remarks || [] })),
             subTotal: total, total, timestamp: new Date(openTimestamp).toISOString(),
             status: status || 'new', sendTime: currentSendTime, finishTime: currentFinishTime,
         };
@@ -444,21 +885,28 @@ const OrderPage = () => {
 
             if (orderId) {
                 // 訂單存在，更新狀態 (包含 items 和 isSent 註記)
-                await updateOrderStatus({ 
-                    orderId, 
-                    newStatus: finalStatus, 
-                    newItems: orderData.items, // 將最新的 items 列表傳入，以更新數量和註記狀態
-                    customerCount: count, 
-                    sendTime: currentSendTime, 
-                    finishTime: currentFinishTime 
+                await updateOrderStatus({
+                    orderId,
+                    newStatus: finalStatus,
+                    newItems: orderData.items,
+                    customerCount: count,
+                    sendTime: currentSendTime,
+                    finishTime: currentFinishTime,
+                    customerName: customerName,
+                    customerPhone: customerPhone,
+                    needsUtensils: needsUtensils,
+                    pickupTime: pickupTime,
                 });
                 if (finalStatus === 'paid') setOrderStatus('paid'); // 前端同步
                 return orderId;
             } else if (orderItems.length > 0) {
                 // 訂單不存在，創建新訂單
-                const newId = await createNewOrder({ ...orderData, status: finalStatus });
-                if (newId) setCurrentOrderId(newId);
-                return newId;
+                const result = await createNewOrder({ ...orderData, status: finalStatus });
+                if (result) {
+                    setCurrentOrderId(result.id);
+                    if (result.dailyOrderNo) setDailyOrderNo(result.dailyOrderNo);
+                }
+                return result ? result.id : false;
             } else {
                 return true;
             }
@@ -466,35 +914,53 @@ const OrderPage = () => {
             console.error("Save Order Failed:", e);
             return false; 
         }
-    }, [openTimestamp]);
+    }, [openTimestamp, customerName, customerPhone, needsUtensils, pickupTime]);
 
     const handleGoBack = async () => {
         if (isLoading) return;
         
-        // 1. 檢查是否有未儲存的變動 (且訂單有項目)
-        if (isDirty && currentOrder.length > 0) {
-            // 🚨 僅提示：取消則留下，確認則不儲存並返回 (變更遺失)
+        const hasCountChanged = customerCount !== originalCustomerCount;
+        const hasUtensilsChanged = isTakeout && needsUtensils !== originalNeedsUtensils;
+        const hasPickupChanged = isTakeout && pickupTime !== originalPickupTime;
+
+        if ((hasCountChanged || hasUtensilsChanged || hasPickupChanged) && currentOrderId) {
+            setIsLoading(true);
+            try {
+                await updateOrderStatus({
+                    orderId: currentOrderId,
+                    newStatus: orderStatus,
+                    newItems: originalItems,
+                    customerCount: customerCount,
+                    needsUtensils: isTakeout ? needsUtensils : undefined,
+                    pickupTime: isTakeout ? pickupTime : undefined,
+                    sendTime: sendTime,
+                    finishTime: finishTime
+                });
+                setOriginalCustomerCount(customerCount);
+                setOriginalNeedsUtensils(needsUtensils);
+                setOriginalPickupTime(pickupTime);
+            } catch (e) {
+                console.error("自動儲存失敗:", e);
+            } finally {
+                setIsLoading(false);
+            }
+        }
+
+        // 檢查是否有「新點餐」（目前的數量大於原始數量）
+const isContentChanged = JSON.stringify(currentOrder) !== JSON.stringify(originalItems);
+        if (isDirty && isContentChanged) {
             const confirmDiscard = window.confirm("您有未儲存的點餐變動！\n確定要返回嗎？");
-            
-            if (!confirmDiscard) {
-                // 選擇取消（不返回）：停留在當前頁面
-                return;
-            } 
-            
-            // 選擇確認：繼續執行返回邏輯，並丟棄變動
+            if (!confirmDiscard) return;
             setIsDirty(false); 
         }
         
-        // 2. 處理空訂單或已清桌的狀態 (無論是否丟棄變動，都要處理佔桌邏輯)
+        // 其餘原本的佔桌邏輯...
         if (orderStatus === 'new' && currentOrder.length === 0 && tableNumber && tableNumber !== '外帶') {
             setIsLoading(true);
-            // 佔桌操作：如果桌位是新的且沒有點餐，則僅佔用桌位時間
             await occupyTableWithoutOrder(tableNumber, openTimestamp);
             setIsLoading(false);
         }
-        
-        // 3. 導航回桌位管理頁
-        navigate('/tables');
+        navigate(isTakeout ? '/takeout' : '/tables');
     };
 
     const handleAbortOrder = async () => {
@@ -506,7 +972,7 @@ const OrderPage = () => {
         setIsLoading(true);
         try {
             await resetTableStatus(tableNumber);
-            navigate('/tables');
+            navigate(isTakeout ? '/takeout' : '/tables');
         } catch (e) { alert("操作失敗"); } finally { setIsLoading(false); }
     };
 
@@ -546,10 +1012,19 @@ const handleConfirmOrder = async () => {
             const orderId = await saveOrderBeforeNavigate(tableNumber, itemsToSave, currentOrderId, customerCount, subTotal, targetStatus, newSendTime, newFinishTime);
             
             if (orderId) {
+                // 外帶訂單：自動儲存顧客資料
+                if (isTakeout && (customerPhone || customerName)) {
+                    const cid = await autoSaveCustomer(customerName, customerPhone);
+                    if (cid) {
+                        await updateOrderStatus({ orderId: currentOrderId || orderId, newStatus: targetStatus, customerId: cid });
+                    }
+                }
                 setOrderStatus(targetStatus);
-                setSendTime(newSendTime); // 更新本地狀態以啟動計時
+                setSendTime(newSendTime);
                 setFinishTime(newFinishTime);
-                navigate('/tables'); // 儲存成功後返回桌位頁
+                navigate(isTakeout ? '/takeout' : '/tables');
+                setOriginalCustomerCount(customerCount);
+                setOriginalItems(currentOrder);
             }
             setIsDirty(false);
         } catch (e) { alert("儲存失敗"); } finally { setIsLoading(false); }
@@ -563,12 +1038,53 @@ const handleConfirmOrder = async () => {
         setIsCheckoutOptionModalOpen(true);
     };
 
+    const handlePrintReceipt = async () => {
+        setIsCheckoutOptionModalOpen(false);
+        const receiptData = {
+            table: tableNumber || '外帶',
+            orderNo: dailyOrderNo || currentOrderId || 0,
+            total: subTotal,
+            items: currentOrder.map(i => ({
+                id: i.id,
+                name: i.name,
+                printName: i.printName || null,
+                category: i.category || null,
+                sortOrder: i.sortOrder != null ? i.sortOrder : null,
+                price: i.price || 0,
+                qty: i.quantity,
+                remarks: i.remarks || [],
+            })),
+            // 外帶取餐資訊
+            ...(isTakeout && {
+                customerName:  customerName  || null,
+                customerPhone: customerPhone || null,
+                pickupTime:    pickupTime    || null,
+                needsUtensils: needsUtensils,
+            }),
+        };
+        try {
+            const res = await fetch(`${BACKEND_URL}/print`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(receiptData),
+            });
+            if (!res.ok) {
+                const d = await res.json().catch(() => ({}));
+                alert(`印單失敗：${d.error || res.status}`);
+            }
+        } catch (e) {
+            alert(`印單連線失敗：${e.message}`);
+        }
+    };
+
     const executeCheckout = async (itemsToCheckout) => {
         if (checkoutLockRef.current) return;
         checkoutLockRef.current = true;
         setIsLoading(true);
         setIsPartialCheckoutMode(false);
         setSelectedItemsForCheckout([]);
+        setOriginalCustomerCount(customerCount);
+        setOriginalItems(currentOrder);
 
         try {
             const now = Date.now();
@@ -642,15 +1158,22 @@ const handleConfirmOrder = async () => {
             // 同步更新本地 sendTime 狀態，確保 UI 計時器即刻運作
             setSendTime(newSendTime);
 
+            // 外帶訂單：自動儲存顧客資料
+            if (isTakeout && (customerPhone || customerName)) {
+                const cid = await autoSaveCustomer(customerName, customerPhone);
+                if (cid) {
+                    await updateOrderStatus({ orderId: currentOrderId || orderId, newStatus: finalStatus, customerId: cid });
+                }
+            }
+
             if (finalStatus === 'paid') {
                 setOrderStatus('paid');
-                if (tableNumber !== '外帶') navigate('/tables', { replace: true });
+                navigate(isTakeout ? '/takeout' : '/tables', { replace: true });
             } else {
-                setOrderStatus('served'); 
-                // 此處已在上方統一處理 setSendTime
+                setOrderStatus('served');
             }
-            
-            setIsDirty(false); 
+
+            setIsDirty(false);
 
         } catch (e) {
             alert("結帳操作失敗: " + e.message);
@@ -658,9 +1181,7 @@ const handleConfirmOrder = async () => {
             checkoutLockRef.current = false;
             setIsLoading(false);
         }
-    };
-    
-    // ...其餘代碼保持不變
+    };    
     
     const handleFullCheckout = async () => {
         setIsCheckoutOptionModalOpen(false);
@@ -712,12 +1233,15 @@ const handleConfirmOrder = async () => {
         }
     };
     
-    const handleChangeItemQuantity = (internalId, diff) => {
+const handleChangeItemQuantity = (internalId, diff) => {
         const currentItem = currentOrder.find(i => i.internalId === internalId);
         if (!currentItem || currentItem.isPaid) return;
         
         const newQty = Math.max(0, currentItem.quantity + diff);
         
+        // 🚨 這裡必須觸發 setIsDirty(true)
+        setIsDirty(true);
+
         dispatch({
             type: ACTION_TYPE.CHANGE_QUANTITY,
             payload: {
@@ -732,37 +1256,94 @@ const handleConfirmOrder = async () => {
         });
     };
     // --- 輔助邏輯 (保持不變) ---
-    const handleTableChange = async (event) => {
-        const newTable = event.target.value;
-        if (isDirty && currentOrder.length > 0) {
-            if (!window.confirm(`訂單有變更，切換桌號 ${tableNumber} -> ${newTable} 前是否要儲存此筆訂單？ (否則變更將會遺失)`)) {
-                // 如果選擇不儲存，直接切換桌號，isDirty 在此處被忽略
-                setTableNumber(newTable);
-                setIsDirty(false); // 重設為乾淨狀態以避免二次彈窗
+const handleTableChange = async (event) => {
+    const newTable = event.target.value;
+    
+    // 1. 基本檢查：如果選到目前的桌號，或是空值，則不處理
+    if (newTable === tableNumber || !newTable) return;
+
+    const oldTable = tableNumber;
+
+    try {
+        setIsLoading(true);
+
+        // 2. 獲取最新資料庫桌況，檢查目標桌是否已被佔用
+        const dbTableRecords = await getTableStatuses();
+        const targetRecord = dbTableRecords.find(r => r.tableNumber === newTable);
+        
+        // 只要不是 idle，都視為需要確認的狀態 (包含 open, served, paid)
+        const isTargetOccupied = targetRecord && targetRecord.status !== 'idle';
+
+        if (isTargetOccupied) {
+            const confirmOverwrite = window.confirm(
+                `⚠️ 注意：${newTable} 目前狀態為 [${targetRecord.status}]。\n確定要將 ${oldTable} 的內容移過去並覆蓋嗎？`
+            );
+            
+            if (!confirmOverwrite) {
+                // 使用者取消：將下拉選單還原回舊桌號，並結束函式
+                event.target.value = oldTable;
+                setIsLoading(false);
                 return;
-            } else {
-                // 儲存時，會自動更新為 served 或 paid 狀態
-                const savedId = await saveOrderBeforeNavigate(tableNumber, currentOrder, currentOrderId, customerCount, subTotal, orderStatus, sendTime, finishTime);
-                if (!savedId) {
-                    alert('儲存失敗，無法切換桌號。');
-                    return;
-                }
             }
         }
-        setTableNumber(newTable);
-        setCurrentOrderId(null);
-        setOrderStatus('new');
-        setCustomerCount(1);
-        setOpenTimestamp(Date.now());
-        setSendTime(null);
-        setFinishTime(null);
-        setIsDirty(false);
-    };
+
+        // 3. 準備轉移與寫入新桌
+        let savedId = null;
+        const statusToSave = orderStatus || 'served';
+
+        if (currentOrder && currentOrder.length > 0) {
+            // 情境 A：已有餐點內容 (Served / Paid / Submitted)
+            // 💡 關鍵：傳入目前的 currentOrderId 確保是同一筆訂單轉移，而非建立新單
+            savedId = await saveOrderBeforeNavigate(
+                newTable, 
+                currentOrder, 
+                currentOrderId, 
+                customerCount, 
+                subTotal, 
+                statusToSave, 
+                sendTime, 
+                finishTime
+            );
+            
+            if (!savedId) throw new Error("寫入新桌位失敗，請檢查網路連線");
+
+        } else {
+            // 情境 B：純佔桌 (Open 狀態，尚無點餐內容)
+            const occupySuccess = await occupyTableWithoutOrder(newTable, openTimestamp);
+            if (!occupySuccess) throw new Error("佔用新桌失敗");
+            savedId = "occupy_success"; 
+        }
+
+        // 4. 🚀 重要安全邏輯：確認新桌寫入成功後，才清除舊桌位狀態
+        if (savedId && oldTable && oldTable !== '外帶') {
+            await resetTableStatus(oldTable);
+        }
+
+        // 5. 更新前端 UI 狀態
+        setTableNumber(newTable);          // 更新畫面上顯示的桌號
+        setOriginalTableId(newTable);      // 更新存檔基準桌號
+        setIsDirty(false);                 // 重置「未存檔」標記
+        
+        // 如果是從 Open 狀態轉移且無餐點，確保狀態同步為 open
+        if (!currentOrder || currentOrder.length === 0) {
+            setOrderStatus('open');
+        }
+
+        console.log(`✅ 換桌成功：從 ${oldTable} 轉至 ${newTable}`);
+
+    } catch (e) {
+        console.error("切換桌號失敗:", e);
+        alert(`換桌操作失敗: ${e.message}`);
+        // 發生錯誤時，將下拉選單還原
+        event.target.value = oldTable; 
+    } finally {
+        setIsLoading(false);
+    }
+};
 
     const handleChangeCustomerCount = (diff) => {
-        const newCount = Math.max(1, customerCount + diff);
+        const newCount = Math.max(isTakeout ? 0 : 1, customerCount + diff);
         setCustomerCount(newCount);
-        setIsDirty(true);
     };
 
     const handleQuantitySave = (newQty) => {
@@ -777,12 +1358,12 @@ const handleConfirmOrder = async () => {
                     setSendTime,
                     setOrderStatus,
                     currentOrderStatus: orderStatus,
-                    setIsDirty
+                    
                 }
             });
         } else if (quantityTarget.type === 'customer') {
             // 用於處理數量鍵盤輸入的顧客人數
-            setCustomerCount(Math.max(1, newQty));
+            setCustomerCount(Math.max(isTakeout ? 0 : 1, newQty));
             setIsDirty(true);
         }
         setQuantityTarget(null);
@@ -826,13 +1407,17 @@ const handleConfirmOrder = async () => {
                                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
                                 </button>
                                 
-                                <select
-                                    value={tableNumber}
-                                    onChange={handleTableChange}
-                                    className="bg-transparent text-white font-black text-xl appearance-none cursor-pointer border-none p-1.5 0 focus:outline-none w-auto"
-                                >
-                                    {TABLE_OPTIONS.map(opt => <option key={opt} value={opt} className="bg-red-600">{opt || ''}</option>)}
-                                </select>
+                                {isTakeout ? (
+                                    <span className="text-white font-black text-xl px-1.5">外帶</span>
+                                ) : (
+                                    <select
+                                        value={tableNumber}
+                                        onChange={handleTableChange}
+                                        className="bg-transparent text-white font-black text-xl appearance-none cursor-pointer border-none p-1.5 0 focus:outline-none w-auto"
+                                    >
+                                        {TABLE_OPTIONS.map(opt => <option key={opt} value={opt} className="bg-red-600">{opt || ''}</option>)}
+                                    </select>
+                                )}
                                 
                                 <div className="flex items-center space-x-1 bg-white/20 p-0.5 rounded-full">
                                     <div className="text-xs font-bold bg-white text-red-600 px-1.5 py-0.5 rounded-full whitespace-nowrap">
@@ -844,7 +1429,7 @@ const handleConfirmOrder = async () => {
                                             <button
                                                 onClick={() => handleChangeCustomerCount(-1)}
                                                 className="w-5 h-5 bg-white/10 text-white rounded-full transition-colors hover:bg-white/30 flex items-center justify-center text-sm leading-none"
-                                                disabled={customerCount <= 1}
+                                                disabled={customerCount <= (isTakeout ? 0 : 1)}
                                             >-</button>
                                             <span
                                                 onClick={handleOpenCustomerCountModal}
@@ -875,17 +1460,33 @@ const handleConfirmOrder = async () => {
                         </div>
 
                         {/* 第二行：單號、商品總數 */}
-                        <div className="flex-shrink-0"> 
+                        <div className="flex-shrink-0">
                             <div className="py-1 px-3 bg-red-500 text-white flex justify-between items-center text-sm font-bold">
                                 <div className="flex items-center">
                                     <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2H7a2 2 0 00-2 2v2M7 7a2 2 0 012-2h6a2 2 0 012 2v2H7V7z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                                    <span className="text-base">{formatOrderId(currentOrderId)}</span>
+                                    <span className="text-base">{dailyOrderNo ? String(dailyOrderNo).padStart(3, '0') : formatOrderId(currentOrderId)}</span>
                                 </div>
                                 <div className="text-right pr-1">
                                     <span>商品總數 {totalItems}</span>
                                 </div>
                             </div>
-                        </div>                    
+                        </div>
+
+                        {/* 外帶顧客資訊區塊 */}
+                        {isTakeout && (
+                            <TakeoutCustomerInfo
+                                customerName={customerName}
+                                setCustomerName={setCustomerName}
+                                customerPhone={customerPhone}
+                                setCustomerPhone={setCustomerPhone}
+                                needsUtensils={needsUtensils}
+                                setNeedsUtensils={setNeedsUtensils}
+                                pickupTime={pickupTime}
+                                setPickupTime={setPickupTime}
+                                customerSuggestions={customerSuggestions}
+                                setCustomerSuggestions={setCustomerSuggestions}
+                            />
+                        )}
                     </div>
 
                     {/* 內容區：訂單明細 (可滾動) */}
@@ -901,145 +1502,155 @@ const handleConfirmOrder = async () => {
                         ) : (
                             // 依據結帳狀態分組顯示
                             <>
-                                {/* 未結帳分組 */}
-                                {unpaidItems.length > 0 && (
-                                    <div className="mb-3">
-                                        <div className="text-xs font-black text-red-600 mb-1 flex items-center justify-between border-b pb-0.5 px-1">
-                                            <div className='flex items-center'>
-                                                <span className={`w-2 h-2 rounded-full mr-2 bg-red-600`} />
-                                                未結帳
-                                                {isPartialCheckoutMode 
-                                                    ? <span className="text-xs font-normal text-gray-500 ml-2">(點擊選取結帳)</span>
-                                                    : <span className="text-xs font-normal text-gray-500 ml-2"></span> 
-                                                }
-                                            </div>
-                                            {/* 未結帳金額放在同一列尾巴 */}
-                                            <span className="text-base font-black pr-2">${formatCurrency(unpaidTotal)}</span>
-                                        </div>
-                                        {unpaidItems.map(item => (
-                                            <div 
-                                                key={item.internalId} 
-                                                // 正常模式下，只在分帳模式下才允許點擊（切換選擇狀態）
-                                                className={`flex items-center justify-between p-2 border rounded-xl mb-1 bg-white shadow-sm transition-colors ${isPartialCheckoutMode ? (selectedItemsForCheckout.includes(item.internalId) ? 'border-orange-500 bg-orange-50 ring-2 ring-orange-500 cursor-pointer' : 'hover:bg-gray-100 cursor-pointer') : ''}`}
-                                                onClick={isPartialCheckoutMode ? () => handleItemClick(item) : undefined}
-                                            >
-                                                {/* 1. 核取方塊/狀態標誌 (isSent 獨立控制) */}
-                                                <div className="w-5 h-5 mr-2 flex-shrink-0 flex items-center justify-center">
-                                                    {isPartialCheckoutMode ? (
-                                                        // 分帳模式下的選擇框
-                                                        selectedItemsForCheckout.includes(item.internalId) ? (
-                                                            <svg className="w-full h-full text-orange-600" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
-                                                        ) : (
-                                                            <div className="w-full h-full rounded-full border-2 border-gray-400"></div>
-                                                        )
-                                                    ) : (
-                                                        // 正常模式下，顯示 isSent 註記狀態 (靜態)
-                                                        item.isSent ? (
-                                                            // 已送餐 (打勾)
-                                                            <svg className="w-full h-full text-green-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
-                                                        ) : (
-                                                            // 未送餐 (空心圓圈)
-                                                            <div className="w-full h-full rounded-full border-2 border-gray-400"></div>
-                                                        )
-                                                    )}
+                                {/* 未結帳清單 */}
+                                {unpaidItems.length > 0 && (() => {
+                                    // 合併鍵：id + 排序後的備註，相同則合併數量
+                                    const remarkKey = (item) =>
+                                        JSON.stringify((item.remarks || []).slice().sort());
+                                    const mergeKey = (item) => `${item.id}:::${remarkKey(item)}`;
+
+                                    // 依合併模式決定顯示列表
+                                    let displayRows;
+                                    if (isOrderMerged) {
+                                        const map = new Map();
+                                        const order = [];
+                                        for (const item of unpaidItems) {
+                                            const k = mergeKey(item);
+                                            if (map.has(k)) {
+                                                map.get(k).quantity += item.quantity;
+                                            } else {
+                                                const clone = { ...item };
+                                                map.set(k, clone);
+                                                order.push(clone);
+                                            }
+                                        }
+                                        displayRows = order;
+                                    } else {
+                                        displayRows = unpaidItems;
+                                    }
+
+                                    return (
+                                        <div className="mb-3">
+                                            {/* 標題列 + 合併/展開切換 */}
+                                            <div className="text-xs font-black text-red-600 mb-1 flex items-center justify-between border-b pb-0.5 px-1">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="w-2 h-2 rounded-full bg-red-600 flex-shrink-0" />
+                                                    未結帳
+                                                    {isPartialCheckoutMode && <span className="text-xs font-normal text-gray-500">(點擊選取結帳)</span>}
                                                 </div>
-                                                
-                                                {/* 2. 餐點名稱 */}
-                                                <div className="flex flex-col flex-grow">
-                                                    <div className="flex items-center gap-1">
-                                                        {/* 判斷：如果是主餐，且有 sortOrder，就顯示黑色小標籤 */}
-                                                        {item.category === '主餐' && item.sortOrder && (
-                                                            <div 
-                                                                className="flex-shrink-0 flex items-center justify-center w-5 h-5 bg-black rounded-md"
-                                                            >
-                                                                <span className="text-white font-bold text-[10px] leading-none">
-                                                                    {item.sortOrder}
-                                                                </span>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        onClick={() => setIsOrderMerged(v => !v)}
+                                                        className="text-[11px] font-bold text-gray-400 hover:text-gray-700 border border-gray-200 rounded px-1.5 py-0.5"
+                                                    >
+                                                        {isOrderMerged ? '展開' : '合併'}
+                                                    </button>
+                                                    <span className="text-base font-black pr-1">${formatCurrency(unpaidTotal)}</span>
+                                                </div>
+                                            </div>
+
+                                            {/* 品項列表 */}
+                                            {displayRows.map(item => {
+                                                const hasItemRemarks = item.remarks && item.remarks.length > 0;
+                                                const hasApplicableGroups = remarkGroups.some(g => g.appliesTo && g.appliesTo.includes(item.id));
+                                                const isEditingThis = pendingRemarkItem?.editingInternalId === item.internalId;
+                                                return (
+                                                    <div
+                                                        key={item.internalId}
+                                                        className={`flex items-start justify-between p-2 border rounded-xl mb-0.5 bg-white shadow-sm transition-colors
+                                                            ${isPartialCheckoutMode
+                                                                ? (selectedItemsForCheckout.includes(item.internalId) ? 'border-orange-500 bg-orange-50 ring-2 ring-orange-500 cursor-pointer' : 'hover:bg-gray-100 cursor-pointer')
+                                                                : (hasApplicableGroups ? `cursor-pointer ${isEditingThis ? 'border-teal-400 bg-teal-50 ring-2 ring-teal-400' : 'hover:bg-amber-50 hover:border-amber-200'}` : '')
+                                                            }`}
+                                                        onClick={isPartialCheckoutMode
+                                                            ? () => handleItemClick(item)
+                                                            : (hasApplicableGroups ? () => handleCartItemClick(item) : undefined)
+                                                        }
+                                                    >
+                                                        {/* 1. 狀態圓圈 */}
+                                                        <div className="w-5 h-5 mr-2 mt-0.5 flex-shrink-0 flex items-center justify-center">
+                                                            {isPartialCheckoutMode ? (
+                                                                selectedItemsForCheckout.includes(item.internalId)
+                                                                    ? <svg className="w-full h-full text-orange-600" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
+                                                                    : <div className="w-full h-full rounded-full border-2 border-gray-400" />
+                                                            ) : (
+                                                                item.isSent
+                                                                    ? <svg className="w-full h-full text-red-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
+                                                                    : <div className="w-full h-full rounded-full border-2 border-gray-400" />
+                                                            )}
+                                                        </div>
+
+                                                        {/* 2. 名稱 + 備註 */}
+                                                        <div className="flex flex-col flex-grow min-w-0">
+                                                            <div className="flex items-center gap-1">
+                                                                {item.category === '主餐' && item.sortOrder && (
+                                                                    <div className="flex-shrink-0 flex items-center justify-center w-5 h-5 bg-black rounded-md">
+                                                                        <span className="text-white font-bold text-[10px] leading-none">{item.sortOrder}</span>
+                                                                    </div>
+                                                                )}
+                                                                <span className="font-bold text-lg whitespace-nowrap">{item.name}</span>
+                                                                {hasApplicableGroups && !isPartialCheckoutMode && (
+                                                                    <svg className={`w-3 h-3 flex-shrink-0 ${isEditingThis ? 'text-teal-500' : hasItemRemarks ? 'text-amber-500' : 'text-gray-300'}`} fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" /></svg>
+                                                                )}
                                                             </div>
-                                                        )}
-                                                        <span className="font-bold text-[16px]">{item.name}</span>
+                                                            <RemarkBadges remarks={item.remarks} />
+                                                        </div>
+
+                                                        {/* 3. 數量控制 */}
+                                                        <div className="flex flex-col items-end space-y-1 ml-1">
+                                                            <div className="flex items-center space-x-1.5">
+                                                                <button onClick={(e) => { e.stopPropagation(); handleChangeItemQuantity(item.internalId, -1); }}
+                                                                    className="w-6 h-6 bg-black/5 text-gray-700 rounded-full hover:bg-gray-300 flex items-center justify-center text-sm font-bold shadow-sm"
+                                                                    disabled={isLoading || isPartialCheckoutMode}>-</button>
+                                                                <span onClick={(e) => { e.stopPropagation(); handleOpenItemQuantityModal(item); }}
+                                                                    className={`text-xl font-black text-gray-800 px-0.5 ${!isPartialCheckoutMode ? 'cursor-pointer' : ''}`}>
+                                                                    {item.quantity}
+                                                                </span>
+                                                                <button onClick={(e) => { e.stopPropagation(); handleChangeItemQuantity(item.internalId, 1); }}
+                                                                    className="w-6 h-6 bg-black/5 text-gray-700 rounded-full hover:bg-gray-300 flex items-center justify-center text-sm font-bold shadow-sm"
+                                                                    disabled={isLoading || isPartialCheckoutMode}>+</button>
+                                                            </div>
+                                                            <span className="text-xs font-black text-gray-800 pr-1">${formatCurrency(item.price * item.quantity)}</span>
+                                                        </div>
                                                     </div>
-                                                </div>
-                                                
-                                                {/* 3. 數量控制與金額 */}
-                                                <div className="flex flex-col items-end space-y-1"> 
-                                                    {/* 數量控制 */}
-                                                    <div className="flex items-center space-x-2"> 
-                                                        {/* 數量減按鈕 (灰底半透明) */}
-                                                        <button
-                                                            onClick={(e) => { e.stopPropagation(); handleChangeItemQuantity(item.internalId, -1); }}
-                                                            className="w-6 h-6 bg-black/5 text-gray-700 rounded-full transition-colors hover:bg-gray-300 flex items-center justify-center text-sm leading-none font-bold shadow-sm"
-                                                            disabled={isLoading || isPartialCheckoutMode}
-                                                        >-</button>
-                                                        
-                                                        {/* 數量顯示 (可點擊彈出數字鍵盤) */}
-                                                        <span 
-                                                            onClick={(e) => { e.stopPropagation(); handleOpenItemQuantityModal(item); }}
-                                                            className={`text-xl font-black text-gray-800 px-1 ${!isPartialCheckoutMode ? 'cursor-pointer' : ''}`}
-                                                        >
-                                                            {item.quantity}
-                                                        </span>
-                                                        
-                                                        {/* 數量加按鈕 (灰底半透明) */}
-                                                        <button
-                                                            onClick={(e) => { e.stopPropagation(); handleChangeItemQuantity(item.internalId, 1); }}
-                                                            className="w-6 h-6 bg-black/5 text-gray-700 rounded-full transition-colors hover:bg-gray-300 flex items-center justify-center text-sm leading-none font-bold shadow-sm"
-                                                            disabled={isLoading || isPartialCheckoutMode}
-                                                        >+</button>
-                                                    </div>
-                                                    
-                                                    {/* 單項總金額 (向下移動，與右側拉開距離) */}
-                                                    <span className="text-xs font-black text-gray-800 self-end pr-2"> 
-                                                        ${formatCurrency(item.price * item.quantity)}
-                                                    </span>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                                
+                                                );
+                                            })}
+                                        </div>
+                                    );
+                                })()}
+
                                 {/* 已結帳分組 */}
                                 {paidItems.length > 0 && (
                                     <div className="mb-3 opacity-80">
                                         <div className="text-xs font-black text-green-600 mb-1 flex items-center justify-between border-b pb-0.5 px-1">
                                             <div className='flex items-center'>
-                                                <span className={`w-2 h-2 rounded-full mr-2 bg-green-600`} />
+                                                <span className="w-2 h-2 rounded-full mr-2 bg-green-600" />
                                                 已結帳
                                             </div>
-                                            {/* 已結帳金額放在同一列尾巴 */}
                                             <span className="text-base font-black pr-2">${formatCurrency(paidTotal)}</span>
                                         </div>
                                         {paidItems.map(item => (
-                                            <div key={item.internalId} className="flex items-center justify-between p-2 border border-green-200 rounded-xl mb-1 bg-white shadow-sm">
-                                                {/* 已結帳項目，顯示 isSent 註記狀態 (靜態) */}
-                                                <div className="w-5 h-5 mr-2 flex-shrink-0 flex items-center justify-center">
-                                                    {item.isSent ? (
-                                                        <svg className="w-full h-full text-green-600" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
-                                                    ) : (
-                                                        <div className="w-full h-full rounded-full border-2 border-gray-400"></div>
-                                                    )}
+                                            <div key={item.internalId} className="flex items-start justify-between p-2 border border-green-200 rounded-xl mb-1 bg-white shadow-sm">
+                                                <div className="w-5 h-5 mr-2 mt-0.5 flex-shrink-0 flex items-center justify-center">
+                                                    {item.isSent
+                                                        ? <svg className="w-full h-full text-green-600" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
+                                                        : <div className="w-full h-full rounded-full border-2 border-gray-400" />
+                                                    }
                                                 </div>
-                                                <div className="flex flex-col flex-grow">
-                                                    {/* 使用 block 確保內部元素可以浮動繞排 */}
-                                                    <div className="block w-full">
+                                                <div className="flex flex-col flex-grow min-w-0">
+                                                    <div className="flex items-center gap-1">
                                                         {item.category === '主餐' && item.sortOrder && (
-                                                            <div 
-                                                                className="float-left flex items-center justify-center w-5 h-5 bg-black rounded-md mr-1 mt-0.5"
-                                                            >
-                                                                <span className="text-white font-bold text-[10px] leading-none">
-                                                                    {Number(item.sortOrder)}
-                                                                </span>
+                                                            <div className="flex-shrink-0 flex items-center justify-center w-5 h-5 bg-black rounded-md">
+                                                                <span className="text-white font-bold text-[10px] leading-none">{Number(item.sortOrder)}</span>
                                                             </div>
                                                         )}
-                                                        <span className="font-bold text-[16px] leading-tight inline">
-                                                            {item.name}
-                                                        </span>
+                                                        <span className="font-bold text-lg whitespace-nowrap">{item.name}</span>
                                                     </div>
+                                                    <RemarkBadges remarks={item.remarks} />
                                                 </div>
-                                                <div className="flex flex-col items-end space-y-1">
-                                                    <span className="text-xl font-black text-gray-800 px-1 pr-2">{item.quantity}</span>
-                                                    {/* 單項總金額 (向下移動，與右側拉開距離) */}
-                                                    <span className="text-xs font-black text-gray-800 self-end pr-2">${formatCurrency(item.price * item.quantity)}</span>
+                                                <div className="flex flex-col items-end space-y-1 ml-1">
+                                                    <span className="text-xl font-black text-gray-800 pr-1">{item.quantity}</span>
+                                                    <span className="text-xs font-black text-gray-800 pr-1">${formatCurrency(item.price * item.quantity)}</span>
                                                 </div>
                                             </div>
                                         ))}
@@ -1118,18 +1729,31 @@ const handleConfirmOrder = async () => {
                 {/* 右側區塊：菜單選擇區 */}
                 <div className="w-[70%] flex flex-col bg-white rounded-xl p-2 h-full">
                     {/* 菜單類別 Tabs 區塊 */}
-                    <div className="flex items-center mb-3 flex-shrink-0">
+                    <div className="flex items-center mb-3 flex-shrink-0 gap-2">
                         <div className="flex space-x-2 overflow-x-auto scrollbar-hide flex-grow">
                             {categories.map(cat => (
-                                <button 
-                                    key={cat} 
-                                    onClick={() => setSelectedCategory(cat)} 
+                                <button
+                                    key={cat}
+                                    onClick={() => setSelectedCategory(cat)}
                                     className={`px-8 py-2.5 rounded-xl font-bold transition-all whitespace-nowrap text-m ${selectedCategory === cat ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-100'}`}
                                 >
                                     {cat}
                                 </button>
                             ))}
                         </div>
+                        {/* 一鍵恢復供應 */}
+                        <button
+                            onClick={() => setShowResumeConfirm(true)}
+                            disabled={!hasSoldOut}
+                            className={`flex-shrink-0 px-4 py-2.5 rounded-xl font-bold text-sm transition-colors whitespace-nowrap
+                                ${hasSoldOut
+                                    ? 'bg-orange-100 text-orange-600 hover:bg-orange-200 active:bg-orange-300'
+                                    : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                }`}
+                            title="恢復所有停售品項"
+                        >
+                            恢復供應
+                        </button>
                     </div>
                     
                     {/* 菜單內容區塊 (滾動區) */}
@@ -1144,17 +1768,13 @@ const handleConfirmOrder = async () => {
             return [
                 // 1. 插入一個完全空白的佔位格子 (對應 grid-cols-5 的最後一格)
                 <div key="gap-10" className="w-full" aria-hidden="true" />,
-                
+
                 // 2. 渲染原本的 10 號 MenuCard (會自動跳到下一排第一格)
                 <MenuCard
                     key={item.id}
                     item={item}
-                    onAddItem={(i) => {
-                        dispatch({ 
-                            type: ACTION_TYPE.ADD_ITEM, 
-                            payload: { item: i, setIsDirty, menuItems } 
-                        });
-                    }}
+                    onAddItem={handleAddItemClick}
+                    onLongPress={handleLongPressMenu}
                 />
             ];
         }
@@ -1164,12 +1784,8 @@ const handleConfirmOrder = async () => {
             <MenuCard
                 key={item.id}
                 item={item}
-                onAddItem={(i) => {
-                    dispatch({ 
-                        type: ACTION_TYPE.ADD_ITEM, 
-                        payload: { item: i, setIsDirty, menuItems } 
-                    });
-                }}
+                onAddItem={handleAddItemClick}
+                onLongPress={handleLongPressMenu}
             />
         );
     })}
@@ -1183,10 +1799,11 @@ const handleConfirmOrder = async () => {
             <QuantityPadModal
                 isOpen={isQuantityModalOpen}
                 onClose={() => setIsQuantityModalOpen(false)}
-                currentValue={quantityTarget?.currentValue || 1}
+                currentValue={quantityTarget?.currentValue ?? (quantityTarget?.type === 'customer' && isTakeout ? 0 : 1)}
                 onSave={handleQuantitySave}
                 title={quantityTarget?.type === 'customer' ? '設定用餐人數' : '設定餐點數量'}
-                isItem={quantityTarget?.type === 'item'} 
+                isItem={quantityTarget?.type === 'item'}
+                allowZero={quantityTarget?.type === 'customer' && isTakeout}
             />
             
             <CheckoutOptionModal
@@ -1194,8 +1811,49 @@ const handleConfirmOrder = async () => {
                 onClose={() => setIsCheckoutOptionModalOpen(false)}
                 onFullCheckout={handleFullCheckout}
                 onStartPartialCheckout={handleStartPartialCheckout}
+                onPrint={handlePrintReceipt}
             />
             
+            {/* 停售確認 Modal */}
+            <SoldOutModal
+                item={soldOutItem}
+                onConfirm={handleConfirmSoldOut}
+                onCancel={() => setSoldOutItem(null)}
+            />
+
+            {/* 恢復供應確認 Modal */}
+            {showResumeConfirm && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+                    <div className="bg-white p-6 rounded-2xl shadow-2xl w-80">
+                        <h3 className="text-xl font-black mb-2 border-b pb-2">恢復供應確認</h3>
+                        <p className="text-gray-700 mb-5">確定要將所有停售品項恢復為正常販售？</p>
+                        <div className="flex gap-3">
+                            <button
+                                onClick={handleResetAllSoldOut}
+                                className="flex-1 py-3 rounded-xl font-black text-white bg-green-500 hover:bg-green-600 transition-colors"
+                            >
+                                確認恢復
+                            </button>
+                            <button
+                                onClick={() => setShowResumeConfirm(false)}
+                                className="flex-1 py-3 rounded-xl font-bold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
+                            >
+                                取消
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 備註選擇 Modal */}
+            <RemarkSelectionModal
+                item={pendingRemarkItem?.item || null}
+                groups={pendingRemarkItem?.applicableGroups || []}
+                initialRemarks={pendingRemarkItem?.item?.remarks || []}
+                onToggle={handleRemarkToggle}
+                onCancel={handleRemarkCancel}
+            />
+
             {/* Loading 覆蓋層 */}
             {isLoading && <div className="fixed inset-0 bg-black/20 z-[60] flex items-center justify-center"><div className="bg-white p-4 rounded-lg animate-pulse font-bold">處理中...</div></div>}
         </div>

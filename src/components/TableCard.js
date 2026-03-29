@@ -1,9 +1,7 @@
 // src/components/TableCard.js
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 
-// ----------------------------------------------------------------------
-// 【輔助函式 A】正計時器邏輯
-// ----------------------------------------------------------------------
+// --- 輔助函式保持不變 ---
 const useTimer = (startTime) => {
     const [elapsedMinutes, setElapsedMinutes] = useState(0);
     useEffect(() => {
@@ -18,71 +16,75 @@ const useTimer = (startTime) => {
         updateTimer(); 
         return () => clearInterval(intervalId);
     }, [startTime]);
-    return `${elapsedMinutes} min`;
+    return { val: elapsedMinutes, display: `${elapsedMinutes} min` };
 };
 
-// ----------------------------------------------------------------------
-// 【輔助函式 C】金額格式化
-// ----------------------------------------------------------------------
 const formatCurrency = (number) => {
     const roundedNumber = Math.round(number || 0);
     return roundedNumber.toLocaleString('en-US'); 
 };
 
-// ----------------------------------------------------------------------
-// 【輔助函式 D】映射顯示樣式
-// ----------------------------------------------------------------------
 const mapOrderStatus = (status) => {
     switch (status) {
-        case 'open':
-            return { color: 'bg-yellow-400', borderColor: 'border-yellow-400' };
-        case 'served':
-            return { color: 'bg-[#2FB8B8]', borderColor: 'border-[#2FB8B8]' };
-        case 'paid': 
-            return { color: 'bg-[#5A7D85]', borderColor: 'border-[#5A7D85]' }; 
-        default:
-            return { color: 'bg-gray-300', borderColor: 'border-gray-200' }; 
+        case 'open': return { color: 'bg-yellow-400', borderColor: 'border-yellow-400' };
+        case 'served': return { color: 'bg-[#2FB8B8]', borderColor: 'border-[#2FB8B8]' };
+        case 'paid': return { color: 'bg-[#5A7D85]', borderColor: 'border-[#5A7D85]' }; 
+        default: return { color: 'bg-gray-200', borderColor: 'border-gray-100' }; 
     }
 };
 
-const TableCard = ({ tableData, handleTableClick, handleToggleItemSentOnTable, handleResetTable, isLoading }) => {
-    const { id: tableId, status = 'idle', order = null } = tableData;
-    const statusInfo = mapOrderStatus(status); 
-    const orderItems = order?.items || [];
-    
-    // --- 【修正】僅顯示未結帳金額之邏輯 ---
-    const unpaidAmount = orderItems.reduce((acc, item) => {
-        return !item.isPaid ? acc + ((item.price || 0) * (item.quantity || 0)) : acc;
-    }, 0);
-    const hasUnpaid = unpaidAmount > 0;
-    const totalAmount = order?.total || order?.subTotal || 0;
-    // ----------------------------------
+const TableCard = ({ tableData, handleTableClick, handleToggleItemSentOnTable, handleResetTable, handleMoveOrder, isLoading }) => {
+    // 【需求修正】數據結構由單一 order 改為 orders 陣列
+    const { id: tableId, orders = [] } = tableData;
+    const [currentIndex, setCurrentIndex] = useState(0);
+    const scrollRef = useRef(null);
 
-    const orderIdDisplay = order?.orderId 
-        ? order.orderId.toString().slice(-3).padStart(3, '0') 
-        : '000';
+    // 處理左右滑動索引
+    const handleScroll = (e) => {
+        const width = e.target.offsetWidth;
+        if (width > 0) {
+            const newIndex = Math.round(e.target.scrollLeft / width);
+            if (newIndex !== currentIndex) setCurrentIndex(newIndex);
+        }
+    };
+
+    // 【核心邏輯】動態取得目前滑動到的那一張單，若沒單則為空
+    const currentOrder = orders[currentIndex] || null;
+    const status = currentOrder?.status || 'idle';
+    const orderItems = currentOrder?.items || [];
     
-    const openTimestamp = order?.timestamp || null;
-    const sendTime = order?.sendTime || null;
-    const elapsedTimeDisplay = useTimer(openTimestamp); 
-    const serviceTimeDisplay = useTimer(sendTime); 
+    // 以下所有判斷邏輯完全繼承自您提供的原始碼，僅將 order 改為 currentOrder
+    const statusInfo = mapOrderStatus(status); 
+    const unpaidAmount = orderItems.reduce((acc, item) => !item.isPaid ? acc + ((item.price || 0) * (item.quantity || 0)) : acc, 0);
+    const hasUnpaid = unpaidAmount > 0;
+    const totalAmount = currentOrder?.total || currentOrder?.subTotal || 0;
+
+    const orderIdDisplay = currentOrder?.dailyOrderNo
+        ? String(currentOrder.dailyOrderNo).padStart(3, '0')
+        : currentOrder?.orderId
+            ? currentOrder.orderId.toString().slice(-3).padStart(3, '0')
+            : '000';
+    
+    const elapsed = useTimer(currentOrder?.timestamp); 
+    const service = useTimer(currentOrder?.sendTime); 
+    const isOverTime = elapsed.val >= 90;
 
     const isDetailedStatus = ['served', 'paid'].includes(status);
     const shouldShowItems = isDetailedStatus && orderItems.length > 0;
     const canToggleItems = isDetailedStatus && !isLoading;
     const isFullyPaid = status === 'paid'; 
     const isUnpaid = status === 'served' || status === 'open';
-    const shouldShowActionButton = status !== 'idle';
+    const shouldShowActionButton = orders.length > 0;
 
-    const goToOrder = () => { if (!isLoading) handleTableClick(tableId, status, order); };
+    const goToOrder = () => { if (!isLoading) handleTableClick(tableId, status, currentOrder); };
 
     const handleQuickReset = (e) => {
         e.stopPropagation();
-        if (isLoading) return;
+        if (isLoading || !currentOrder) return;
         if (isUnpaid && window.confirm('⚠️ 確定要執行清桌嗎？')) {
-            handleResetTable(tableId);
+            handleResetTable(tableId, currentOrder.orderId);
         } else if (!isUnpaid) {
-            handleResetTable(tableId);
+            handleResetTable(tableId, currentOrder.orderId);
         }
     };
 
@@ -90,114 +92,154 @@ const TableCard = ({ tableData, handleTableClick, handleToggleItemSentOnTable, h
         e.stopPropagation();
         if (isLoading) return;
         if (isUnpaid) { goToOrder(); } 
-        else if (isFullyPaid) { handleResetTable(tableId); }
+        else if (isFullyPaid) { handleResetTable(tableId, currentOrder.orderId); }
+    };
+
+    // 【新需求】加單按鈕
+    const handleAddOrder = (e) => {
+        e.stopPropagation();
+        if (!isLoading) handleTableClick(tableId, 'idle', null);
     };
 
     return (
-        /* 外層容器固定高度 h-[350px] */
-        // 將 h-[350px] 改為 h-full
-<div className={`rounded-2xl shadow-lg overflow-hidden flex flex-col transition-all border-4 h-full bg-white ${status === 'idle' ? 'border-gray-100' : statusInfo.borderColor}`}>
+        <div className={`rounded-2xl shadow-lg overflow-hidden flex flex-col transition-all border-2 h-full bg-white ${orders.length === 0 ? 'border-gray-300' : statusInfo.borderColor}`}>
             
-            {/* Header 區塊 - 固定高度不縮放 flex-shrink-0 */}
+            {/* Header 區塊 - 保持原結構 */}
             <div 
                 className={`px-3 py-1 text-white font-black flex flex-col justify-center gap-1 min-h-[60px] flex-shrink-0 ${statusInfo.color} cursor-pointer hover:brightness-95`}
                 onClick={goToOrder}
             >
-                {/* 第一列：桌號與計時 */}
                 <div className="flex justify-between items-center">
                     <div className="flex items-center gap-3">
-                        <h2 className="text-3xl font-mono tracking-tighter leading-none">{tableId}</h2>
+                        <div className="flex items-center gap-1">
+                            <h2 className="text-3xl font-mono tracking-tighter leading-none">{tableId}</h2>
+                            {/* 【需求修正】加單按鈕 */}
+                            <button onClick={handleAddOrder} className="p-0.5 bg-white/20 hover:bg-white/40 rounded ml-1">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                            </button>
+                        </div>
                         {status !== 'idle' && (
                             <div className="flex flex-col text-[10px] font-mono leading-tight border-l border-white/30 pl-2 text-right">
-                                <span>{elapsedTimeDisplay}</span>
-                                <span>{sendTime ? serviceTimeDisplay : '-- min'}</span>
+                                <span className={isOverTime ? 'text-amber-200 animate-pulse' : ''}>{elapsed.display}</span>
+                                <span>{currentOrder?.sendTime ? service.display : '-- min'}</span>
                             </div>
                         )}
                     </div>
                     {status !== 'idle' && (
-                        <button onClick={handleQuickReset} className="p-1 hover:bg-black/10 rounded-full transition-colors">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" /><polyline points="10 17 15 12 10 7" /><line x1="15" y1="12" x2="3" y2="12" />
-                            </svg>
-                        </button>
+                        <div className="flex items-center gap-2">
+                            {/* 【需求修正】分頁指示點 */}
+                            {orders.length > 1 && (
+                                <div className="flex gap-1">
+                                    {orders.map((_, i) => (
+                                        <div key={i} className={`w-1.5 h-1.5 rounded-full ${i === currentIndex ? 'bg-white' : 'bg-white/40'}`} />
+                                    ))}
+                                </div>
+                            )}
+                            <button onClick={handleQuickReset} className="p-1 hover:bg-black/10 rounded-full transition-colors">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" /><polyline points="10 17 15 12 10 7" /><line x1="15" y1="12" x2="3" y2="12" /></svg>
+                            </button>
+                        </div>
                     )}
                 </div>
 
-                {/* 第二列：單號與金額狀態 (修正：status 為 open 時不顯示金額區域) */}
                 {status !== 'idle' && status !== 'open' ? (
                     <div className="flex justify-between items-center border-t border-white/20 mt-0.5 pt-1 leading-none">
                         <div className="flex items-center gap-1 opacity-90 text-xs font-mono">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                                <polyline points="14 2 14 8 20 8"></polyline>
-                                <line x1="16" y1="13" x2="8" y2="13"></line>
-                                <line x1="16" y1="17" x2="8" y2="17"></line>
-                            </svg>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
                             <span>{orderIdDisplay}</span>
                         </div>
                         <div className="flex items-center gap-1.5 text-xs font-mono">
                             <span className="opacity-80">{hasUnpaid ? '未結帳' : '已結帳'}</span>
-                            <span className={`font-black ${hasUnpaid ? 'text-yellow-200' : 'text-white'}`}>
-                                ${formatCurrency(hasUnpaid ? unpaidAmount : totalAmount)}
-                            </span>
+                            <span className={`font-black ${hasUnpaid ? 'text-yellow-200' : 'text-white'}`}>${formatCurrency(hasUnpaid ? unpaidAmount : totalAmount)}</span>
                         </div>
                     </div>
                 ) : (
-                    /* open 狀態下渲染空 div 佔位以保持 border-t 效果不存在但高度結構一致 */
                     <div className="mt-0.5 pt-1 h-[1.25rem]"></div>
                 )}
             </div>
 
-            {/* 中間主內容區 */}
-            <div className={`flex-grow px-2 py-2 flex flex-col cursor-pointer transition-colors hover:bg-gray-50/50 overflow-hidden`} onClick={goToOrder}>
-                {status === 'idle' ? (
-                    <div className="flex-grow flex items-center justify-center text-gray-400 font-bold italic">空閒中</div>
+            {/* 【需求修正】中間主內容區改為滑動容器 */}
+            <div 
+                ref={scrollRef}
+                onScroll={handleScroll}
+                className="flex-grow flex overflow-x-auto snap-x snap-mandatory no-scrollbar cursor-pointer transition-colors hover:bg-gray-50/50 overflow-hidden"
+                style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+                onClick={goToOrder}
+            >
+                {orders.length === 0 ? (
+                    <div className="min-w-full flex items-center justify-center text-gray-300 font-bold">空閒中</div>
                 ) : (
-                    <div className="flex-grow overflow-y-auto px-1 space-y-2">
-                        {shouldShowItems ? (
-                            orderItems.map((item, index) => {
-                                const itemUniqueId = item.internalId || item.id || `item-${index}`;
-                                const isSent = !!item.isSent; 
-                                return (
-                                    <div key={itemUniqueId} className="flex items-center justify-between group py-0.5" onClick={(e) => e.stopPropagation()}>
-                                        <label className="flex items-center flex-grow cursor-pointer min-w-0">
-                                            <input
-                                                type="checkbox"
-                                                checked={isSent} 
-                                                disabled={!canToggleItems}
-                                                onChange={() => handleToggleItemSentOnTable(tableId, order.orderId, itemUniqueId, isSent)}
-                                                className={`w-5 h-5 rounded border-2 border-gray-300 text-green-600 focus:ring-green-500 transition-all ${!canToggleItems ? 'cursor-not-allowed' : 'cursor-pointer'}`}
-                                            />
-                                            <span className={`ml-1.5 text-sm font-bold flex-grow overflow-hidden ${isSent ? 'text-gray-300 line-through' : 'text-gray-700'}`}>
-                                                {item.name}
-                                            </span>
-                                        </label>
-                                        <span className={`ml-1 text-sm font-black whitespace-nowrap ${isSent ? 'text-gray-300' : 'text-gray-500'}`}>x{item.quantity}</span>
+                    orders.map((order, idx) => (
+                        <div key={order.orderId || idx} className="min-w-full h-full snap-start px-2 py-2 overflow-y-auto space-y-2">
+                            {/* 內部品項清單與原本邏輯完全一致 */}
+                            {order.status === 'open' ? (
+                                <div className="h-full flex flex-col items-center justify-center rounded-xl border p-4 text-yellow-600 bg-yellow-50 border-yellow-100">
+                                    <span className="text-sm font-bold">點餐中 / 尚未送單</span>
+                                </div>
+                            ) : order.items && order.items.length > 0 ? (
+                                (() => {
+                                    // 相同品項 + 相同備註合併顯示
+                                    const displayItems = [];
+                                    const mergedMap = new Map();
+                                    for (const item of order.items) {
+                                        const rKey = JSON.stringify((item.remarks || []).slice().sort());
+                                        const key = `${item.id}:::${rKey}`;
+                                        if (mergedMap.has(key)) {
+                                            mergedMap.get(key).quantity += item.quantity;
+                                        } else {
+                                            const clone = { ...item };
+                                            mergedMap.set(key, clone);
+                                            displayItems.push(clone);
+                                        }
+                                    }
+                                    return displayItems.map((item, itemIdx) => (
+                                    <div key={item.internalId || item.id || itemIdx} className="group py-0.5" onClick={(e) => e.stopPropagation()}>
+                                        <div className="flex items-center justify-between">
+                                            <label className="flex items-center flex-grow cursor-pointer min-w-0">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!item.isSent}
+                                                    disabled={!(['served', 'paid'].includes(order.status) && !isLoading)}
+                                                    onChange={() => handleToggleItemSentOnTable(tableId, order.orderId, item.internalId || item.id, !!item.isSent)}
+                                                    className="w-5 h-5 rounded border-2 border-gray-300 text-green-600 cursor-pointer flex-shrink-0"
+                                                />
+                                                <span className={`ml-1.5 text-sm font-bold truncate ${item.isSent ? 'text-gray-300 line-through' : 'text-gray-700'}`}>{item.name}</span>
+                                            </label>
+                                            <span className={`ml-1 text-sm font-black whitespace-nowrap ${item.isSent ? 'text-gray-300' : 'text-gray-500'}`}>x{item.quantity}</span>
+                                        </div>
+                                        {item.remarks && item.remarks.length > 0 && (
+                                            <div className="flex flex-wrap gap-1 ml-6 mt-0.5">
+                                                {item.remarks.map((r, ri) => (
+                                                    <span key={ri} className="text-[9px] px-1.5 py-0.5 bg-amber-50 text-amber-700 rounded-full font-bold border border-amber-200 leading-tight">{r}</span>
+                                                ))}
+                                            </div>
+                                        )}
                                     </div>
-                                );
-                            })
-                        ) : (
-                            <div className={`h-full flex flex-col items-center justify-center rounded-xl border p-4 ${status === 'open' ? 'text-yellow-600 bg-yellow-50 border-yellow-100' : 'text-red-400 bg-red-50 border-red-100'}`}>
-                                <span className="text-sm font-bold">{status === 'open' ? '點餐中 / 尚未送單' : '⚠️ 訂單資料遺失'}</span>
-                            </div>
-                        )}
-                    </div>
+                                    ));
+                                })()
+                            ) : (
+                                <div className="h-full flex flex-col items-center justify-center rounded-xl border p-4 text-red-400 bg-red-50 border-red-100">
+                                    <span className="text-sm font-bold">⚠️ 訂單資料遺失</span>
+                                </div>
+                            )}
+                        </div>
+                    ))
                 )}
             </div>
             
-            {/* 底部按鈕區 */}
+            {/* 底部按鈕區 - 保持原樣 */}
             <div className="p-3 bg-gray-50 border-t border-gray-100 flex-shrink-0">
                 {shouldShowActionButton ? ( 
                     <button
                         onClick={handleActionButtonClick} 
                         disabled={isLoading}
-                        className={`w-full py-3 text-white font-black rounded-xl shadow-lg hover:brightness-110 active:scale-95 transition-all disabled:opacity-50
+                        className={`w-full py-3 text-white font-black rounded-xl shadow-lg active:scale-95 transition-all
                             ${status === 'paid' ? 'bg-[#5A7D85]' : (status === 'served' ? 'bg-[#2FB8B8]' : 'bg-yellow-600')}`}
                     >
                         {status === 'paid' ? '確認離開 (清桌)' : status === 'served' ? '尚未結帳 (去結帳)' : '繼續點餐'}
                     </button>
                 ) : (
-                    <button onClick={(e) => { e.stopPropagation(); goToOrder(); }} disabled={isLoading} className="w-full py-3 bg-blue-600 text-white font-black rounded-xl shadow-lg hover:brightness-110 active:scale-95 transition-all">
+                    <button onClick={goToOrder} disabled={isLoading} className="w-full py-3 bg-blue-600 text-white font-black rounded-xl shadow-lg active:scale-95 transition-all">
                         開桌 / 點餐
                     </button>
                 )}

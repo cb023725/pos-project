@@ -72,13 +72,14 @@ const deduplicateAndFormat = (items) => {
 // 子元件：新增/編輯共用 Modal 邏輯 (保持不變)
 // ======================================================================
 const ItemModal = ({ item, onClose, onSave, isAdding = false }) => {
-    const baseItem = { name: '', price: 0, category: CATEGORIES[0], imageUrl: '', stock: 0, consumes: [] };
-    const initialData = isAdding ? baseItem : { 
-        ...baseItem, 
-        ...item, 
-        price: item?.price || 0, 
-        consumes: item?.consumes || [], 
-        sortOrder: item?.sortOrder !== undefined ? item.sortOrder : Infinity
+    const baseItem = { name: '', printName: '', price: 0, category: CATEGORIES[0], imageUrl: '', stock: 0, consumes: [] };
+    const initialData = isAdding ? baseItem : {
+        ...baseItem,
+        ...item,
+        price: item?.price || 0,
+        consumes: item?.consumes || [],
+        sortOrder: item?.sortOrder !== undefined ? item.sortOrder : Infinity,
+        printName: item?.printName || '',
     };
     const [formData, setFormData] = useState(initialData);
 
@@ -144,6 +145,14 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false }) => {
                         <div className="mb-4">
                             <label className="block text-base font-medium text-gray-700">名稱</label>
                             <input type="text" name="name" value={formData.name} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-3 text-base font-bold focus:ring-blue-500 focus:border-blue-500" required />
+                        </div>
+
+                        <div className="mb-4">
+                            <label className="block text-base font-medium text-gray-700">
+                                出單短名
+                                <span className="ml-2 text-xs text-gray-400 font-normal">（印在出單上的簡短名稱，留空則使用原名稱）</span>
+                            </label>
+                            <input type="text" name="printName" value={formData.printName || ''} onChange={handleChange} placeholder={formData.name} className="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-3 text-base focus:ring-blue-500 focus:border-blue-500" />
                         </div>
                         
                         <div className="grid grid-cols-2 gap-4"> 
