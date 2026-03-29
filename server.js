@@ -743,9 +743,9 @@ function buildCustomerReceiptPDF(data, filePath) {
             const rems  = row.remarks || [];
             mDoc.font('Reg').fontSize(C_REM_SZ);
             const remH  = rems.length > 0
-                ? mDoc.heightOfString(rems.join('  '), { width: C_NAME_W - 4 })
+                ? mDoc.heightOfString(rems.join('  '), { width: C_NAME_W - 8, lineGap: 0 })
                 : 0;
-            h += Math.max(nameH, C_ITEM_SZ + 3) + 2 + remH + 1; // +1 for item divider
+            h += Math.max(nameH, C_ITEM_SZ + 3) + 1 + remH + 1; // +1 gap, +1 divider
         }
         h += 10 + (C_TOT_SZ + 8); // 合計 section: line + gap + text + bottom buffer
 
@@ -832,14 +832,15 @@ function buildCustomerReceiptPDF(data, filePath) {
             doc.font('Reg').fontSize(C_ITEM_SZ).fillColor('black')
                .text(String(price * qty), C_PRI_X, y,
                      { width: C_PRI_W, align: 'right', lineBreak: false });
-            y += rowH + 2;
+            y += rowH + 1;  // 1pt 緊密間距
 
-            // 備註（平行排列，自動換行）
+            // 備註（縮排、單行間距、緊密排列）
             if (rems.length > 0) {
                 doc.font('Reg').fontSize(C_REM_SZ).fillColor('black');
                 const remText = rems.join('  ');
-                const remH = doc.heightOfString(remText, { width: C_NAME_W - 4 });
-                doc.text(remText, C_NAME_X + 4, y, { width: C_NAME_W - 4, lineBreak: true });
+                const remH = doc.heightOfString(remText, { width: C_NAME_W - 8, lineGap: 0 });
+                doc.text(remText, C_NAME_X + 8, y,
+                         { width: C_NAME_W - 8, lineBreak: true, lineGap: 0 });
                 y += remH;
             }
 
@@ -864,7 +865,9 @@ function buildCustomerReceiptPDF(data, filePath) {
         const totY = y;
         doc.font('Reg').fontSize(C_TOT_SZ - 1).fillColor('black')
            .text('合計', CM, totY, { lineBreak: false });
-        doc.y = totY;  // 重設游標，避免金額被推到下一行
+        // 重設 x 與 y 游標，確保金額從 CM 起算、不超出版面
+        doc.y = totY;
+        doc.x = CM;
         doc.font('Bold').fontSize(C_TOT_SZ).fillColor('black')
            .text(`$${total.toLocaleString('en-US')}`,
                  { width: CCW, align: 'right', lineBreak: false });
