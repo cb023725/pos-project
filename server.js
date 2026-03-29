@@ -854,15 +854,19 @@ function buildCustomerReceiptPDF(data, filePath) {
         // 下實線
         hLine(y, 0.8); y += 5;
 
-        // 合計（同一列：左側「合計」右側金額，用同一 y 絕對定位）
+        // 合計（同一列：左側「合計」右側金額）
+        // 注意：PDFKit 在第一個 text() 後會推進 doc.y；
+        // 第二個 text() 若提供相同 y 且 y < doc.y，PDFKit 會開新頁。
+        // 解法：第一個 text() 後手動將 doc.y 重設回同一行再渲染金額。
         const total = data.total != null
             ? data.total
             : rows.reduce((s, r) => s + (r.price || 0) * (r.qty || 1), 0);
         const totY = y;
         doc.font('Reg').fontSize(C_TOT_SZ - 1).fillColor('black')
            .text('合計', CM, totY, { lineBreak: false });
+        doc.y = totY;  // 重設游標，避免金額被推到下一行
         doc.font('Bold').fontSize(C_TOT_SZ).fillColor('black')
-           .text(`$${total.toLocaleString('en-US')}`, CM, totY,
+           .text(`$${total.toLocaleString('en-US')}`,
                  { width: CCW, align: 'right', lineBreak: false });
 
         doc.end();
