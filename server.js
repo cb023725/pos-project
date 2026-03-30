@@ -1,4 +1,5 @@
 // server.js
+require('dotenv').config();
 const express    = require('express');
 const bodyParser = require('body-parser');
 const cors       = require('cors');
@@ -8,16 +9,23 @@ const os         = require('os');
 const fs         = require('fs');
 const { execFile } = require('child_process');
 const PDFDocument  = require('pdfkit');
+const { createClient } = require('@supabase/supabase-js');
+
+// Supabase 連線（service_role，只在 server 端使用）
+const supabase = createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_KEY
+);
 
 const app  = express();
 const PORT = 3000;
 
 // ----------------------------------------------------
-// 【印表機設定】
+// 【印表機設定】從 .env 讀取，避免 IP 硬寫進程式碼
 // ----------------------------------------------------
-const PRINTER_IP   = '192.168.0.104';
-const PRINTER_PORT = 9100;
-const CUPS_PRINTER = '_192_168_0_104';   // macOS CUPS 印表機名稱
+const PRINTER_IP   = process.env.PRINTER_IP   || '192.168.0.104';
+const PRINTER_PORT = Number(process.env.PRINTER_PORT) || 9100;
+const CUPS_PRINTER = process.env.CUPS_PRINTER  || '_192_168_0_104';
 
 // 58mm 紙寬，但 Star MCprint3 CUPS 驅動可列印寬度為 48mm
 const MM          = 2.8346;
@@ -34,17 +42,30 @@ const FONT_REG  = '/Library/Fonts/Microsoft/Microsoft Jhenghei.ttf';
 // Middleware
 // ----------------------------------------------------
 app.use(bodyParser.json({ limit: '5mb' }));
+// CORS：僅允許同網段裝置，不開放憑證
 app.use(cors({
-    origin: '*',
+    origin: /^http:\/\/192\.168\.\d+\.\d+(:\d+)?$/,
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type'],
-    credentials: true,
 }));
+
+// 速率限制：每個 IP 每 60 秒最多 20 次列印請求，防止誤觸或惡意濫用
+const printRateMap = new Map();
+function printRateLimit(req, res, next) {
+    const ip  = req.ip;
+    const now = Date.now();
+    const win = printRateMap.get(ip) || { count: 0, start: now };
+    if (now - win.start > 60_000) { win.count = 0; win.start = now; }
+    win.count++;
+    printRateMap.set(ip, win);
+    if (win.count > 20) return res.status(429).json({ error: '請求過於頻繁，請稍後再試' });
+    next();
+}
 
 // ----------------------------------------------------
 // 【現金抽屜】POST /api/cash-drawer
 // ----------------------------------------------------
-app.post('/api/cash-drawer', (req, res) => {
+app.post('/api/cash-drawer', printRateLimit, (req, res) => {
     console.log('--- 收到開錢箱請求 ---');
     const client = new net.Socket();
 
@@ -151,17 +172,28 @@ const REMARK_FONT_SZ = 12;
 const REMARK_LINE_H  = 15;
 
 // 計算頁面高度
+function calcRemarkH(remarks, measureDoc) {
+    if (!remarks || remarks.length === 0) return 0;
+    measureDoc.font('Reg').fontSize(REMARK_FONT_SZ);
+    let h = 0;
+    for (let ri = 0; ri < remarks.length; ri += 3) {
+        const trio = remarks.slice(ri, ri + 3).join('  ');
+        h += measureDoc.heightOfString(trio, { width: CONT_W - 10 });
+    }
+    return h;
+}
+
 function calcPageHeight(groups, measureDoc, extraFooterH = 0) {
-    measureDoc.font('Bold').fontSize(ITEM_FONT_SZ);
     let contentH = 0;
     groups.forEach((g, gi) => {
         if (gi > 0) contentH += CAT_GAP;
         contentH += CAT_HEAD_H + CAT_LINE_H;
         g.items.forEach(item => {
             const name    = truncateName(item.printName || item.name);
+            measureDoc.font('Bold').fontSize(ITEM_FONT_SZ);
             const textH   = measureDoc.heightOfString(name, { width: TEXT_W });
             const remarks = item.remarks || [];
-            const remarkH = remarks.length > 0 ? (REMARK_LINE_H * Math.ceil(remarks.length / 3)) : 0;
+            const remarkH = calcRemarkH(remarks, measureDoc);
             contentH += Math.max(textH, QTY_BOX_H) + ITEM_PAD + remarkH;
         });
     });
@@ -208,7 +240,7 @@ function buildReceiptPDF(data, filePath, groups) {
 
         // ── 時間戳記 ─────────────────────────────────────────────
         const now = new Date();
-        const ts  = `${String(now.getMonth()+1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')} ` +
+        const ts  = `${now.getFullYear()}/${String(now.getMonth()+1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')} ` +
                     `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
 
         let y = MARGIN_TOP;
@@ -250,10 +282,11 @@ function buildReceiptPDF(data, filePath, groups) {
 
                 doc.font('Bold').fontSize(ITEM_FONT_SZ).fillColor('black');
                 const textH   = doc.heightOfString(name, { width: TEXT_W });
-                const remarkH = remarks.length > 0 ? (REMARK_LINE_H * Math.ceil(remarks.length / 3)) : 0;
+                const remarkH = calcRemarkH(remarks, doc);
                 const rowH    = Math.max(textH, QTY_BOX_H) + ITEM_PAD + remarkH;
 
                 // 品項名稱靠左
+                doc.font('Bold').fontSize(ITEM_FONT_SZ).fillColor('black');
                 doc.text(name, MARGIN_SIDE, y, { width: TEXT_W, lineBreak: true });
 
                 // 數量框：1→黑框白底；>1→黑底白字加粗（更醒目）
@@ -273,14 +306,16 @@ function buildReceiptPDF(data, filePath, groups) {
                              { width: QTY_BOX_W, align: 'center', lineBreak: false });
                 }
 
-                // 備註（最多三個一行，深色小字體）
+                // 備註（縮排，自動換行，高度動態計算）
                 if (remarks.length > 0) {
-                    const remarkY = y + Math.max(textH, QTY_BOX_H) + 1;
+                    let remarkY = y + Math.max(textH, QTY_BOX_H) + 1;
                     doc.font('Reg').fontSize(REMARK_FONT_SZ).fillColor('black');
                     for (let ri = 0; ri < remarks.length; ri += 3) {
                         const trio = remarks.slice(ri, ri + 3).join('  ');
-                        doc.text('▸ ' + trio, MARGIN_SIDE + 6, remarkY + Math.floor(ri / 3) * REMARK_LINE_H,
-                                 { width: CONT_W - 8, lineBreak: false });
+                        const trioH = doc.heightOfString(trio, { width: CONT_W - 10 });
+                        doc.text(trio, MARGIN_SIDE + 8, remarkY,
+                                 { width: CONT_W - 10, lineBreak: true });
+                        remarkY += trioH;
                     }
                 }
 
@@ -294,13 +329,12 @@ function buildReceiptPDF(data, filePath, groups) {
         // ── 外帶取餐資訊（若有） ──────────────────────────────────
         if (hasTakeout) {
             y += 4;
-            doc.moveTo(MARGIN_SIDE, y).lineTo(PAGE_W - MARGIN_SIDE, y)
-               .lineWidth(0.5).strokeColor('#555555').stroke();
-            y += 5;
-
-            doc.font('Reg').fontSize(9).fillColor('#333333')
-               .text('取餐資訊', MARGIN_SIDE, y, { lineBreak: false });
-            y += 13;
+            // 黑底白字標題
+            const TK_BH = 16;
+            doc.rect(MARGIN_SIDE, y, CONT_W, TK_BH).fill('black');
+            doc.font('Bold').fontSize(9).fillColor('white')
+               .text('取餐資訊', MARGIN_SIDE, y + 3, { width: CONT_W, align: 'center', lineBreak: false });
+            y += TK_BH + 4;
 
             const half = CONT_W / 2;
             // 姓名 + 電話
@@ -327,9 +361,6 @@ function buildReceiptPDF(data, filePath, groups) {
             }
 
             y += 4;
-            doc.moveTo(MARGIN_SIDE, y).lineTo(PAGE_W - MARGIN_SIDE, y)
-               .lineWidth(0.5).strokeColor('#555555').stroke();
-            y += 6;
         }
 
         // ── 外帶總金額（若有） ────────────────────────────────────
@@ -351,7 +382,7 @@ function buildReceiptPDF(data, filePath, groups) {
         doc.moveTo(MARGIN_SIDE, y).lineTo(PAGE_W - MARGIN_SIDE, y)
            .lineWidth(0.8).strokeColor('black').stroke();
         y += 4;
-        doc.font('Reg').fontSize(8).fillColor('#444444')
+        doc.font('Reg').fontSize(7).fillColor('black')
            .text(ts, MARGIN_SIDE, y, { width: CONT_W, align: 'right' });
 
         doc.end();
@@ -685,20 +716,23 @@ function getCustomerItemName(item) {
 // 顧客聯版面常數（無留白，使用紙面全寬）
 const CM        = 2;                          // 最小側邊距（pt）
 const CCW       = PAGE_W - CM * 2;           // 內容寬度
-const C_NAME_W  = Math.round(CCW * 0.67);   // 品名欄（~89pt）
-const C_QTY_W   = 14;                        // 數量欄
-const C_PRI_W   = CCW - C_NAME_W - C_QTY_W; // 金額欄（~29pt）
+const C_NAME_W  = Math.round(CCW * 0.56);   // 品名欄
+const C_QTY_W   = 13;                        // 數量欄
+const C_UPR_W   = 24;                        // 單價欄
+const C_PRI_W   = CCW - C_NAME_W - C_QTY_W - C_UPR_W; // 金額欄
 const C_NAME_X  = CM;
 const C_QTY_X   = CM + C_NAME_W;
-const C_PRI_X   = C_QTY_X + C_QTY_W;
+const C_UPR_X   = C_QTY_X + C_QTY_W;
+const C_PRI_X   = C_UPR_X + C_UPR_W;
 
-const C_HDR_SZ  = 11;  // 主標題
-const C_SUB_SZ  = 7;   // 副標題（時間）
+const C_STO_SZ  = 9;   // 店名
+const C_HDR_SZ  = 8;   // 主標題
+const C_SUB_SZ  = 6;   // 副標題（時間）
 const C_COL_SZ  = 6;   // 欄位標題
 const C_ITEM_SZ = 8;   // 品項名稱
 const C_REM_SZ  = 6.5; // 備註
-const C_TOT_SZ  = 11;  // 合計
-const C_REM_LH  = 7.5; // 備註行高
+const C_TOT_SZ  = 10;  // 合計
+const C_REM_LH  = 7;   // 備註行高（緊湊單行）
 
 function buildCustomerReceiptPDF(data, filePath) {
     return new Promise((resolve, reject) => {
@@ -723,14 +757,18 @@ function buildCustomerReceiptPDF(data, filePath) {
         mDoc.registerFont('Bold', FONT_BOLD).registerFont('Reg', FONT_REG);
         mDoc.font('Bold').fontSize(C_ITEM_SZ);
 
-        let h = (C_HDR_SZ + 5) + (C_SUB_SZ + 4) + 5 + (C_COL_SZ + 4) + 4;
+        let h = (C_STO_SZ + 3) + (C_HDR_SZ + 3) + (C_SUB_SZ + 3) + 4 + (C_COL_SZ + 3) + 3;
         for (const row of rows) {
+            mDoc.font('Bold').fontSize(C_ITEM_SZ);  // reset each iteration
             const nameH = mDoc.heightOfString(getCustomerItemName(row), { width: C_NAME_W });
             const rems  = row.remarks || [];
-            const remH  = rems.length > 0 ? C_REM_LH * Math.ceil(rems.length / 3) + 3 : 0;
-            h += Math.max(nameH, C_ITEM_SZ + 3) + 2 + remH;
+            mDoc.font('Reg').fontSize(C_REM_SZ);
+            const remH  = rems.length > 0
+                ? mDoc.heightOfString(rems.join('  '), { width: C_NAME_W - 8, lineGap: 0 })
+                : 0;
+            h += Math.max(nameH, C_ITEM_SZ + 3) + 1 + remH + 1; // +1 gap, +1 divider
         }
-        h += 7 + (C_TOT_SZ + 6);
+        h += 10 + (C_TOT_SZ + 8); // 合計 section: line + gap + text + bottom buffer
 
         // ── 建立 PDF ──────────────────────────────────────────────────────────
         const doc = new PDFDocument({
@@ -745,46 +783,50 @@ function buildCustomerReceiptPDF(data, filePath) {
         doc.on('error', reject);
         doc.registerFont('Bold', FONT_BOLD).registerFont('Reg', FONT_REG);
 
-        const hLine = (y, lw, color) => {
+        const hLine = (y, lw) => {
             doc.moveTo(CM, y).lineTo(PAGE_W - CM, y)
-               .lineWidth(lw || 0.6).strokeColor(color || 'black').stroke();
+               .lineWidth(lw || 0.6).strokeColor('black').stroke();
         };
-        const now = new Date();
-        const ts  = `${String(now.getMonth()+1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')} ` +
-                    `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+        const cnow = new Date();
+        const ts   = `${cnow.getFullYear()}/${String(cnow.getMonth()+1).padStart(2,'0')}/${String(cnow.getDate()).padStart(2,'0')} ` +
+                     `${String(cnow.getHours()).padStart(2,'0')}:${String(cnow.getMinutes()).padStart(2,'0')}`;
 
         let y = 0;
 
-        // 主標題
+        // 店名
+        doc.font('Bold').fontSize(C_STO_SZ).fillColor('black')
+           .text('咕咕義小餐館', CM, y, { width: CCW, align: 'center', lineBreak: false });
+        y += C_STO_SZ + 3;
+
+        // 主標題（桌號 + 單號）
         const tableLabel = data.table || '外帶';
         const orderLabel = `No.${String(data.orderNo || 0).padStart(3, '0')}`;
-        doc.font('Bold').fontSize(C_HDR_SZ).fillColor('black')
+        doc.font('Reg').fontSize(C_HDR_SZ).fillColor('black')
            .text(`[${tableLabel}] ${orderLabel}  交易明細`, CM, y,
                  { width: CCW, align: 'center', lineBreak: false });
-        y += C_HDR_SZ + 5;
+        y += C_HDR_SZ + 3;
 
         // 時間副標題
-        doc.font('Reg').fontSize(C_SUB_SZ).fillColor('#555555')
+        doc.font('Reg').fontSize(C_SUB_SZ).fillColor('black')
            .text(ts, CM, y, { width: CCW, align: 'center', lineBreak: false });
-        y += C_SUB_SZ + 4;
+        y += C_SUB_SZ + 3;
 
         // 上實線
-        hLine(y, 0.8); y += 5;
+        hLine(y, 0.8); y += 4;
 
-        // 欄位標題
-        doc.font('Reg').fontSize(C_COL_SZ).fillColor('#777777')
+        // 欄位標題（品名 / 數 / 單價 / 金額）
+        doc.font('Reg').fontSize(C_COL_SZ).fillColor('black')
            .text('品名', C_NAME_X, y, { lineBreak: false });
-        doc.font('Reg').fontSize(C_COL_SZ).fillColor('#777777')
-           .text('數', C_QTY_X, y, { width: C_QTY_W, align: 'center', lineBreak: false });
-        doc.font('Reg').fontSize(C_COL_SZ).fillColor('#777777')
+        doc.font('Reg').fontSize(C_COL_SZ).fillColor('black')
+           .text('數量', C_QTY_X, y, { width: C_QTY_W, align: 'center', lineBreak: false });
+        doc.font('Reg').fontSize(C_COL_SZ).fillColor('black')
+           .text('單價', C_UPR_X, y, { width: C_UPR_W, align: 'right', lineBreak: false });
+        doc.font('Reg').fontSize(C_COL_SZ).fillColor('black')
            .text('金額', C_PRI_X, y, { width: C_PRI_W, align: 'right', lineBreak: false });
-        y += C_COL_SZ + 4;
+        y += C_COL_SZ + 3;
 
-        // 虛線
-        doc.save().dash(2, { space: 3 })
-           .moveTo(CM, y).lineTo(PAGE_W - CM, y)
-           .lineWidth(0.4).strokeColor('#aaaaaa').stroke().undash().restore();
-        y += 4;
+        // 細實線
+        hLine(y, 0.4); y += 3;
 
         // 品項列表
         for (let idx = 0; idx < rows.length; idx++) {
@@ -801,46 +843,54 @@ function buildCustomerReceiptPDF(data, filePath) {
             // 品名（可換行）
             doc.font('Bold').fontSize(C_ITEM_SZ).fillColor('black')
                .text(name, C_NAME_X, y, { width: C_NAME_W, lineBreak: true });
-            // 數量（對齊首行）
-            doc.font('Bold').fontSize(C_ITEM_SZ).fillColor('black')
+            // 數量
+            doc.font('Reg').fontSize(C_ITEM_SZ).fillColor('black')
                .text(String(qty), C_QTY_X, y, { width: C_QTY_W, align: 'center', lineBreak: false });
-            // 小計（對齊首行）
-            doc.font('Bold').fontSize(C_ITEM_SZ).fillColor('black')
-               .text(`$${(price * qty).toLocaleString('en-US')}`, C_PRI_X, y,
+            // 單價
+            doc.font('Reg').fontSize(C_ITEM_SZ).fillColor('black')
+               .text(String(price), C_UPR_X, y, { width: C_UPR_W, align: 'right', lineBreak: false });
+            // 金額
+            doc.font('Reg').fontSize(C_ITEM_SZ).fillColor('black')
+               .text(String(price * qty), C_PRI_X, y,
                      { width: C_PRI_W, align: 'right', lineBreak: false });
-            y += rowH + 2;
+            y += rowH + 1;  // 1pt 緊密間距
 
-            // 備註
+            // 備註（縮排、單行間距、緊密排列）
             if (rems.length > 0) {
-                doc.font('Reg').fontSize(C_REM_SZ).fillColor('#555555');
-                for (let ri = 0; ri < rems.length; ri += 3) {
-                    const trio = rems.slice(ri, ri + 3).join('  ');
-                    doc.text('▸ ' + trio, C_NAME_X + 4, y,
-                             { width: CCW - 4, lineBreak: false });
-                    y += C_REM_LH;
-                }
-                y += 3;
+                doc.font('Reg').fontSize(C_REM_SZ).fillColor('black');
+                const remText = rems.join('  ');
+                const remH = doc.heightOfString(remText, { width: C_NAME_W - 8, lineGap: 0 });
+                doc.text(remText, C_NAME_X + 8, y,
+                         { width: C_NAME_W - 8, lineBreak: true, lineGap: 0 });
+                y += remH;
             }
 
-            // 品項間細虛線
+            // 品項間細線
             if (idx < rows.length - 1) {
-                doc.save().dash(2, { space: 4 })
-                   .moveTo(CM, y - 1).lineTo(PAGE_W - CM, y - 1)
-                   .lineWidth(0.3).strokeColor('#dddddd').stroke().undash().restore();
+                doc.moveTo(CM, y).lineTo(PAGE_W - CM, y)
+                   .lineWidth(0.3).strokeColor('black').stroke();
+                y += 1;
             }
         }
 
         // 下實線
         hLine(y, 0.8); y += 5;
 
-        // 合計
+        // 合計（同一列：左側「合計」右側金額）
+        // 注意：PDFKit 在第一個 text() 後會推進 doc.y；
+        // 第二個 text() 若提供相同 y 且 y < doc.y，PDFKit 會開新頁。
+        // 解法：第一個 text() 後手動將 doc.y 重設回同一行再渲染金額。
         const total = data.total != null
             ? data.total
             : rows.reduce((s, r) => s + (r.price || 0) * (r.qty || 1), 0);
-        doc.font('Reg').fontSize(C_TOT_SZ - 1).fillColor('#444444')
-           .text('合計', CM, y, { lineBreak: false });
+        const totY = y;
+        doc.font('Reg').fontSize(C_TOT_SZ - 1).fillColor('black')
+           .text('合計', CM, totY, { lineBreak: false });
+        // 重設 x 與 y 游標，確保金額從 CM 起算、不超出版面
+        doc.y = totY;
+        doc.x = CM;
         doc.font('Bold').fontSize(C_TOT_SZ).fillColor('black')
-           .text(`$${total.toLocaleString('en-US')}`, CM, y,
+           .text(`$${total.toLocaleString('en-US')}`,
                  { width: CCW, align: 'right', lineBreak: false });
 
         doc.end();
@@ -850,7 +900,7 @@ function buildCustomerReceiptPDF(data, filePath) {
 // ----------------------------------------------------
 // 【列印】POST /print  → 廚房單 + 吧台單（各一張）
 // ----------------------------------------------------
-app.post('/print', async (req, res) => {
+app.post('/print', printRateLimit, async (req, res) => {
     const data = req.body;
     if (!data) return res.status(400).json({ error: '格式錯誤' });
 
@@ -868,6 +918,14 @@ app.post('/print', async (req, res) => {
         const kitchenGroups = groupByCategory(kitchenItems);
         const barGroups     = groupByCategory(barItems);
 
+        // 顧客聯（最先印，交給顧客）
+        {
+            const f = path.join(os.tmpdir(), `receipt_c_${Date.now()}.pdf`);
+            const h = await buildCustomerReceiptPDF(data, f);
+            await printPDF(f, h);
+            console.log('顧客聯已送出');
+        }
+
         // 廚房單（小點→主餐→單點，若有品項才印）
         if (kitchenGroups.length > 0) {
             const f = path.join(os.tmpdir(), `receipt_k_${Date.now()}.pdf`);
@@ -884,14 +942,6 @@ app.post('/print', async (req, res) => {
             console.log('吧台單已送出');
         }
 
-        // 顧客聯（每次印單都列印）
-        {
-            const f = path.join(os.tmpdir(), `receipt_c_${Date.now()}.pdf`);
-            const h = await buildCustomerReceiptPDF(data, f);
-            await printPDF(f, h);
-            console.log('顧客聯已送出');
-        }
-
         res.json({ status: '列印請求已送出' });
 
     } catch (e) {
@@ -904,7 +954,7 @@ app.post('/print', async (req, res) => {
 // ----------------------------------------------------
 // 【列印關帳單】POST /print-close
 // ----------------------------------------------------
-app.post('/print-close', async (req, res) => {
+app.post('/print-close', printRateLimit, async (req, res) => {
     const data = req.body;
     if (!data) return res.status(400).json({ error: '格式錯誤' });
     console.log('--- 收到關帳列印請求 ---');
@@ -922,6 +972,458 @@ app.post('/print-close', async (req, res) => {
         if (!res.headersSent) res.status(500).json({ error: e.message });
     }
 });
+
+// ====================================================
+// Supabase API 路由
+// ====================================================
+
+// ---- 工具：snake_case ↔ camelCase（僅轉最外層 key）----
+const sc = s => s.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+const cs = s => s.replace(/[A-Z]/g, c => '_' + c.toLowerCase());
+const rowToCamel = obj => obj ? Object.fromEntries(Object.entries(obj).map(([k,v])=>[sc(k),v])) : obj;
+const rowsToCamel = r => Array.isArray(r) ? r.map(rowToCamel) : rowToCamel(r);
+
+// ---- 健康檢查 ----
+app.get('/api/health', async (req, res) => {
+    const { error } = await supabase.from('menu_items').select('id').limit(1);
+    res.json({ ok: !error, supabase: error ? error.message : 'connected' });
+});
+
+// ============================================================
+// 菜單
+// ============================================================
+app.get('/api/menu', async (req, res) => {
+    const { data, error } = await supabase.from('menu_items').select('*').order('sort_order');
+    if (error) return res.status(500).json({ error: error.message });
+    // map snake→camel
+    res.json((data||[]).map(r => ({
+        id: r.id, name: r.name, printName: r.print_name, price: r.price,
+        category: r.category, sortOrder: r.sort_order, stock: r.stock,
+        soldOut: r.sold_out, consumes: r.consumes||[], imageUrl: r.image_url,
+    })));
+});
+app.post('/api/menu', async (req, res) => {
+    const b = req.body;
+    const row = { id: b.id, name: b.name, print_name: b.printName||'',
+        price: b.price, category: b.category||'', sort_order: b.sortOrder,
+        stock: b.stock, sold_out: b.soldOut||false, consumes: b.consumes||[],
+        image_url: b.imageUrl||null };
+    const { data, error } = await supabase.from('menu_items').upsert(row).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(rowToCamel(data));
+});
+app.patch('/api/menu/:id', async (req, res) => {
+    const b = req.body;
+    const updates = {};
+    if (b.name        !== undefined) updates.name       = b.name;
+    if (b.printName   !== undefined) updates.print_name = b.printName;
+    if (b.price       !== undefined) updates.price      = b.price;
+    if (b.category    !== undefined) updates.category   = b.category;
+    if (b.sortOrder   !== undefined) updates.sort_order = b.sortOrder;
+    if (b.stock       !== undefined) updates.stock      = b.stock;
+    if (b.soldOut     !== undefined) updates.sold_out   = b.soldOut;
+    if (b.consumes    !== undefined) updates.consumes   = b.consumes;
+    if (b.imageUrl    !== undefined) updates.image_url  = b.imageUrl;
+    const { data, error } = await supabase.from('menu_items').update(updates).eq('id', req.params.id).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(rowToCamel(data));
+});
+app.delete('/api/menu/:id', async (req, res) => {
+    const { error } = await supabase.from('menu_items').delete().eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+});
+app.post('/api/menu/reset-soldout', async (req, res) => {
+    const { error } = await supabase.from('menu_items').update({ sold_out: false }).eq('sold_out', true);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+});
+
+// ============================================================
+// 桌位
+// ============================================================
+app.get('/api/tables', async (req, res) => {
+    const { data, error } = await supabase.from('tables').select('*');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json((data||[]).map(r => ({ tableNumber: r.table_number, status: r.status, orderId: r.order_id })));
+});
+app.put('/api/tables/:tableNumber', async (req, res) => {
+    const b = req.body;
+    const row = { table_number: req.params.tableNumber, status: b.status,
+        order_id: b.orderId||null, updated_at: new Date().toISOString() };
+    const { data, error } = await supabase.from('tables').upsert(row).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ tableNumber: data.table_number, status: data.status, orderId: data.order_id });
+});
+// 清桌（resetTableStatus）
+app.post('/api/tables/:tableNumber/reset', async (req, res) => {
+    const tn = req.params.tableNumber;
+    const now = new Date().toISOString();
+    // 找到該桌的訂單
+    const { data: tableRow } = await supabase.from('tables').select('*').eq('table_number', tn).single();
+    if (tableRow?.order_id) {
+        const { data: ord } = await supabase.from('orders').select('*').eq('id', tableRow.order_id).single();
+        if (ord) {
+            const newStatus = ord.status === 'paid' ? 'archived_paid' : null;
+            if (newStatus) {
+                await supabase.from('orders').update({ status: newStatus, updated_at: now }).eq('id', ord.id);
+            } else {
+                await supabase.from('orders').delete().eq('id', ord.id);
+            }
+        }
+    }
+    await supabase.from('tables').upsert({ table_number: tn, status: 'idle', order_id: null, updated_at: now });
+    res.json({ ok: true });
+});
+// 佔位但不開單（occupyTableWithoutOrder）
+app.post('/api/tables/:tableNumber/occupy', async (req, res) => {
+    const { timestamp } = req.body;
+    await supabase.from('tables').upsert({
+        table_number: req.params.tableNumber, status: 'open',
+        order_id: null, updated_at: new Date(timestamp||Date.now()).toISOString()
+    });
+    res.json({ ok: true });
+});
+
+// ============================================================
+// 訂單
+// ============================================================
+
+// 注意：specific routes 必須在 /:id 前面
+app.get('/api/orders/active', async (req, res) => {
+    const { data, error } = await supabase.from('orders').select('*')
+        .in('status', ['open','served','paid']).order('id');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json((data||[]).map(orderToCamel));
+});
+app.get('/api/orders/max-id', async (req, res) => {
+    const { data } = await supabase.from('orders').select('id').order('id', { ascending: false }).limit(1);
+    res.json({ maxId: data?.[0]?.id || 0 });
+});
+app.get('/api/orders/report', async (req, res) => {
+    const { data: invs, error } = await supabase.from('invoices').select('*')
+        .eq('status', '已開立').order('payment_time');
+    if (error) return res.status(500).json({ error: error.message });
+    const orderIds = [...new Set((invs||[]).map(i => i.order_id))];
+    const { data: ords } = orderIds.length
+        ? await supabase.from('orders').select('*').in('id', orderIds)
+        : { data: [] };
+    const oMap = new Map((ords||[]).map(o => [o.id, o]));
+    res.json((invs||[]).map(inv => {
+        const o = oMap.get(inv.order_id);
+        return {
+            id: inv.order_id, orderId: inv.order_id,
+            dailyOrderNo: inv.daily_order_no || o?.daily_order_no,
+            invoiceNumber: inv.invoice_number,
+            timestamp: new Date(inv.payment_time).getTime(),
+            total: inv.total || inv.amount,
+            items: inv.items_snapshot || [],
+            table: inv.table_name || o?.table_number || '外帶',
+            currentOrderCustomerCount: o?.customer_count,
+            customerCount: inv.customer_count || 0,
+            orderType: inv.order_type,
+        };
+    }));
+});
+app.get('/api/orders/:id', async (req, res) => {
+    const { id } = req.params;
+    const { inv } = req.query; // optional invoice id
+    if (inv) {
+        const { data: invRow } = await supabase.from('invoices').select('*').eq('id', inv).single();
+        if (invRow?.items_snapshot) {
+            const { data: ord } = await supabase.from('orders').select('*').eq('id', id).single();
+            const o = orderToCamel(ord || {});
+            return res.json({ ...o, items: invRow.items_snapshot, total: invRow.total||invRow.amount, isSnapshot: true });
+        }
+    }
+    const { data, error } = await supabase.from('orders').select('*').eq('id', id).single();
+    if (error) return res.status(404).json({ error: error.message });
+    res.json(orderToCamel(data));
+});
+// 建立新訂單（含 dailyOrderNo 計算）
+app.post('/api/orders/new', async (req, res) => {
+    const { storedCloseOrderId, lastCloseTs, ...od } = req.body;
+    let periodCount = 0;
+    if (storedCloseOrderId > 0) {
+        const { count } = await supabase.from('orders').select('id', { count: 'exact', head: true }).gt('id', storedCloseOrderId);
+        periodCount = count || 0;
+    } else if (lastCloseTs) {
+        const { data: before } = await supabase.from('orders').select('id')
+            .lt('timestamp', new Date(lastCloseTs).toISOString()).order('id', { ascending: false }).limit(1);
+        const lastId = before?.[0]?.id || 0;
+        const { count } = await supabase.from('orders').select('id', { count: 'exact', head: true }).gt('id', lastId);
+        periodCount = count || 0;
+    } else {
+        const midnight = new Date(); midnight.setHours(0,0,0,0);
+        const { count } = await supabase.from('orders').select('id', { count: 'exact', head: true }).gte('timestamp', midnight.toISOString());
+        periodCount = count || 0;
+    }
+    const dailyOrderNo = periodCount + 1;
+    const now = new Date().toISOString();
+    const row = {
+        table_number: od.table, order_type: od.table === '外帶' ? '外帶' : '內用',
+        status: od.status || 'open', items: od.items || [], total: od.total || 0,
+        daily_order_no: dailyOrderNo, sub_total: od.subTotal || 0, paid_amount: 0,
+        customer_count: od.customerCount || 1, customer_name: od.customerName || '',
+        customer_phone: od.customerPhone || '', customer_id: od.customerId || null,
+        needs_utensils: od.needsUtensils || false, pickup_time: od.pickupTime || null,
+        order_date: od.date || now,
+        timestamp: od.timestamp ? new Date(od.timestamp).toISOString() : now,
+        updated_at: now,
+    };
+    const { data, error } = await supabase.from('orders').insert(row).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    if (od.table && od.table !== '外帶') {
+        await supabase.from('tables').upsert({ table_number: od.table, status: od.status||'open', order_id: data.id, updated_at: now });
+    }
+    res.json({ id: data.id, dailyOrderNo });
+});
+// 更新訂單狀態
+app.patch('/api/orders/:id', async (req, res) => {
+    const b = req.body; const now = new Date().toISOString();
+    const updates = { updated_at: now };
+    if (b.status        !== undefined) updates.status        = b.status;
+    if (b.items         !== undefined) updates.items         = b.items;
+    if (b.total         !== undefined) updates.total         = b.total;
+    if (b.subTotal      !== undefined) updates.sub_total     = b.subTotal;
+    if (b.paidAmount    !== undefined) updates.paid_amount   = b.paidAmount;
+    if (b.sendTime      !== undefined) updates.send_time     = b.sendTime;
+    if (b.finishTime    !== undefined) updates.finish_time   = b.finishTime;
+    if (b.customerCount !== undefined) updates.customer_count = b.customerCount;
+    if (b.customerName  !== undefined) updates.customer_name = b.customerName;
+    if (b.customerPhone !== undefined) updates.customer_phone = b.customerPhone;
+    if (b.needsUtensils !== undefined) updates.needs_utensils = b.needsUtensils;
+    if (b.pickupTime    !== undefined) updates.pickup_time   = b.pickupTime;
+    if (b.customerId    !== undefined) updates.customer_id   = b.customerId;
+    const { data, error } = await supabase.from('orders').update(updates).eq('id', req.params.id).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    // 同步桌位
+    if (b.status && data.table_number && data.table_number !== '外帶') {
+        await supabase.from('tables').upsert({ table_number: data.table_number, status: b.status, order_id: data.id, updated_at: now });
+    }
+    res.json(orderToCamel(data));
+});
+// completeOrderAndReport
+app.post('/api/orders/:id/complete', async (req, res) => {
+    const orderId = parseInt(req.params.id);
+    const { newItems, tableNumber, isFullyPaid, sendTime } = req.body;
+    const now = new Date().toISOString();
+    const { data: existing, error: fetchErr } = await supabase.from('orders').select('*').eq('id', orderId).single();
+    if (fetchErr || !existing) return res.status(404).json({ error: '找不到訂單' });
+
+    const finalItems = newItems || existing.items || [];
+    const currentTotal = finalItems.reduce((s, i) => s + (i.price||0) * (i.quantity||1), 0);
+    const prevPaid = existing.paid_amount || 0;
+    const amountNow = currentTotal - prevPaid;
+
+    await supabase.from('orders').update({
+        status: isFullyPaid ? 'paid' : 'served',
+        items: finalItems, total: currentTotal,
+        paid_amount: isFullyPaid ? currentTotal : prevPaid,
+        send_time: sendTime || existing.send_time || Date.now(),
+        updated_at: now,
+    }).eq('id', orderId);
+
+    if (isFullyPaid && amountNow > 0) {
+        // 查已開立的發票（避免重複）
+        const { data: prevInvs } = await supabase.from('invoices').select('*').eq('order_id', orderId).eq('status', '已開立');
+        const alreadyCounted = new Map();
+        (prevInvs||[]).forEach(inv => (inv.items_snapshot||[]).forEach(it => {
+            alreadyCounted.set(it.id, (alreadyCounted.get(it.id)||0) + (it.quantity||1));
+        }));
+        // 合計所有品項
+        const merged = new Map();
+        finalItems.forEach(it => {
+            const e = merged.get(it.id);
+            if (e) e.quantity += it.quantity; else merged.set(it.id, { ...it });
+        });
+        const snapshot = [];
+        merged.forEach((it) => {
+            const diff = it.quantity - (alreadyCounted.get(it.id)||0);
+            if (diff > 0) snapshot.push({ ...it, quantity: diff });
+        });
+        const invoiceNumber = `INV-${Date.now()}`;
+        const { data: newInv } = await supabase.from('invoices').insert({
+            invoice_number: invoiceNumber, payment_time: now,
+            order_id: orderId, daily_order_no: existing.daily_order_no,
+            order_type: tableNumber === '外帶' ? '外帶' : '內用',
+            table_name: tableNumber, customer_count: existing.customer_count||0,
+            total: amountNow, amount: amountNow,
+            items_snapshot: snapshot, status: '已開立', void_time: null,
+        }).select().single();
+        // 扣庫存
+        for (const it of snapshot) {
+            await supabase.from('menu_items').select('stock,consumes').eq('id', it.id).single().then(async ({ data: mi }) => {
+                if (!mi) return;
+                if (mi.stock != null) await supabase.from('menu_items').update({ stock: Math.max(0, mi.stock - (it.quantity||1)) }).eq('id', it.id);
+                for (const cId of (mi.consumes||[])) {
+                    const { data: ci } = await supabase.from('menu_items').select('stock').eq('id', cId).single();
+                    if (ci?.stock != null) await supabase.from('menu_items').update({ stock: Math.max(0, ci.stock - (it.quantity||1)) }).eq('id', cId);
+                }
+            });
+        }
+    }
+    if (tableNumber && tableNumber !== '外帶') {
+        await supabase.from('tables').upsert({ table_number: tableNumber, status: isFullyPaid ? 'paid' : 'served', order_id: orderId, updated_at: now });
+    }
+    res.json({ ok: true });
+});
+
+// ============================================================
+// 發票
+// ============================================================
+app.get('/api/invoices', async (req, res) => {
+    const { status, from } = req.query;
+    let q = supabase.from('invoices').select('*').order('id');
+    if (status) q = q.eq('status', status);
+    if (from)   q = q.gte('payment_time', from);
+    const { data, error } = await q;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json((data||[]).map(invoiceToCamel));
+});
+// 作廢發票
+app.post('/api/invoices/:id/void', async (req, res) => {
+    const invId = parseInt(req.params.id);
+    const now = new Date().toISOString();
+    const { data: inv, error: fe } = await supabase.from('invoices').select('*').eq('id', invId).single();
+    if (fe || !inv) return res.status(404).json({ error: '找不到發票' });
+    if (inv.status === '已作廢') return res.status(400).json({ error: '此發票已作廢' });
+
+    await supabase.from('invoices').update({ status: '已作廢', void_time: now }).eq('id', invId);
+
+    const { data: ord } = await supabase.from('orders').select('*').eq('id', inv.order_id).single();
+    if (ord) {
+        const { data: tableRow } = ord.table_number && ord.table_number !== '外帶'
+            ? await supabase.from('tables').select('*').eq('table_number', ord.table_number).single()
+            : { data: null };
+        const isArchived = ord.status === 'archived_paid' || ord.status === 'archived_voided';
+        const isReleased = !tableRow || tableRow.status === 'idle' || tableRow.order_id !== ord.id;
+        const newStatus = (isArchived || isReleased) ? 'archived_voided' : 'served';
+        const newPaid = Math.max(0, (ord.paid_amount||0) - (inv.total||inv.amount||0));
+        await supabase.from('orders').update({ status: newStatus, paid_amount: newPaid, updated_at: now }).eq('id', ord.id);
+        if (!isArchived && !isReleased && tableRow) {
+            await supabase.from('tables').upsert({ table_number: ord.table_number, status: 'served', order_id: ord.id, updated_at: now });
+        }
+        // 還庫存
+        for (const it of (inv.items_snapshot||[])) {
+            const { data: mi } = await supabase.from('menu_items').select('stock,consumes').eq('id', it.id).single();
+            if (!mi) continue;
+            if (mi.stock != null) await supabase.from('menu_items').update({ stock: mi.stock + (it.quantity||1) }).eq('id', it.id);
+            for (const cId of (mi.consumes||[])) {
+                const { data: ci } = await supabase.from('menu_items').select('stock').eq('id', cId).single();
+                if (ci?.stock != null) await supabase.from('menu_items').update({ stock: ci.stock + (it.quantity||1) }).eq('id', cId);
+            }
+        }
+    }
+    res.json({ ok: true });
+});
+
+// ============================================================
+// 備註群組
+// ============================================================
+app.get('/api/remarks', async (req, res) => {
+    const { data, error } = await supabase.from('remark_groups').select('*').order('sort_order');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data||[]);
+});
+app.post('/api/remarks', async (req, res) => {
+    const b = req.body;
+    const row = { id: b.id, name: b.name, remarks: b.remarks||[], sort_order: b.sortOrder||99 };
+    const { data, error } = await supabase.from('remark_groups').upsert(row).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+});
+app.delete('/api/remarks/:id', async (req, res) => {
+    const { error } = await supabase.from('remark_groups').delete().eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+});
+
+// ============================================================
+// 顧客
+// ============================================================
+app.get('/api/customers', async (req, res) => {
+    const { data, error } = await supabase.from('customers').select('*').order('id');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json((data||[]).map(c => ({ ...c, names: c.names||[], phones: c.phones||[] })));
+});
+app.post('/api/customers/search', async (req, res) => {
+    const { query } = req.body;
+    if (!query) return res.json([]);
+    const { data } = await supabase.from('customers').select('*');
+    const q = query.toLowerCase().replace(/\s/g,'');
+    res.json((data||[]).filter(c =>
+        (c.names||[]).some(n => n.toLowerCase().includes(q)) ||
+        (c.phones||[]).some(p => p.replace(/\s/g,'').includes(q))
+    ).map(c => ({ ...c, names: c.names||[], phones: c.phones||[] })));
+});
+app.post('/api/customers', async (req, res) => {
+    const { id, names, phones, notes } = req.body;
+    if (id) {
+        const { data: ex } = await supabase.from('customers').select('*').eq('id', id).single();
+        if (ex) {
+            const { data, error } = await supabase.from('customers').update({ names: names||ex.names||[], phones: phones||ex.phones||[], notes: notes !== undefined ? notes : ex.notes }).eq('id', id).select().single();
+            if (error) return res.status(500).json({ error: error.message });
+            return res.json(data);
+        }
+    }
+    const { data, error } = await supabase.from('customers').insert({ names: names||[], phones: phones||[], notes: notes||'', created_at: new Date().toISOString() }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+});
+app.delete('/api/customers/:id', async (req, res) => {
+    const { error } = await supabase.from('customers').delete().eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+});
+app.get('/api/customers/:id/orders', async (req, res) => {
+    const { data: cust } = await supabase.from('customers').select('phones').eq('id', req.params.id).single();
+    if (!cust?.phones?.length) return res.json([]);
+    const { data } = await supabase.from('orders').select('*')
+        .eq('table_number', '外帶').in('customer_phone', cust.phones).order('id', { ascending: false });
+    res.json((data||[]).map(orderToCamel));
+});
+
+// ============================================================
+// 設定（關帳資訊跨裝置同步）
+// ============================================================
+app.get('/api/settings/:key', async (req, res) => {
+    const { data } = await supabase.from('app_settings').select('value').eq('key', req.params.key).single();
+    res.json({ value: data?.value ?? null });
+});
+app.post('/api/settings/:key', async (req, res) => {
+    const { value } = req.body;
+    await supabase.from('app_settings').upsert({ key: req.params.key, value: String(value), updated_at: new Date().toISOString() });
+    res.json({ ok: true });
+});
+
+// ============================================================
+// 轉換輔助函式（供上方路由使用）
+// ============================================================
+function orderToCamel(r) {
+    if (!r) return r;
+    return {
+        id: r.id, table: r.table_number, orderType: r.order_type, status: r.status,
+        items: r.items||[], total: r.total||0, subTotal: r.sub_total||0,
+        paidAmount: r.paid_amount||0, dailyOrderNo: r.daily_order_no,
+        customerCount: r.customer_count||1, customerName: r.customer_name||'',
+        customerPhone: r.customer_phone||'', customerId: r.customer_id||null,
+        needsUtensils: r.needs_utensils||false, pickupTime: r.pickup_time||null,
+        date: r.order_date, timestamp: r.timestamp ? new Date(r.timestamp).getTime() : null,
+        sendTime: r.send_time, finishTime: r.finish_time,
+    };
+}
+function invoiceToCamel(r) {
+    if (!r) return r;
+    return {
+        id: r.id, orderId: r.order_id, invoiceNumber: r.invoice_number,
+        paymentMethod: r.payment_method, paymentTime: r.payment_time,
+        status: r.status, amount: r.total||r.amount||0, total: r.total||r.amount||0,
+        itemsSnapshot: r.items_snapshot||[], dailyOrderNo: r.daily_order_no,
+        orderType: r.order_type, tableName: r.table_name,
+        customerCount: r.customer_count||0, voidTime: r.void_time||null,
+    };
+}
 
 // ----------------------------------------------------
 // React build 靜態檔案（API 路由之後）
