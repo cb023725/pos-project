@@ -1017,7 +1017,7 @@ const handleConfirmOrder = async () => {
                 const orderNo = pendingDailyOrderNoRef.current || dailyOrderNo || orderId;
                 pendingDailyOrderNoRef.current = null;
                 try {
-                    await fetch('http://localhost:3000/print', {
+                    await fetch('/print', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
