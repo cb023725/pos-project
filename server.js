@@ -457,6 +457,11 @@ function buildCloseReportPDF(data, filePath) {
         const TCH    = 36;  // 兩欄金額（數字 + 標籤）
         const HALF   = Math.floor((CW - 4) / 2);  // 並排每欄寬
 
+        // ── 相容新舊格式：customGroups 陣列 或 舊有 frozenSales ─────────
+        const customGroups = data.customGroups
+            || (data.frozenSales > 0 ? [{ name: '冷凍包', amount: data.frozenSales }] : []);
+        const activeCustomGroups = customGroups.filter(g => (g.amount || 0) > 0);
+
         // ── 短溢原因預量測（字多自動換行，需先知道高度才能計算頁高） ──
         let diffNoteH = 0;
         if (data.diff && data.diff !== 0 && data.discrepancyNote) {
@@ -472,8 +477,8 @@ function buildCloseReportPDF(data, filePath) {
         // 關帳紀錄 (3行黑色列)
         h += (BH + SRH + SRH) + GAP;
         h += RH + SH;                                             // 營業日期
-        h += RH + SH;                                             // 營業額（不含冷凍包）
-        if (data.frozenSales > 0) h += RH + SH;                  // 冷凍包
+        h += RH + SH;                                             // 營業額（不含自訂分組）
+        activeCustomGroups.forEach(() => { h += RH + SH; });     // 每個自訂分組（冷凍包/年菜…）
         if (expenses.length > 0) h += SRH + Math.ceil(expenses.length / 2) * RH + SH;
         if (incomes.length  > 0) h += SRH + Math.ceil(incomes.length  / 2) * RH + SH;
         if (data.diff && data.diff !== 0) h += RH + diffNoteH + SH;  // 短溢金額列 + 原因列（可多行）
@@ -571,14 +576,14 @@ function buildCloseReportPDF(data, filePath) {
            .text(fmtMoney(data.sales), CL, y - 2, { width: CW - AMT_PR, align: 'right', lineBreak: false });
         y += RH; sep();
 
-        // 冷凍包（若有才列印）
-        if (data.frozenSales > 0) {
+        // 自訂分組（冷凍包、年菜等，依序列印，各自一列）
+        activeCustomGroups.forEach(group => {
             doc.font('Reg').fontSize(10).fillColor('#111111')
-               .text('冷凍包', CL, y, { lineBreak: false });
+               .text(group.name, CL, y, { lineBreak: false });
             doc.font('Bold').fontSize(14).fillColor('black')
-               .text(fmtMoney(data.frozenSales), CL, y - 2, { width: CW - AMT_PR, align: 'right', lineBreak: false });
+               .text(fmtMoney(group.amount), CL, y - 2, { width: CW - AMT_PR, align: 'right', lineBreak: false });
             y += RH; sep();
-        }
+        });
 
         // 臨時支出 breakdown（每列並排兩項）
         if (expenses.length > 0) {
@@ -1035,7 +1040,16 @@ app.get('/api/menu', async (req, res) => {
 });
 app.post('/api/menu', async (req, res) => {
     const b = req.body;
-    const row = { id: b.id, name: b.name, print_name: b.printName||'',
+    let id = b.id;
+    if (!id) {
+        const base = (b.name || 'item')
+            .replace(/[^\w\u4e00-\u9fff]/g, '_')
+            .replace(/_+/g, '_')
+            .toLowerCase()
+            .slice(0, 20);
+        id = `${base}_${Date.now()}`;
+    }
+    const row = { id, name: b.name, print_name: b.printName||'',
         price: b.price, category: b.category||'', sort_order: b.sortOrder,
         stock: b.stock, sold_out: b.soldOut||false, consumes: b.consumes||[],
         image_url: b.imageUrl||null, thresholds: b.thresholds||null };

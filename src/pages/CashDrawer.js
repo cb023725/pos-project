@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { getInvoices, getLastCloseTime, performDayClose } from '../db';
+import { getInvoices, getLastCloseTime, performDayClose, getCategorySettings } from '../db';
 
 const BACKEND_URL = '';
 const RESERVE_KEY      = 'pos_reserve_amount';
@@ -187,6 +187,9 @@ const CashDrawerPage = () => {
     const incomeOptions   = ["退瓶", "廢油"];
     const nonCashOptions  = ["轉帳", "訂金"];
 
+    // ── 類別設定 ──────────────────────────────────────────────────────────────
+    const [catSettings, setCatSettings] = useState([]);
+
     // ── 資料載入 ──────────────────────────────────────────────────────────────
     useEffect(() => { loadInvoices(); }, []);
 
@@ -197,7 +200,9 @@ const CashDrawerPage = () => {
     const loadInvoices = async () => {
         setIsLoading(true);
         try {
-            setInvoices(await getInvoices());
+            const [invData, cats] = await Promise.all([getInvoices(), getCategorySettings()]);
+            setInvoices(invData);
+            setCatSettings(cats);
         } catch (e) { console.error(e); }
         finally { setIsLoading(false); }
     };
@@ -216,21 +221,61 @@ const CashDrawerPage = () => {
         [activeInvoices, voidedInvoices]);
     const periodVoided = useMemo(() => voidedInvoices.reduce((s, i) => s + i.amount, 0), [voidedInvoices]);
 
-    // ── UI 顯示用（含作廢，總覽用） ──────────────────────────────────────────
-    const periodAllFrozenSales = useMemo(() =>
-        calcFrozenAmount(activeInvoices) + calcFrozenAmount(voidedInvoices),
-        [activeInvoices, voidedInvoices]);
+    // ── 依類別設定動態計算各分組金額 ─────────────────────────────────────────
+    // groupCats: Map<reportGroup, Set<categoryName>>（排除 '营業額' 組）
+    const groupCats = useMemo(() => {
+        const m = new Map();
+        catSettings.forEach(cat => {
+            if (cat.reportGroup && cat.reportGroup !== '營業額') {
+                if (!m.has(cat.reportGroup)) m.set(cat.reportGroup, new Set());
+                m.get(cat.reportGroup).add(cat.name);
+            }
+        });
+        // 若未載入設定，保留舊有 isFrozenItem 邏輯作為 fallback
+        if (m.size === 0) {
+            m.set('冷凍包', new Set(['冷凍包']));
+        }
+        return m;
+    }, [catSettings]);
 
-    // ── 列印用（只算已開立，扣除冷凍包） ─────────────────────────────────────
+    const calcGroupAmount = useCallback((invList, cats) =>
+        invList.reduce((sum, inv) =>
+            sum + (inv.itemsSnapshot || [])
+                .filter(i => cats.has(i.category))
+                .reduce((s, i) => s + (i.price || 0) * (i.quantity || 0), 0),
+        0), []);
+
+    // 列印用（只算已開立）
     const periodNetSales = useMemo(() =>
         activeInvoices.reduce((s, i) => s + i.amount, 0),
         [activeInvoices]);
-    const periodFrozenSales = useMemo(() =>
-        calcFrozenAmount(activeInvoices),          // 列印只算已開立
-        [activeInvoices]);
+
+    const customGroupsForPrint = useMemo(() =>
+        Array.from(groupCats.entries()).map(([name, cats]) => ({
+            name,
+            amount: calcGroupAmount(activeInvoices, cats),
+        })).filter(g => g.amount > 0),
+        [groupCats, activeInvoices, calcGroupAmount]);
+
     const periodRegularSales = useMemo(() =>
-        periodNetSales - periodFrozenSales,
-        [periodNetSales, periodFrozenSales]);
+        periodNetSales - customGroupsForPrint.reduce((s, g) => s + g.amount, 0),
+        [periodNetSales, customGroupsForPrint]);
+
+    // UI 顯示用（含作廢）
+    const customGroupsForDisplay = useMemo(() =>
+        Array.from(groupCats.entries()).map(([name, cats]) => ({
+            name,
+            amount: calcGroupAmount([...activeInvoices, ...voidedInvoices], cats),
+        })).filter(g => g.amount > 0),
+        [groupCats, activeInvoices, voidedInvoices, calcGroupAmount]);
+
+    // 向下相容（舊邏輯，用於 expectedCash 計算）
+    const periodFrozenSales = useMemo(() =>
+        calcFrozenAmount(activeInvoices),
+        [activeInvoices]);
+    const periodAllFrozenSales = useMemo(() =>
+        customGroupsForDisplay.reduce((s, g) => s + g.amount, 0),
+        [customGroupsForDisplay]);
 
     // ── 收支彙總 ──────────────────────────────────────────────────────────────
     const summary = useMemo(() =>
@@ -385,8 +430,8 @@ const CashDrawerPage = () => {
             voidedCount:   voidedInvoices.length,
             voidedNums:    voidedInvoices.map(i => getDisplayInvoiceNum(i.id, invoices)).filter(Boolean).sort(),
             voidedAmount:  periodVoided,
-            sales:        periodRegularSales,   // 已開立，不含冷凍包
-            frozenSales:  periodFrozenSales,    // 冷凍包專屬
+            sales:        periodRegularSales,       // 已開立，不含自訂分組
+            customGroups: customGroupsForPrint,    // 動態分組（冷凍包/年菜等）
             diff,                               // 短溢金額（0 = 無差異）
             discrepancyNote: discrepancyNote.trim(),
             withdrawalAmount,
@@ -627,19 +672,19 @@ const CashDrawerPage = () => {
                                     <span className="text-xs text-gray-400 font-mono">+${fmt(reserveAmount)}</span>
                                 </div>
 
-                                {/* 本期營業額（含作廢，不含冷凍包） */}
+                                {/* 本期營業額（含作廢，不含自訂分組） */}
                                 <div className="flex justify-between items-center py-0.5">
                                     <span className="text-xs text-gray-400">本期營業額</span>
                                     <span className="text-xs text-gray-400 font-mono">+${fmt(periodGrossSales - periodAllFrozenSales)}</span>
                                 </div>
 
-                                {/* 冷凍包（含作廢，有才顯示） */}
-                                {periodAllFrozenSales > 0 && (
-                                    <div className="flex justify-between items-center py-0.5">
-                                        <span className="text-xs text-gray-400">冷凍包</span>
-                                        <span className="text-xs text-gray-400 font-mono">+${fmt(periodAllFrozenSales)}</span>
+                                {/* 各自訂分組（冷凍包/年菜等，含作廢，有才顯示） */}
+                                {customGroupsForDisplay.map(g => (
+                                    <div key={g.name} className="flex justify-between items-center py-0.5">
+                                        <span className="text-xs text-gray-400">{g.name}</span>
+                                        <span className="text-xs text-gray-400 font-mono">+${fmt(g.amount)}</span>
                                     </div>
-                                )}
+                                ))}
 
                                 {/* 臨時收入 */}
                                 <div className="flex justify-between items-center py-0.5">

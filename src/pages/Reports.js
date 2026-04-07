@@ -4,7 +4,7 @@ import {
     LineChart, Line, XAxis, YAxis, CartesianGrid,
     Tooltip, ResponsiveContainer,
 } from 'recharts';
-import { getReportOrders } from '../db';
+import { getReportOrders, getCategorySettings } from '../db';
 
 const formatCurrency = (n) => Math.round(n || 0).toLocaleString('en-US');
 
@@ -46,29 +46,64 @@ const addDays = (dateStr, n) => {
 };
 
 // compute KPI totals from an array of orders
-const calcKpi = (orders) => {
-    let total = 0, dineIn = 0, frozen = 0;
+// catSettings: array of { name, reportGroup, includeInTotal, ... }
+const calcKpi = (orders, catSettings = []) => {
+    // Build lookup maps
+    const catGroupMap = {};     // categoryName -> reportGroup
+    const groupInclude = {};    // reportGroup -> includeInTotal (bool)
+    const groupShowKpi = {};    // reportGroup -> showInKpi (bool)
+    catSettings.forEach(c => {
+        catGroupMap[c.name] = c.reportGroup || '營業額';
+        if (c.reportGroup && c.reportGroup !== '營業額') {
+            groupInclude[c.reportGroup] = c.includeInTotal !== false;
+            // showInKpi: true by default; false only if explicitly set false
+            if (groupShowKpi[c.reportGroup] !== false) {
+                groupShowKpi[c.reportGroup] = c.showInKpi !== false;
+            }
+        }
+    });
+    const nonRevenueCats = catSettings.length > 0
+        ? new Set(catSettings.filter(c => c.reportGroup !== '營業額').map(c => c.name))
+        : new Set(['冷凍包']);
+
+    let total = 0, dineIn = 0;
     let day = 0, night = 0, dayCust = 0, nightCust = 0, customers = 0;
+    const groupSalesMap = new Map(); // reportGroup -> amount
+
     orders.forEach(o => {
         total += o.total;
         const cnt = o.adjustedCustomerCount || 0;
         customers += cnt;
-        let orderFrozen = 0;
+        let orderNonRevenue = 0;
         (o.items || []).forEach(item => {
-            if (item.category === '冷凍包') orderFrozen += item.price * item.quantity;
+            if (nonRevenueCats.has(item.category)) {
+                const rev = item.price * item.quantity;
+                orderNonRevenue += rev;
+                const grp = catGroupMap[item.category] || item.category;
+                groupSalesMap.set(grp, (groupSalesMap.get(grp) || 0) + rev);
+            }
         });
-        frozen += orderFrozen;
-        const orderDineIn = o.total - orderFrozen;
+        const orderDineIn = o.total - orderNonRevenue;
         dineIn += orderDineIn;
         const min = tsToMinOfDayTW(o.timestamp);
         if (min >= 11 * 60 && min <= 16 * 60)      { day += orderDineIn;   dayCust += cnt; }
         else if (min > 16 * 60 && min <= 22 * 60)  { night += orderDineIn; nightCust += cnt; }
     });
+
+    // adjustedTotal = total minus groups where includeInTotal === false
+    let excluded = 0;
+    groupSalesMap.forEach((amount, grp) => {
+        if (groupInclude[grp] === false) excluded += amount;
+    });
+    const adjustedTotal = total - excluded;
+    const frozen = groupSalesMap.get('冷凍包') || 0;
+
     return {
-        total, dineIn, frozen, day, night, customers,
-        avgSpend:      customers  > 0 ? Math.round(dineIn / customers)  : 0,
-        dayAvgSpend:   dayCust    > 0 ? Math.round(day / dayCust)       : 0,
-        nightAvgSpend: nightCust  > 0 ? Math.round(night / nightCust)   : 0,
+        total, adjustedTotal, dineIn, frozen, day, night, customers,
+        groupSalesMap, groupInclude, groupShowKpi,
+        avgSpend:      customers > 0 ? Math.round(dineIn / customers)  : 0,
+        dayAvgSpend:   dayCust   > 0 ? Math.round(day / dayCust)       : 0,
+        nightAvgSpend: nightCust > 0 ? Math.round(night / nightCust)   : 0,
     };
 };
 
@@ -184,7 +219,7 @@ const CHART_METRICS = [
     { key: 'avgSpend',  label: '客單價', color: '#F59E0B', isCurrency: true },
 ];
 
-const TrendChart = ({ filteredOrders, isSingleDay }) => {
+const TrendChart = ({ filteredOrders, isSingleDay, nonRevenueCats }) => {
     const [activeMetric, setActiveMetric] = useState('revenue');
 
     const chartData = useMemo(() => {
@@ -200,7 +235,7 @@ const TrendChart = ({ filteredOrders, isSingleDay }) => {
                 if (h < HOUR_START || h > HOUR_END) return;
                 let orderFrozen = 0;
                 (o.items || []).forEach(item => {
-                    if (item.category === '冷凍包') orderFrozen += item.price * item.quantity;
+                    if (nonRevenueCats.has(item.category)) orderFrozen += item.price * item.quantity;
                 });
                 hours[h - HOUR_START].revenue   += o.total - orderFrozen;
                 hours[h - HOUR_START].customers += o.adjustedCustomerCount || 0;
@@ -214,7 +249,7 @@ const TrendChart = ({ filteredOrders, isSingleDay }) => {
                 const ex = map.get(key) || { label: key, revenue: 0, customers: 0 };
                 let orderFrozen = 0;
                 (o.items || []).forEach(item => {
-                    if (item.category === '冷凍包') orderFrozen += item.price * item.quantity;
+                    if (nonRevenueCats.has(item.category)) orderFrozen += item.price * item.quantity;
                 });
                 ex.revenue   += o.total - orderFrozen;
                 ex.customers += o.adjustedCustomerCount || 0;
@@ -224,7 +259,7 @@ const TrendChart = ({ filteredOrders, isSingleDay }) => {
                 .sort((a, b) => a.label.localeCompare(b.label))
                 .map(r => ({ ...r, avgSpend: r.customers > 0 ? Math.round(r.revenue / r.customers) : 0 }));
         }
-    }, [filteredOrders, isSingleDay]);
+    }, [filteredOrders, isSingleDay, nonRevenueCats]);
 
     const metric = CHART_METRICS.find(m => m.key === activeMetric);
     const fmtTick = (v) => metric.isCurrency ? (v >= 1000 ? `$${Math.round(v / 1000)}k` : `$${v}`) : String(v);
@@ -293,11 +328,11 @@ const TrendChart = ({ filteredOrders, isSingleDay }) => {
 // ----------------------------------------------------------------------
 // 業績概況 Tab
 // ----------------------------------------------------------------------
-const SummaryTab = ({ filteredOrders, compOrders, startDate, endDate }) => {
+const SummaryTab = ({ filteredOrders, compOrders, startDate, endDate, nonRevenueCats, catSettings }) => {
     const [dailySortKey, setDailySortKey] = useState('date');
 
-    const kpi     = useMemo(() => calcKpi(filteredOrders), [filteredOrders]);
-    const prevKpi = useMemo(() => calcKpi(compOrders),     [compOrders]);
+    const kpi     = useMemo(() => calcKpi(filteredOrders, catSettings), [filteredOrders, catSettings]);
+    const prevKpi = useMemo(() => calcKpi(compOrders, catSettings),     [compOrders, catSettings]);
 
     const isSingleDay = startDate && endDate && startDate === endDate;
 
@@ -312,13 +347,13 @@ const SummaryTab = ({ filteredOrders, compOrders, startDate, endDate }) => {
             if (h < HOUR_START || h > HOUR_END) return;
             let orderFrozen = 0;
             (o.items || []).forEach(item => {
-                if (item.category === '冷凍包') orderFrozen += item.price * item.quantity;
+                if (nonRevenueCats.has(item.category)) orderFrozen += item.price * item.quantity;
             });
             hours[h - HOUR_START].total     += o.total - orderFrozen;
             hours[h - HOUR_START].customers += o.adjustedCustomerCount || 0;
         });
         return hours.map(r => ({ ...r, avgSpend: r.customers > 0 ? Math.round(r.total / r.customers) : 0 }));
-    }, [filteredOrders]);
+    }, [filteredOrders, nonRevenueCats]);
 
     // Daily rows
     const dailyRows = useMemo(() => {
@@ -328,7 +363,7 @@ const SummaryTab = ({ filteredOrders, compOrders, startDate, endDate }) => {
             const ex = dayMap.get(d) || { label: d, total: 0, customers: 0 };
             let orderFrozen = 0;
             (o.items || []).forEach(item => {
-                if (item.category === '冷凍包') orderFrozen += item.price * item.quantity;
+                if (nonRevenueCats.has(item.category)) orderFrozen += item.price * item.quantity;
             });
             ex.total     += o.total - orderFrozen;
             ex.customers += o.adjustedCustomerCount || 0;
@@ -346,46 +381,63 @@ const SummaryTab = ({ filteredOrders, compOrders, startDate, endDate }) => {
         }));
         if (dailySortKey === 'revenue') return rows.sort((a, b) => b.total - a.total);
         return rows.sort((a, b) => a.label.localeCompare(b.label));
-    }, [filteredOrders, startDate, endDate, dailySortKey]);
+    }, [filteredOrders, startDate, endDate, dailySortKey, nonRevenueCats]);
+
+    // Dynamic group KPI cards (one per non-'营業額' reportGroup)
+    const GROUP_CARD_COLORS = [
+        { color: 'border-cyan-500',   textColor: 'text-cyan-700' },
+        { color: 'border-violet-500', textColor: 'text-violet-700' },
+        { color: 'border-rose-500',   textColor: 'text-rose-700' },
+        { color: 'border-amber-500',  textColor: 'text-amber-700' },
+    ];
+    const groupCards = Array.from(kpi.groupSalesMap.entries())
+        .filter(([grp]) => kpi.groupShowKpi[grp] !== false)
+        .map(([grp, amt], idx) => {
+            const gc = GROUP_CARD_COLORS[idx % GROUP_CARD_COLORS.length];
+            const include = kpi.groupInclude[grp] !== false;
+            const prevAmt = prevKpi.groupSalesMap?.get(grp) || 0;
+            return {
+                label: `${grp}收益`,
+                value: `$${formatCurrency(amt)}`,
+                ...gc,
+                sub: include ? '計入總營收' : '不計入總營收',
+                delta: <Delta curr={amt} prev={prevAmt} isCurrency />,
+            };
+        });
 
     // KPI card definitions — all use flex-col so Delta always sits at the bottom
     const kpiCards = [
         {
-            label: '總營收',     value: `$${formatCurrency(kpi.total)}`,
+            label: '總營收',   value: `$${formatCurrency(kpi.adjustedTotal)}`,
             color: 'border-[#2FB8B8]',  textColor: 'text-[#2FB8B8]',
             sub: `白天 $${formatCurrency(kpi.day)} ／ 晚上 $${formatCurrency(kpi.night)}`,
-            delta: <Delta curr={kpi.total}     prev={prevKpi.total}     isCurrency />,
+            delta: <Delta curr={kpi.adjustedTotal} prev={prevKpi.adjustedTotal} isCurrency />,
         },
         {
-            label: '餐點營收',   value: `$${formatCurrency(kpi.dineIn)}`,
+            label: '餐點營收', value: `$${formatCurrency(kpi.dineIn)}`,
             color: 'border-green-500',  textColor: 'text-green-700',
             sub: `白天 $${formatCurrency(kpi.day)} ／ 晚上 $${formatCurrency(kpi.night)}`,
-            delta: <Delta curr={kpi.dineIn}    prev={prevKpi.dineIn}    isCurrency />,
+            delta: <Delta curr={kpi.dineIn} prev={prevKpi.dineIn} isCurrency />,
         },
+        ...groupCards,
         {
-            label: '冷凍包銷售', value: `$${formatCurrency(kpi.frozen)}`,
-            color: 'border-cyan-500',   textColor: 'text-cyan-700',
-            sub: null,
-            delta: <Delta curr={kpi.frozen}    prev={prevKpi.frozen}    isCurrency />,
-        },
-        {
-            label: '來客數',     value: `${kpi.customers} 人`,
+            label: '來客數',   value: `${kpi.customers} 人`,
             color: 'border-purple-500', textColor: 'text-purple-700',
             sub: null,
             delta: <Delta curr={kpi.customers} prev={prevKpi.customers} />,
         },
         {
-            label: '客單價',     value: `$${formatCurrency(kpi.avgSpend)}`,
+            label: '客單價',   value: `$${formatCurrency(kpi.avgSpend)}`,
             color: 'border-orange-500', textColor: 'text-orange-700',
             sub: `白天 $${formatCurrency(kpi.dayAvgSpend)} ／ 晚上 $${formatCurrency(kpi.nightAvgSpend)}`,
-            delta: <Delta curr={kpi.avgSpend}  prev={prevKpi.avgSpend}  isCurrency />,
+            delta: <Delta curr={kpi.avgSpend} prev={prevKpi.avgSpend} isCurrency />,
         },
     ];
 
     return (
         <div className="space-y-5">
             {/* KPI cards — flex-col + min-h ensures uniform layout */}
-            <div className="grid grid-cols-5 gap-3">
+            <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(kpiCards.length, 6)}, minmax(0, 1fr))` }}>
                 {kpiCards.map(c => (
                     <div key={c.label}
                         className={`bg-white rounded-xl shadow p-4 border-l-4 ${c.color} flex flex-col`}
@@ -400,7 +452,7 @@ const SummaryTab = ({ filteredOrders, compOrders, startDate, endDate }) => {
             </div>
 
             {/* Trend chart */}
-            <TrendChart filteredOrders={filteredOrders} isSingleDay={isSingleDay} />
+            <TrendChart filteredOrders={filteredOrders} isSingleDay={isSingleDay} nonRevenueCats={nonRevenueCats} />
 
             {/* Breakdown table */}
             <div className="bg-white rounded-xl shadow overflow-hidden">
@@ -475,15 +527,15 @@ const SummaryTab = ({ filteredOrders, compOrders, startDate, endDate }) => {
 // ----------------------------------------------------------------------
 // 銷售排行 Tab
 // ----------------------------------------------------------------------
-const RankingTab = ({ filteredOrders }) => {
-    const [itemSortKey,   setItemSortKey]   = useState('revenue');
-    const [catSortKey,    setCatSortKey]    = useState('revenue');
-    const [frozenSortKey, setFrozenSortKey] = useState('revenue');
+const RankingTab = ({ filteredOrders, nonRevenueCats }) => {
+    const [itemSortKey,  setItemSortKey]  = useState('revenue');
+    const [catSortKey,   setCatSortKey]   = useState('revenue');
+    const [groupSortKey, setGroupSortKey] = useState('revenue');
 
-    const { itemRank, catRank, frozenRank } = useMemo(() => {
-        const itemMap   = new Map();
-        const catMap    = new Map();
-        const frozenMap = new Map();
+    const { itemRank, catRank, groupRank } = useMemo(() => {
+        const itemMap  = new Map();
+        const catMap   = new Map();
+        const groupMap = new Map(); // { groupName -> Map<itemName, {name,qty,rev}> }
         filteredOrders.forEach(o => {
             (o.items || []).forEach(item => {
                 const rev = item.price * item.quantity;
@@ -496,19 +548,24 @@ const RankingTab = ({ filteredOrders }) => {
                 ce.quantity += item.quantity; ce.revenue += rev;
                 catMap.set(cat, ce);
 
-                if (cat === '冷凍包') {
-                    const fe = frozenMap.get(item.name) || { name: item.name, quantity: 0, revenue: 0 };
-                    fe.quantity += item.quantity; fe.revenue += rev;
-                    frozenMap.set(item.name, fe);
+                if (nonRevenueCats.has(cat)) {
+                    if (!groupMap.has(cat)) groupMap.set(cat, new Map());
+                    const gm = groupMap.get(cat);
+                    const ge = gm.get(item.name) || { name: item.name, quantity: 0, revenue: 0 };
+                    ge.quantity += item.quantity; ge.revenue += rev;
+                    gm.set(item.name, ge);
                 }
             });
         });
         return {
-            itemRank:   Array.from(itemMap.values()),
-            catRank:    Array.from(catMap.values()),
-            frozenRank: Array.from(frozenMap.values()),
+            itemRank:  Array.from(itemMap.values()),
+            catRank:   Array.from(catMap.values()),
+            groupRank: Array.from(groupMap.entries()).map(([groupName, gm]) => ({
+                groupName,
+                items: Array.from(gm.values()),
+            })),
         };
-    }, [filteredOrders]);
+    }, [filteredOrders, nonRevenueCats]);
 
     const sorted = (arr, key) => [...arr].sort((a, b) => b[key] - a[key]);
 
@@ -553,15 +610,18 @@ const RankingTab = ({ filteredOrders }) => {
     return (
         <div className="space-y-5">
             <div className="grid grid-cols-2 gap-5">
-                <RankTable data={sorted(itemRank,   itemSortKey)}   sortKey={itemSortKey}   setSort={setItemSortKey}   title="🏆 商品銷售排行" />
-                <RankTable data={sorted(catRank,    catSortKey)}    sortKey={catSortKey}    setSort={setCatSortKey}    title="🔖 類別銷售排行" />
+                <RankTable data={sorted(itemRank,  itemSortKey)}  sortKey={itemSortKey}  setSort={setItemSortKey}  title="🏆 商品銷售排行" />
+                <RankTable data={sorted(catRank,   catSortKey)}   sortKey={catSortKey}   setSort={setCatSortKey}   title="🔖 類別銷售排行" />
             </div>
-            <RankTable
-                data={sorted(frozenRank, frozenSortKey)}
-                sortKey={frozenSortKey} setSort={setFrozenSortKey}
-                title="🧊 冷凍包銷售排行"
-                emptyMsg="此日期區間無冷凍包銷售紀錄"
-            />
+            {groupRank.map(({ groupName, items }) => (
+                <RankTable
+                    key={groupName}
+                    data={sorted(items, groupSortKey)}
+                    sortKey={groupSortKey} setSort={setGroupSortKey}
+                    title={`🧊 ${groupName} 銷售排行`}
+                    emptyMsg={`此日期區間無${groupName}銷售紀錄`}
+                />
+            ))}
         </div>
     );
 };
@@ -570,18 +630,26 @@ const RankingTab = ({ filteredOrders }) => {
 // Main Report Page
 // ----------------------------------------------------------------------
 const ReportPage = () => {
-    const [orders, setOrders]       = useState([]);
-    const [isLoading, setIsLoading] = useState(true);
-    const [tab, setTab]             = useState('summary');
-    const [startDate, setStartDate] = useState(today());
-    const [endDate,   setEndDate]   = useState(today());
+    const [orders, setOrders]           = useState([]);
+    const [isLoading, setIsLoading]     = useState(true);
+    const [tab, setTab]                 = useState('summary');
+    const [startDate, setStartDate]     = useState(today());
+    const [endDate,   setEndDate]       = useState(today());
+    const [catSettings, setCatSettings] = useState([]);
 
     useEffect(() => { loadOrders(); }, []);
+
+    // 非營業額類別 Set（動態，預設含冷凍包）
+    const nonRevenueCats = useMemo(() => {
+        if (catSettings.length === 0) return new Set(['冷凍包']);
+        return new Set(catSettings.filter(c => c.reportGroup !== '營業額').map(c => c.name));
+    }, [catSettings]);
 
     const loadOrders = async () => {
         setIsLoading(true);
         try {
-            const raw = await getReportOrders();
+            const [raw, cats] = await Promise.all([getReportOrders(), getCategorySettings()]);
+            setCatSettings(cats);
             const chronological = [...raw].sort((a, b) => a.timestamp - b.timestamp);
             const seen = new Map();
             const processed = chronological.map(order => {
@@ -670,8 +738,10 @@ const ReportPage = () => {
                     compOrders={compOrders}
                     startDate={startDate}
                     endDate={endDate}
+                    nonRevenueCats={nonRevenueCats}
+                    catSettings={catSettings}
                   />
-                : <RankingTab filteredOrders={filteredOrders} />
+                : <RankingTab filteredOrders={filteredOrders} nonRevenueCats={nonRevenueCats} />
             }
         </div>
     );

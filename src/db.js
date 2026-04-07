@@ -113,6 +113,27 @@ export async function resetAllSoldOut() {
     return api('POST', '/api/menu/reset-soldout');
 }
 
+// ── 類別設定 ──────────────────────────────────────────────────
+export const DEFAULT_CATEGORY_SETTINGS = [
+    { name: '主餐',   showInDineIn: true, showInTakeout: true, reportGroup: '營業額', printOnKitchen: true,  includeInTotal: true,  showInKpi: true },
+    { name: '小點',   showInDineIn: true, showInTakeout: true, reportGroup: '營業額', printOnKitchen: true,  includeInTotal: true,  showInKpi: true },
+    { name: '飲品',   showInDineIn: true, showInTakeout: true, reportGroup: '營業額', printOnKitchen: false, includeInTotal: true,  showInKpi: true },
+    { name: '冷凍包', showInDineIn: true, showInTakeout: true, reportGroup: '冷凍包', printOnKitchen: false, includeInTotal: false, showInKpi: true },
+    { name: '單點',   showInDineIn: true, showInTakeout: true, reportGroup: '營業額', printOnKitchen: true,  includeInTotal: true,  showInKpi: true },
+];
+
+export async function getCategorySettings() {
+    try {
+        const { value } = await api('GET', '/api/settings/category_settings');
+        if (value) return JSON.parse(value);
+    } catch {}
+    return DEFAULT_CATEGORY_SETTINGS;
+}
+
+export async function saveCategorySettings(settings) {
+    return api('POST', '/api/settings/category_settings', { value: JSON.stringify(settings) });
+}
+
 // ── 庫存異動紀錄 ──────────────────────────────────────────────
 export async function getInventoryLogs(itemId) {
     const params = itemId ? `?item_id=${encodeURIComponent(itemId)}` : '';

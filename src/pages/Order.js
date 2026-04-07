@@ -16,6 +16,7 @@ import {
     updateMenuItem,
     resetAllSoldOut,
     getRemarkGroups,
+    getCategorySettings,
 } from '../db';
 
 // ----------------------------------------------------------------------
@@ -79,7 +80,7 @@ const useDynamicVh = () => {
 
 // --- 常數定義 ---
 const TABLE_OPTIONS = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', '外帶'];
-const CATEGORY_ORDER = ['小點', '主餐', '飲品', '冷凍包', '單點'];
+const CATEGORY_ORDER = ['小點', '主餐', '飲品', '冷凍包', '單點']; // fallback only
 
 // --- 輔助函數 ---
 const formatCurrency = (number) => {
@@ -940,18 +941,29 @@ const OrderPage = () => {
 
     // 庫存品項（for 即時庫存驗證，與 menuItems 分開存放）
     const [invItems, setInvItems] = useState([]);
+    const [categorySettings, setCategorySettings] = useState([]);
 
     // --- 資料載入邏輯 ---
     const loadMenuData = useCallback(async () => {
         try {
-            const [items, rg, invs] = await Promise.all([
+            const [items, rg, invs, catSettings] = await Promise.all([
                 getMenuItems(),
                 getRemarkGroups(),
                 getInventoryItems(),
+                getCategorySettings(),
             ]);
-            dispatch({ type: ACTION_TYPE.SET_MENU, payload: items });
+            // 依 name+category 去重（保留 sortOrder 最小的），防止 DB 重複品項干擾點餐頁
+            const deduped = [];
+            const seen = new Map();
+            const sorted = [...items].sort((a, b) => (a.sortOrder || 99) - (b.sortOrder || 99));
+            sorted.forEach(item => {
+                const key = `${item.name}::${item.category}`;
+                if (!seen.has(key)) { seen.set(key, true); deduped.push(item); }
+            });
+            dispatch({ type: ACTION_TYPE.SET_MENU, payload: deduped });
             setRemarkGroups(rg);
             setInvItems(invs);
+            setCategorySettings(catSettings);
         } catch (e) { console.error(e); }
     }, []);
 
@@ -1133,8 +1145,20 @@ const OrderPage = () => {
         }
     }, [tableNumber, menuItems, loadOpenOrder]);
 
-    const categories = useMemo(() => CATEGORY_ORDER, []);
-    
+    const categories = useMemo(() => {
+        if (categorySettings.length === 0) return CATEGORY_ORDER;
+        return categorySettings
+            .filter(c => isTakeout ? c.showInTakeout : c.showInDineIn)
+            .map(c => c.name);
+    }, [categorySettings, isTakeout]);
+
+    // 當類別清單載入或變更時，確保 selectedCategory 在清單中
+    useEffect(() => {
+        if (categories.length > 0 && !categories.includes(selectedCategory)) {
+            setSelectedCategory(categories[0]);
+        }
+    }, [categories]); // eslint-disable-line react-hooks/exhaustive-deps
+
     const filteredMenu = useMemo(() => {
         let items = menuItems.filter(i => i.category === selectedCategory);
         return [...items].sort((a, b) => (a.sortOrder || 99) - (b.sortOrder || 99));
@@ -1303,8 +1327,10 @@ const handleConfirmOrder = async () => {
             const newFinishTime = null;
 
             // 確定要印的品項（尚未送廚房的）
+            const catPrintMap = Object.fromEntries(categorySettings.map(c => [c.name, c.printOnKitchen !== false]));
             const newItems = currentOrder.filter(i => !i.isSent);
             const sentIds = newItems.map(i => i.internalId);
+            const kitchenItems = newItems.filter(i => catPrintMap[i.category] !== false);
             const idSet = new Set(sentIds);
 
             // 將新品項標記為 isSent:true，直接存進 DB（避免 race condition）
@@ -1338,7 +1364,7 @@ const handleConfirmOrder = async () => {
                 setIsDirty(false);
 
                 // 廚房聯：fire-and-forget，isSent 已正確存入 DB
-                if (newItems.length > 0) {
+                if (kitchenItems.length > 0) {
                     const orderNo = pendingDailyOrderNoRef.current || dailyOrderNo || orderId;
                     pendingDailyOrderNoRef.current = null;
                     fetch('/print', {
@@ -1349,7 +1375,7 @@ const handleConfirmOrder = async () => {
                             table: tableNumber || '外帶',
                             orderNo,
                             total: subTotal,
-                            items: newItems.map(i => ({
+                            items: kitchenItems.map(i => ({
                                 id: i.id,
                                 name: i.name,
                                 printName: i.printName || null,
@@ -1512,8 +1538,9 @@ const handleConfirmOrder = async () => {
                 }),
             }).catch(e => console.warn('顧客聯列印失敗：', e));
 
-            // 廚房單後送（若有尚未送出廚房的品項）
-            const unsentItems = itemsToCheckout.filter(i => !i.isSent);
+            // 廚房單後送（若有尚未送出廚房的品項，且類別允許廚房出單）
+            const catPrintMapCheckout = Object.fromEntries(categorySettings.map(c => [c.name, c.printOnKitchen !== false]));
+            const unsentItems = itemsToCheckout.filter(i => !i.isSent && catPrintMapCheckout[i.category] !== false);
             if (unsentItems.length > 0) {
                 fetch('/print', {
                     method: 'POST',
