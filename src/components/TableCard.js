@@ -70,8 +70,6 @@ const TableCard = ({ tableData, handleTableClick, handleToggleItemSentOnTable, h
     const isOverTime = elapsed.val >= 90;
 
     const isDetailedStatus = ['served', 'paid'].includes(status);
-    const shouldShowItems = isDetailedStatus && orderItems.length > 0;
-    const canToggleItems = isDetailedStatus && !isLoading;
     const isFullyPaid = status === 'paid'; 
     const isUnpaid = status === 'served' || status === 'open';
     const shouldShowActionButton = orders.length > 0;
@@ -144,9 +142,15 @@ const TableCard = ({ tableData, handleTableClick, handleToggleItemSentOnTable, h
 
                 {status !== 'idle' && status !== 'open' ? (
                     <div className="flex justify-between items-center border-t border-white/20 mt-0.5 pt-1 leading-none">
-                        <div className="flex items-center gap-1 opacity-90 text-xs font-mono">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
-                            <span>{orderIdDisplay}</span>
+                        <div className="flex items-center gap-4 opacity-90 text-xs font-mono">
+                            <div className="flex items-center gap-1">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+                                <span>{orderIdDisplay}</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                <span>{currentOrder?.customerCount ?? 0}</span>
+                            </div>
                         </div>
                         <div className="flex items-center gap-1.5 text-xs font-mono">
                             <span className="opacity-80">{hasUnpaid ? '未結帳' : '已結帳'}</span>
@@ -198,14 +202,14 @@ const TableCard = ({ tableData, handleTableClick, handleToggleItemSentOnTable, h
                                             <label className="flex items-center flex-grow cursor-pointer min-w-0">
                                                 <input
                                                     type="checkbox"
-                                                    checked={!!item.isSent}
-                                                    disabled={!(['served', 'paid'].includes(order.status) && !isLoading)}
-                                                    onChange={() => handleToggleItemSentOnTable(tableId, order.orderId, item.internalId || item.id, !!item.isSent)}
+                                                    checked={!!item.isServed}
+                                                    disabled={isLoading}
+                                                    onChange={() => handleToggleItemSentOnTable(tableId, order.orderId, item.internalId || item.id, !!item.isServed)}
                                                     className="w-5 h-5 rounded border-2 border-gray-300 text-green-600 cursor-pointer flex-shrink-0"
                                                 />
-                                                <span className={`ml-1.5 text-sm font-bold truncate ${item.isSent ? 'text-gray-300 line-through' : 'text-gray-700'}`}>{item.name}</span>
+                                                <span className={`ml-1.5 text-base font-bold truncate ${item.isServed ? 'text-gray-300 line-through' : 'text-gray-700'}`}>{item.name}</span>
                                             </label>
-                                            <span className={`ml-1 text-sm font-black whitespace-nowrap ${item.isSent ? 'text-gray-300' : 'text-gray-500'}`}>x{item.quantity}</span>
+                                            <span className={`ml-1 text-sm font-black whitespace-nowrap ${item.isServed ? 'text-gray-300' : 'text-gray-500'}`}>x{item.quantity}</span>
                                         </div>
                                         {item.remarks && item.remarks.length > 0 && (
                                             <div className="flex flex-wrap gap-1 ml-6 mt-0.5">

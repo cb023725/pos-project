@@ -178,7 +178,7 @@ const Sidebar = ({ isSidebarOpen, toggleSidebar }) => {
 
 const Layout = ({ children }) => {
     const location = useLocation();
-    const hideSidebar = ['/order', '/print'].includes(location.pathname);
+    const hideSidebar = ['/order'].includes(location.pathname);
     const isTablePage = location.pathname === '/tables' || location.pathname === '/takeout';
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const toggleSidebar = () => setIsSidebarOpen(prev => !prev);

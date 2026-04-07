@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import MenuCard from '../components/MenuCard';
 import {
     getMenuItems,
+    getInventoryItems,
     getActiveOrders,
     createNewOrder,
     updateOrderStatus,
@@ -100,6 +101,8 @@ const ACTION_TYPE = {
     MARK_ITEM_PAID: 'MARK_ITEM_PAID',
     UPDATE_REMARKS: 'UPDATE_REMARKS',
     TOGGLE_ITEM_SENT: 'TOGGLE_ITEM_SENT',
+    MARK_ITEMS_SENT: 'MARK_ITEMS_SENT',
+    TOGGLE_ITEM_SERVED: 'TOGGLE_ITEM_SERVED',
 };
 
 const initialOrderState = {
@@ -116,8 +119,8 @@ const orderReducer = (state, action) => {
             const { newOrder } = action.payload;
             const itemsWithPaidStatus = newOrder.map(item => ({
                 ...item,
-                // 載入時確保 isSent 是一個布林值，作為註記狀態
-                isSent: item.isSent === undefined ? false : !!item.isSent, 
+                isSent: item.isSent === undefined ? false : !!item.isSent,
+                isServed: item.isServed === undefined ? false : !!item.isServed,
                 isPaid: item.isPaid === undefined ? false : !!item.isPaid,
             }));
             return {
@@ -135,6 +138,7 @@ const orderReducer = (state, action) => {
                 ...itemToAdd,
                 quantity: 1,
                 isSent: false,
+                isServed: false,
                 isPaid: false,
                 stock: dbItem?.stock,
                 consumes: dbItem?.consumes,
@@ -202,8 +206,28 @@ const orderReducer = (state, action) => {
         }
 
         case ACTION_TYPE.TOGGLE_ITEM_SENT: {
-            // OrderPage 不應觸發此 action
-            return state;
+            const { internalId } = action.payload;
+            const updatedOrder = state.currentOrder.map(item =>
+                item.internalId === internalId ? { ...item, isSent: !item.isSent } : item
+            );
+            return { ...state, currentOrder: updatedOrder };
+        }
+
+        case ACTION_TYPE.MARK_ITEMS_SENT: {
+            const { internalIds } = action.payload;
+            const idSet = new Set(internalIds);
+            const updatedOrder = state.currentOrder.map(item =>
+                idSet.has(item.internalId) ? { ...item, isSent: true } : item
+            );
+            return { ...state, currentOrder: updatedOrder };
+        }
+
+        case ACTION_TYPE.TOGGLE_ITEM_SERVED: {
+            const { internalId } = action.payload;
+            const updatedOrder = state.currentOrder.map(item =>
+                item.internalId === internalId ? { ...item, isServed: !item.isServed } : item
+            );
+            return { ...state, currentOrder: updatedOrder };
         }
 
         default: return state;
@@ -271,6 +295,47 @@ const QuantityPadModal = ({ isOpen, onClose, currentValue, onSave, title = '設�
     );
 };
 
+// --- 即時庫存不足 Modal（本次點餐超出庫存）---
+const StockLimitModal = ({ warning, onConfirm, onCancel }) => {
+    if (!warning) return null;
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+            <div className="bg-white p-6 rounded-2xl shadow-2xl w-80">
+                <h3 className="text-xl font-black mb-2 border-b pb-2 text-red-600">⚠️ 庫存即將售完</h3>
+                <p className="text-gray-800 font-bold text-lg mb-1">{warning.menuItemName}</p>
+                <p className="text-gray-500 text-sm mb-1">庫存品項：<span className="font-bold text-gray-700">{warning.invItemName}</span></p>
+                <p className="text-gray-500 text-sm mb-5">
+                    資料庫剩 <span className="font-black text-red-600">{warning.dbStock}</span> 份，
+                    本桌已點 <span className="font-black">{warning.consumed}</span> 份，
+                    可用 <span className={`font-black ${warning.available <= 0 ? 'text-red-600' : 'text-orange-500'}`}>{warning.available}</span> 份
+                </p>
+                <div className="flex gap-3">
+                    <button onClick={onCancel}  className="flex-1 py-3 rounded-xl font-black bg-gray-100 text-gray-700 hover:bg-gray-200">取消</button>
+                    <button onClick={onConfirm} className="flex-1 py-3 rounded-xl font-black text-white bg-red-500 hover:bg-red-600">強制點餐</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// --- 售完確認 Modal（庫存耗盡，仍可點餐）---
+const DepletedConfirmModal = ({ item, onConfirm, onCancel }) => {
+    if (!item) return null;
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+            <div className="bg-white p-6 rounded-2xl shadow-2xl w-80">
+                <h3 className="text-xl font-black mb-2 border-b pb-2 text-orange-600">⚠️ 庫存售完</h3>
+                <p className="text-gray-800 font-bold text-lg mb-1">{item.name}</p>
+                <p className="text-gray-500 text-sm mb-5">此品項庫存已售完，確定要繼續點餐？</p>
+                <div className="flex gap-3">
+                    <button onClick={onCancel}  className="flex-1 py-3 rounded-xl font-black bg-gray-100 text-gray-700 hover:bg-gray-200">取消</button>
+                    <button onClick={onConfirm} className="flex-1 py-3 rounded-xl font-black text-white bg-orange-500 hover:bg-orange-600">確認點餐</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 // --- 停售確認 Modal ---
 const SoldOutModal = ({ item, onConfirm, onCancel }) => {
     if (!item) return null;
@@ -317,25 +382,180 @@ const SoldOutModal = ({ item, onConfirm, onCancel }) => {
 };
 
 // --- 結帳選項 Modal ---
-const CheckoutOptionModal = ({ isOpen, onClose, onFullCheckout, onStartPartialCheckout, onPrint }) => {
+const CheckoutOptionModal = ({ isOpen, onClose, onFullCheckout, onStartPartialCheckout, onPrintKitchen, onPrintCustomer, isAllPaid }) => {
     if (!isOpen) return null;
     return (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
             <div className="bg-white p-6 rounded-xl shadow-2xl w-80">
                 <h3 className="text-xl font-black mb-4 border-b pb-2">結帳選項</h3>
                 <div className="flex flex-col space-y-3">
-                    <button onClick={onFullCheckout} className="py-3 rounded-xl bg-blue-600 text-white font-black">
-                        全部結帳
-                    </button>
-                    <button onClick={onStartPartialCheckout} className="py-3 rounded-xl bg-orange-500 text-white font-black">
-                        分開結帳
-                    </button>
-                    <button onClick={onPrint} className="py-3 rounded-xl bg-teal-600 text-white font-black">
-                        印單
-                    </button>
+                    {isAllPaid ? (
+                        <div className="py-3 rounded-xl bg-gray-200 text-gray-400 font-black text-center text-sm">
+                            本單已結帳
+                        </div>
+                    ) : (
+                        <>
+                            <button onClick={onFullCheckout} className="py-3 rounded-xl bg-blue-600 text-white font-black">
+                                全部結帳
+                            </button>
+                            <button onClick={onStartPartialCheckout} className="py-3 rounded-xl bg-orange-500 text-white font-black">
+                                分開結帳
+                            </button>
+                        </>
+                    )}
+                    <div className="flex gap-2">
+                        <button onClick={onPrintKitchen} className="flex-1 py-3 rounded-xl bg-teal-600 text-white font-black text-sm">
+                            印廚房單
+                        </button>
+                        <button onClick={onPrintCustomer} className="flex-1 py-3 rounded-xl bg-teal-700 text-white font-black text-sm">
+                            印顧客單
+                        </button>
+                    </div>
                     <button onClick={onClose} className="py-2 rounded-xl bg-gray-200 text-gray-700 font-bold">
                         取消
                     </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const QUICK_CASH = [1000, 500, 100, 50, 10, 5];
+
+const CheckoutSuccessModal = ({ isOpen, total, isPartial, isTakeout, onConfirm }) => {
+    const [cashInput, setCashInput] = React.useState('');
+    const rounded = Math.round(total);
+    const cash = parseInt(cashInput, 10) || 0;
+    const change = Math.max(0, cash - rounded);
+    const fmt = (n) => Math.round(n).toLocaleString('en-US');
+
+    React.useEffect(() => {
+        if (isOpen) setCashInput('');
+    }, [isOpen]);
+
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+                {/* 頂部 */}
+                <div className="flex flex-col items-center pt-8 pb-5 px-6">
+                    <div className="w-16 h-16 rounded-full border-[3px] border-[#2FB8B8] flex items-center justify-center mb-3">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#2FB8B8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                    </div>
+                    <h3 className="text-2xl font-black mb-1">{isPartial ? '部分結帳完成' : '結帳完成'}</h3>
+                    <p className="text-base text-gray-500">本次結帳金額為 <span className="font-black text-gray-800">${fmt(rounded)}</span></p>
+                </div>
+
+                <div className="border-t border-gray-100" />
+
+                {/* 兩欄：付款金額 | 找零 */}
+                <div className="grid grid-cols-2 divide-x divide-gray-100 py-4">
+                    <div className="text-center py-2">
+                        <p className="text-xs text-gray-400 font-bold mb-1">付款金額</p>
+                        <p className="text-3xl font-black text-gray-800">${fmt(cash || rounded)}</p>
+                    </div>
+                    <div className="text-center py-2">
+                        <p className="text-xs text-gray-400 font-bold mb-1">找零</p>
+                        <p className={`text-3xl font-black ${change > 0 ? 'text-red-500' : 'text-gray-800'}`}>${fmt(change)}</p>
+                    </div>
+                </div>
+
+                <div className="border-t border-gray-100" />
+
+                {/* 收取現金輸入區 */}
+                <div className="px-5 pt-4 pb-3">
+                    <p className="text-xs font-bold text-gray-400 mb-1.5">收取現金</p>
+                    <div className="relative mb-3">
+                        <input
+                            type="number"
+                            inputMode="numeric"
+                            value={cashInput}
+                            onChange={e => setCashInput(e.target.value)}
+                            className="w-full text-right text-2xl font-black border-2 border-gray-200 focus:border-[#2FB8B8] rounded-xl px-4 py-2 pr-10 outline-none"
+                        />
+                        <button
+                            onClick={() => setCashInput('')}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center rounded-full bg-gray-200 hover:bg-gray-300 text-gray-500 font-black text-xs"
+                        >✕</button>
+                    </div>
+                    {/* 快捷按鈕（累加，由大到小） */}
+                    <div className="grid grid-cols-3 gap-2">
+                        {QUICK_CASH.map(v => (
+                            <button key={v}
+                                onClick={() => setCashInput(prev => String((parseInt(prev, 10) || 0) + v))}
+                                className="py-2.5 rounded-xl bg-gray-100 active:bg-gray-300 font-black text-gray-700 text-sm">
+                                +{v}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="border-t border-gray-100" />
+
+                <button
+                    onClick={onConfirm}
+                    className="w-full py-5 text-gray-700 font-black text-lg hover:bg-gray-50 transition-colors"
+                >
+                    {isPartial ? '確認' : isTakeout ? '回到外帶頁' : '回到桌況頁'}
+                </button>
+            </div>
+        </div>
+    );
+};
+
+const PartialCheckoutConfirmModal = ({ isOpen, items, onConfirm, onCancel }) => {
+    const fmt = (n) => Math.round(n).toLocaleString('en-US');
+    if (!isOpen || !items) return null;
+    const total = items.reduce((s, i) => s + i.price * i.quantity, 0);
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+                {/* 頂部 */}
+                <div className="flex flex-col items-center pt-8 pb-5 px-6">
+                    <div className="w-16 h-16 rounded-full border-[3px] border-orange-500 flex items-center justify-center mb-3">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#f97316" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/>
+                        </svg>
+                    </div>
+                    <h3 className="text-2xl font-black mb-1">確認分開結帳</h3>
+                </div>
+
+                <div className="border-t border-gray-100" />
+
+                {/* 品項列表 */}
+                <div className="px-6 py-4 max-h-52 overflow-y-auto space-y-3">
+                    {items.map(item => (
+                        <div key={item.internalId} className="flex justify-between items-center">
+                            <div>
+                                <span className="text-lg font-black text-gray-800">{item.name}</span>
+                                {item.remarks?.length > 0 && (
+                                    <span className="ml-2 text-xs text-amber-600 font-bold">{item.remarks.join('・')}</span>
+                                )}
+                            </div>
+                            <div className="text-right ml-4 flex-shrink-0">
+                                <span className="text-base text-gray-400 font-bold">×{item.quantity}　</span>
+                                <span className="text-lg font-black">${fmt(item.price * item.quantity)}</span>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
+                <div className="border-t border-gray-100" />
+
+                {/* 合計 */}
+                <div className="flex justify-between items-center px-6 py-4">
+                    <span className="text-base font-bold text-gray-400">合計</span>
+                    <span className="text-3xl font-black">${fmt(total)}</span>
+                </div>
+
+                <div className="border-t border-gray-100" />
+
+                {/* 按鈕 */}
+                <div className="flex divide-x divide-gray-100">
+                    <button onClick={onCancel} className="flex-1 py-5 text-gray-400 font-black text-lg hover:bg-gray-50 transition-colors">取消</button>
+                    <button onClick={() => onConfirm(items)} className="flex-1 py-5 text-orange-500 font-black text-lg hover:bg-orange-50 transition-colors">確認結帳</button>
                 </div>
             </div>
         </div>
@@ -632,6 +852,8 @@ const OrderPage = () => {
     // --- 狀態與 Hooks ---
     const [selectedCategory, setSelectedCategory] = useState(CATEGORY_ORDER[1] || CATEGORY_ORDER[0]);
     const [soldOutItem, setSoldOutItem] = useState(null); // 停售確認 modal
+    const [depletedConfirmItem, setDepletedConfirmItem] = useState(null); // 售完確認 modal
+    const [stockLimitWarning, setStockLimitWarning] = useState(null); // 即時庫存不足警告
     const [showResumeConfirm, setShowResumeConfirm] = useState(false); // 恢復供應確認 modal
     const [currentOrderId, setCurrentOrderId] = useState(initialOrderId);
     const [dailyOrderNo, setDailyOrderNo] = useState(null);
@@ -662,10 +884,13 @@ const OrderPage = () => {
     const [finishTime, setFinishTime] = useState(location.state?.finishTime || null);
     const [currentTime, setCurrentTime] = useState(Date.now());
     const checkoutLockRef = useRef(false);
+    const pendingDailyOrderNoRef = useRef(null); // 儲存剛建立訂單的 dailyOrderNo 供印單使用
     const [isQuantityModalOpen, setIsQuantityModalOpen] = useState(false);
     const [quantityTarget, setQuantityTarget] = useState(null); // 用於 QuantityPadModal
 
     const [isCheckoutOptionModalOpen, setIsCheckoutOptionModalOpen] = useState(false);
+    const [checkoutResult, setCheckoutResult] = useState(null); // { total, isPartial, navigateTo }
+    const [partialConfirmItems, setPartialConfirmItems] = useState(null); // 分開結帳確認 modal
     const [isPartialCheckoutMode, setIsPartialCheckoutMode] = useState(false);
     const [selectedItemsForCheckout, setSelectedItemsForCheckout] = useState([]); // 部分結帳時選中的項目 internalId
 
@@ -713,13 +938,20 @@ const OrderPage = () => {
 
     const hasSoldOut = useMemo(() => menuItems.some(i => i.soldOut), [menuItems]);
 
+    // 庫存品項（for 即時庫存驗證，與 menuItems 分開存放）
+    const [invItems, setInvItems] = useState([]);
+
     // --- 資料載入邏輯 ---
     const loadMenuData = useCallback(async () => {
         try {
-            const items = await getMenuItems();
+            const [items, rg, invs] = await Promise.all([
+                getMenuItems(),
+                getRemarkGroups(),
+                getInventoryItems(),
+            ]);
             dispatch({ type: ACTION_TYPE.SET_MENU, payload: items });
-            const rg = await getRemarkGroups();
             setRemarkGroups(rg);
+            setInvItems(invs);
         } catch (e) { console.error(e); }
     }, []);
 
@@ -728,10 +960,65 @@ const OrderPage = () => {
         setSoldOutItem(item);
     }, []);
 
+    // --- 即時庫存輔助：計算本單已消耗各庫存項目的數量 ---
+    const computeOrderConsumption = useCallback((order) => {
+        const consumption = {};
+        order.forEach(orderItem => {
+            (orderItem.consumes || []).forEach(invId => {
+                consumption[invId] = (consumption[invId] || 0) + orderItem.quantity;
+            });
+        });
+        return consumption;
+    }, []);
+
+    // 回傳第一個超出庫存的資訊，或 null 代表可以加入
+    const checkStockLimit = useCallback((item, deltaQty, order) => {
+        const consumes = item.consumes || [];
+        if (!consumes.length) return null;
+        const invMap = {};
+        invItems.forEach(m => { invMap[m.id] = m; });
+        if (Object.keys(invMap).length === 0) return null; // 庫存資料尚未載入
+        const consumption = computeOrderConsumption(order);
+        for (const invId of consumes) {
+            const invItem = invMap[invId];
+            if (!invItem || invItem.stock == null) continue;
+            const consumed = consumption[invId] || 0;
+            const available = invItem.stock - consumed;
+            if (available < deltaQty) {
+                return { menuItemName: item.name, invItemName: invItem.name, dbStock: invItem.stock, consumed, available };
+            }
+        }
+        return null;
+    }, [invItems, computeOrderConsumption]);
+
     // --- 菜單點擊：直接加入購物車（不開備註彈窗）---
     const handleAddItemClick = useCallback((item) => {
+        if (item.depleted) { setDepletedConfirmItem(item); return; }
+        const limit = checkStockLimit(item, 1, currentOrder);
+        if (limit) {
+            setStockLimitWarning({ ...limit, action: 'addItem', payload: { item } });
+            return;
+        }
         dispatch({ type: ACTION_TYPE.ADD_ITEM, payload: { item, setIsDirty, menuItems, remarks: [] } });
-    }, [menuItems, setIsDirty]);
+    }, [menuItems, setIsDirty, currentOrder, checkStockLimit]);
+
+    const handleConfirmDepletedOrder = useCallback(() => {
+        if (!depletedConfirmItem) return;
+        dispatch({ type: ACTION_TYPE.ADD_ITEM, payload: { item: depletedConfirmItem, setIsDirty, menuItems, remarks: [] } });
+        setDepletedConfirmItem(null);
+    }, [depletedConfirmItem, menuItems, setIsDirty]);
+
+    const handleConfirmStockLimit = useCallback(() => {
+        if (!stockLimitWarning) return;
+        const { action, payload } = stockLimitWarning;
+        if (action === 'addItem') {
+            dispatch({ type: ACTION_TYPE.ADD_ITEM, payload: { item: payload.item, setIsDirty, menuItems, remarks: [] } });
+        } else if (action === 'changeQty') {
+            setIsDirty(true);
+            dispatch({ type: ACTION_TYPE.CHANGE_QUANTITY, payload: { internalId: payload.internalId, newQty: payload.newQty, setFinishTime, setSendTime, setOrderStatus, currentOrderStatus: orderStatus, setIsDirty } });
+        }
+        setStockLimitWarning(null);
+    }, [stockLimitWarning, menuItems, setIsDirty, orderStatus]);
 
     // --- 點擊購物車品項：開啟/關閉備註編輯（再點相同品項即關閉） ---
     const getApplicableRemarkGroups = useCallback((item) => {
@@ -794,7 +1081,8 @@ const OrderPage = () => {
             if (openOrder) {
                 const loadedItems = openOrder.items.map(item => ({
                     ...item,
-                    isSent: !!item.isSent, // 載入時保留 DB 中的手動註記狀態
+                    isSent: !!item.isSent,
+                    isServed: !!item.isServed,
                     isPaid: !!item.isPaid,
                     internalId: item.internalId || Math.random().toString(36).substr(2, 9),
                     sortOrder: item.sortOrder
@@ -861,7 +1149,7 @@ const OrderPage = () => {
             needsUtensils: needsUtensils,
             pickupTime: pickupTime,
             // 🚨 重點：將帶有最新數量、isSent 註記、isPaid 狀態的 orderItems 列表傳入 DB 儲存
-            items: orderItems.map(({ id, name, price, quantity, isSent, isPaid, category, internalId, sortOrder, remarks }) => ({ id, name, price, quantity, isSent: !!isSent, isPaid: !!isPaid, category, internalId, sortOrder, remarks: remarks || [] })),
+            items: orderItems.map(({ id, name, price, quantity, isSent, isServed, isPaid, category, internalId, sortOrder, remarks }) => ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, category, internalId, sortOrder, remarks: remarks || [] })),
             subTotal: total, total, timestamp: new Date(openTimestamp).toISOString(),
             status: status || 'new', sendTime: currentSendTime, finishTime: currentFinishTime,
         };
@@ -904,7 +1192,10 @@ const OrderPage = () => {
                 const result = await createNewOrder({ ...orderData, status: finalStatus });
                 if (result) {
                     setCurrentOrderId(result.id);
-                    if (result.dailyOrderNo) setDailyOrderNo(result.dailyOrderNo);
+                    if (result.dailyOrderNo) {
+                        setDailyOrderNo(result.dailyOrderNo);
+                        pendingDailyOrderNoRef.current = result.dailyOrderNo;
+                    }
                 }
                 return result ? result.id : false;
             } else {
@@ -926,10 +1217,13 @@ const OrderPage = () => {
         if ((hasCountChanged || hasUtensilsChanged || hasPickupChanged) && currentOrderId) {
             setIsLoading(true);
             try {
+                const itemsToSave = currentOrder.map(({ id, name, price, quantity, isSent, isPaid, category, internalId, sortOrder, remarks }) =>
+                    ({ id, name, price, quantity, isSent: !!isSent, isPaid: !!isPaid, category, internalId, sortOrder, remarks: remarks || [] })
+                );
                 await updateOrderStatus({
                     orderId: currentOrderId,
                     newStatus: orderStatus,
-                    newItems: originalItems,
+                    newItems: itemsToSave,
                     customerCount: customerCount,
                     needsUtensils: isTakeout ? needsUtensils : undefined,
                     pickupTime: isTakeout ? pickupTime : undefined,
@@ -939,6 +1233,7 @@ const OrderPage = () => {
                 setOriginalCustomerCount(customerCount);
                 setOriginalNeedsUtensils(needsUtensils);
                 setOriginalPickupTime(pickupTime);
+                setOriginalItems(currentOrder);
             } catch (e) {
                 console.error("自動儲存失敗:", e);
             } finally {
@@ -946,12 +1241,30 @@ const OrderPage = () => {
             }
         }
 
-        // 檢查是否有「新點餐」（目前的數量大於原始數量）
-const isContentChanged = JSON.stringify(currentOrder) !== JSON.stringify(originalItems);
-        if (isDirty && isContentChanged) {
+        // 檢查變動類型：僅備註變動（排除 remarks 後內容相同）→ 自動儲存；有新增/刪除品項 → 跳通知
+        const isContentChanged = JSON.stringify(currentOrder) !== JSON.stringify(originalItems);
+        const stripRemarks = arr => JSON.stringify(arr.map(({ remarks, ...rest }) => rest));
+        const isStructureChanged = stripRemarks(currentOrder) !== stripRemarks(originalItems);
+        const isRemarksOnlyChanged = isContentChanged && !isStructureChanged;
+
+        if (isRemarksOnlyChanged && currentOrderId) {
+            setIsLoading(true);
+            try {
+                const itemsToSave = currentOrder.map(({ id, name, price, quantity, isSent, isPaid, category, internalId, sortOrder, remarks }) =>
+                    ({ id, name, price, quantity, isSent: !!isSent, isPaid: !!isPaid, category, internalId, sortOrder, remarks: remarks || [] })
+                );
+                await updateOrderStatus({ orderId: currentOrderId, newStatus: orderStatus, newItems: itemsToSave, sendTime, finishTime });
+                setOriginalItems(currentOrder);
+                setIsDirty(false);
+            } catch (e) {
+                console.error("備註自動儲存失敗:", e);
+            } finally {
+                setIsLoading(false);
+            }
+        } else if (isDirty && isStructureChanged) {
             const confirmDiscard = window.confirm("您有未儲存的點餐變動！\n確定要返回嗎？");
             if (!confirmDiscard) return;
-            setIsDirty(false); 
+            setIsDirty(false);
         }
         
         // 其餘原本的佔桌邏輯...
@@ -977,107 +1290,137 @@ const isContentChanged = JSON.stringify(currentOrder) !== JSON.stringify(origina
     };
 
 const handleConfirmOrder = async () => {
-        // ... (此處保留原邏輯，不添加開錢櫃功能)
         if (currentOrder.length === 0) return alert("請先點餐");
-        
-        // 如果目前沒有未結帳的項目 (unpaidItems.length === 0)，則無需點餐
-        if (unpaidItems.length === 0) {
-             return alert("目前沒有新的未結帳項目需要送出。");
-        }
-        
-        // 如果是 Served/Served-Complete 狀態，且沒有新的變動，提示即可
-        if ((orderStatus === 'served' || orderStatus === 'served-complete') && !isDirty) {
-             return alert("訂單已送出，且沒有新的變動需要儲存。");
-        }
-        
-        // 狀態為 'new', 'open', 或 'paid' (有新加點) 時，都允許執行儲存
-        
+        if (unpaidItems.length === 0) return alert("目前沒有新的未結帳項目需要送出。");
+        if ((orderStatus === 'served' || orderStatus === 'served-complete') && !isDirty)
+            return alert("訂單已送出，且沒有新的變動需要儲存。");
+
         setIsLoading(true);
         try {
             const now = Date.now();
-            
-            // 狀態邏輯：
-            // 1. 如果訂單原本是 'paid'，但有新加點，狀態應變為 'served'。
-            // 2. 如果訂單原本是 'new'/'open'，狀態應變為 'served'。
-            const targetStatus = (orderStatus === 'paid' || orderStatus === 'new' || orderStatus === 'open') ? 'served' : orderStatus; 
-            
-            // 【關鍵修正】：如果目前沒有計時起點，則以現在時間作為 sendTime
-            const newSendTime = sendTime || now; 
-            const newFinishTime = null; 
+            const targetStatus = (orderStatus === 'paid' || orderStatus === 'new' || orderStatus === 'open') ? 'served' : orderStatus;
+            const newSendTime = sendTime || now;
+            const newFinishTime = null;
 
-            // 將最新的 currentOrder 數據（包含已結帳項目、數量、isSent註記、新加入的項目）傳遞給儲存函數
-            const itemsToSave = currentOrder; 
-            
-            // 儲存訂單：會將整個 items 列表更新到 DB，並更新訂單狀態為 targetStatus
-            const orderId = await saveOrderBeforeNavigate(tableNumber, itemsToSave, currentOrderId, customerCount, subTotal, targetStatus, newSendTime, newFinishTime);
-            
+            // 確定要印的品項（尚未送廚房的）
+            const newItems = currentOrder.filter(i => !i.isSent);
+            const sentIds = newItems.map(i => i.internalId);
+            const idSet = new Set(sentIds);
+
+            // 將新品項標記為 isSent:true，直接存進 DB（避免 race condition）
+            const orderWithSent = currentOrder.map(i =>
+                idSet.has(i.internalId) ? { ...i, isSent: true } : i
+            );
+
+            // 儲存訂單（含 isSent:true，同時設定 pendingDailyOrderNoRef）
+            const orderId = await saveOrderBeforeNavigate(
+                tableNumber, orderWithSent, currentOrderId,
+                customerCount, subTotal, targetStatus, newSendTime, newFinishTime
+            );
+
             if (orderId) {
-                // 外帶訂單：自動儲存顧客資料
+                // 外帶：自動儲存顧客資料
                 if (isTakeout && (customerPhone || customerName)) {
                     const cid = await autoSaveCustomer(customerName, customerPhone);
-                    if (cid) {
-                        await updateOrderStatus({ orderId: currentOrderId || orderId, newStatus: targetStatus, customerId: cid });
-                    }
+                    if (cid) await updateOrderStatus({ orderId: currentOrderId || orderId, newStatus: targetStatus, customerId: cid });
                 }
+
                 setOrderStatus(targetStatus);
                 setSendTime(newSendTime);
                 setFinishTime(newFinishTime);
-                navigate(isTakeout ? '/takeout' : '/tables');
                 setOriginalCustomerCount(customerCount);
-                setOriginalItems(currentOrder);
+
+                // 立即更新本地 reducer 狀態
+                if (sentIds.length > 0) {
+                    dispatch({ type: ACTION_TYPE.MARK_ITEMS_SENT, payload: { internalIds: sentIds } });
+                }
+                setOriginalItems(orderWithSent);
+                setIsDirty(false);
+
+                // 廚房聯：fire-and-forget，isSent 已正確存入 DB
+                if (newItems.length > 0) {
+                    const orderNo = pendingDailyOrderNoRef.current || dailyOrderNo || orderId;
+                    pendingDailyOrderNoRef.current = null;
+                    fetch('/print', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            printMode: 'kitchen',
+                            table: tableNumber || '外帶',
+                            orderNo,
+                            total: subTotal,
+                            items: newItems.map(i => ({
+                                id: i.id,
+                                name: i.name,
+                                printName: i.printName || null,
+                                category: i.category || null,
+                                sortOrder: i.sortOrder != null ? i.sortOrder : null,
+                                price: i.price || 0,
+                                qty: i.quantity,
+                                remarks: i.remarks || [],
+                            })),
+                            customerName: customerName || null,
+                            customerPhone: customerPhone || null,
+                            pickupTime: pickupTime || null,
+                            needsUtensils: needsUtensils,
+                        }),
+                    }).catch(e => console.warn('列印失敗：', e));
+                }
+                // 停留在原頁面（不 navigate）
             }
-            setIsDirty(false);
-        } catch (e) { alert("儲存失敗"); } finally { setIsLoading(false); }
+        } catch (e) {
+            alert("儲存失敗");
+            console.error(e);
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     const handlePreCheckout = () => {
-        if (unpaidItems.length === 0) {
-            alert("沒有未結帳的項目可以操作。");
-            return;
-        }
         setIsCheckoutOptionModalOpen(true);
     };
 
-    const handlePrintReceipt = async () => {
+    const buildPrintBaseData = () => ({
+        table: tableNumber || '外帶',
+        orderNo: pendingDailyOrderNoRef.current || dailyOrderNo || currentOrderId || 0,
+        total: subTotal,
+        items: currentOrder.map(i => ({
+            id: i.id,
+            name: i.name,
+            printName: i.printName || null,
+            category: i.category || null,
+            sortOrder: i.sortOrder != null ? i.sortOrder : null,
+            price: i.price || 0,
+            qty: i.quantity,
+            remarks: i.remarks || [],
+        })),
+        ...(isTakeout && {
+            customerName:  customerName  || null,
+            customerPhone: customerPhone || null,
+            pickupTime:    pickupTime    || null,
+            needsUtensils: needsUtensils,
+        }),
+    });
+
+    const handlePrintKitchen = () => {
         setIsCheckoutOptionModalOpen(false);
-        const receiptData = {
-            table: tableNumber || '外帶',
-            orderNo: dailyOrderNo || currentOrderId || 0,
-            total: subTotal,
-            items: currentOrder.map(i => ({
-                id: i.id,
-                name: i.name,
-                printName: i.printName || null,
-                category: i.category || null,
-                sortOrder: i.sortOrder != null ? i.sortOrder : null,
-                price: i.price || 0,
-                qty: i.quantity,
-                remarks: i.remarks || [],
-            })),
-            // 外帶取餐資訊
-            ...(isTakeout && {
-                customerName:  customerName  || null,
-                customerPhone: customerPhone || null,
-                pickupTime:    pickupTime    || null,
-                needsUtensils: needsUtensils,
-            }),
-        };
-        try {
-            const res = await fetch(`${BACKEND_URL}/print`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(receiptData),
-            });
-            if (!res.ok) {
-                const d = await res.json().catch(() => ({}));
-                alert(`印單失敗：${d.error || res.status}`);
-            }
-        } catch (e) {
-            alert(`印單連線失敗：${e.message}`);
-        }
+        fetch(`${BACKEND_URL}/print`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...buildPrintBaseData(), printMode: 'kitchen', kitchenCopies: 1 }),
+        }).catch(e => console.warn(`印廚房單失敗：${e.message}`));
     };
 
-    const executeCheckout = async (itemsToCheckout) => {
+    const handlePrintCustomer = () => {
+        setIsCheckoutOptionModalOpen(false);
+        fetch(`${BACKEND_URL}/print`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...buildPrintBaseData(), printMode: 'customer' }),
+        }).catch(e => console.warn(`印顧客單失敗：${e.message}`));
+    };
+
+    const executeCheckout = async (itemsToCheckout, isPartial = false) => {
         if (checkoutLockRef.current) return;
         checkoutLockRef.current = true;
         setIsLoading(true);
@@ -1090,12 +1433,6 @@ const handleConfirmOrder = async () => {
             const now = Date.now();
             const totalToPay = itemsToCheckout.reduce((sum, item) => sum + item.price * item.quantity, 0);
             
-            if (!window.confirm(`確認結帳金額：NT$ ${formatCurrency(totalToPay)}？`)) {
-                checkoutLockRef.current = false;
-                setIsLoading(false);
-                return;
-            }
-
             const itemIds = itemsToCheckout.map(i => i.internalId);
             
             // 1. 🚨 計算本次結帳後，訂單在 DB 中應有的最終狀態列表。
@@ -1141,10 +1478,59 @@ const handleConfirmOrder = async () => {
                 throw new Error("DB 結帳記錄/庫存扣減失敗。請檢查 DB 連線。");
             }
             
-            // 4. 【新增】調用開錢櫃功能
-            openCashDrawer(); 
-            
-            // 5. 【前端狀態更新】只有在 DB 操作 100% 成功後，才 dispatch 到 Reducer
+            // 4. 列印（fire-and-forget，不阻塞結帳流程）
+            const effectiveOrderNo = pendingDailyOrderNoRef.current || dailyOrderNo || currentOrderId || orderId;
+            pendingDailyOrderNoRef.current = null;
+            const checkoutTotal = itemsToCheckout.reduce((s, i) => s + i.price * i.quantity, 0);
+            const takeoutExtra = isTakeout ? {
+                customerName:  customerName  || null,
+                customerPhone: customerPhone || null,
+                pickupTime:    pickupTime    || null,
+                needsUtensils: needsUtensils,
+            } : {};
+            const toLine = (i) => ({
+                id: i.id, name: i.name,
+                printName: i.printName || null,
+                category: i.category || null,
+                sortOrder: i.sortOrder != null ? i.sortOrder : null,
+                price: i.price || 0, qty: i.quantity,
+                remarks: i.remarks || [],
+            });
+
+            // 顧客聯先送（確保排在 CUPS 佇列第一，立即出紙），廚房單後送
+            fetch('/print', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    printMode: 'customer',
+                    openDrawer: true,
+                    table: tableNumber || '外帶',
+                    orderNo: effectiveOrderNo,
+                    total: checkoutTotal,
+                    items: itemsToCheckout.map(toLine),
+                    ...takeoutExtra,
+                }),
+            }).catch(e => console.warn('顧客聯列印失敗：', e));
+
+            // 廚房單後送（若有尚未送出廚房的品項）
+            const unsentItems = itemsToCheckout.filter(i => !i.isSent);
+            if (unsentItems.length > 0) {
+                fetch('/print', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        printMode: 'kitchen',
+                        kitchenCopies: isPartial ? 1 : 2,
+                        table: tableNumber || '外帶',
+                        orderNo: effectiveOrderNo,
+                        total: checkoutTotal,
+                        items: unsentItems.map(toLine),
+                        ...takeoutExtra,
+                    }),
+                }).catch(e => console.warn('廚房單列印失敗：', e));
+            }
+
+            // 6. 【前端狀態更新】只有在 DB 操作 100% 成功後，才 dispatch 到 Reducer
             dispatch({
                 type: ACTION_TYPE.MARK_ITEM_PAID,
                 payload: { itemIds } 
@@ -1168,12 +1554,18 @@ const handleConfirmOrder = async () => {
 
             if (finalStatus === 'paid') {
                 setOrderStatus('paid');
-                navigate(isTakeout ? '/takeout' : '/tables', { replace: true });
             } else {
                 setOrderStatus('served');
             }
 
             setIsDirty(false);
+
+            // 顯示結帳成功 modal，等使用者確認後才導航
+            setCheckoutResult({
+                total: totalToPay,
+                isPartial,
+                navigateTo: finalStatus === 'paid' ? (isTakeout ? '/takeout' : '/tables') : null,
+            });
 
         } catch (e) {
             alert("結帳操作失敗: " + e.message);
@@ -1183,10 +1575,16 @@ const handleConfirmOrder = async () => {
         }
     };    
     
+    const handleCheckoutResultConfirm = () => {
+        const navigateTo = checkoutResult?.navigateTo;
+        setCheckoutResult(null);
+        if (navigateTo) navigate(navigateTo, { replace: true });
+    };
+
     const handleFullCheckout = async () => {
         setIsCheckoutOptionModalOpen(false);
         if (unpaidItems.length === 0) return;
-        
+
         await executeCheckout(unpaidItems);
     };
 
@@ -1206,15 +1604,20 @@ const handleConfirmOrder = async () => {
         });
     };
 
-    const handleExecutePartialCheckout = async () => {
+    const handleExecutePartialCheckout = () => {
         const selectedItems = currentOrder.filter(item => selectedItemsForCheckout.includes(item.internalId));
         if (selectedItems.length === 0) {
             alert("請選擇要結帳的項目。");
             return;
         }
-        await executeCheckout(selectedItems);
+        setPartialConfirmItems(selectedItems);
     };
-    
+
+    const handlePartialConfirm = async (items) => {
+        setPartialConfirmItems(null);
+        await executeCheckout(items, true);
+    };
+
     const handleCancelPartialCheckout = () => {
         setIsPartialCheckoutMode(false);
         setSelectedItemsForCheckout([]);
@@ -1236,23 +1639,26 @@ const handleConfirmOrder = async () => {
 const handleChangeItemQuantity = (internalId, diff) => {
         const currentItem = currentOrder.find(i => i.internalId === internalId);
         if (!currentItem || currentItem.isPaid) return;
-        
-        const newQty = Math.max(0, currentItem.quantity + diff);
-        
-        // 🚨 這裡必須觸發 setIsDirty(true)
-        setIsDirty(true);
 
+        const newQty = Math.max(0, currentItem.quantity + diff);
+
+        // 增加數量時進行庫存檢查
+        if (diff > 0) {
+            // 暫時以不含此行的訂單計算消耗（排除自身），再加上 newQty
+            const orderWithout = currentOrder.map(i =>
+                i.internalId === internalId ? { ...i, quantity: 0 } : i
+            );
+            const limit = checkStockLimit({ ...currentItem }, newQty, orderWithout);
+            if (limit) {
+                setStockLimitWarning({ ...limit, action: 'changeQty', payload: { internalId, newQty } });
+                return;
+            }
+        }
+
+        setIsDirty(true);
         dispatch({
             type: ACTION_TYPE.CHANGE_QUANTITY,
-            payload: {
-                internalId: internalId,
-                newQty: newQty,
-                setFinishTime,
-                setSendTime,
-                setOrderStatus,
-                currentOrderStatus: orderStatus,
-                setIsDirty
-            }
+            payload: { internalId, newQty, setFinishTime, setSendTime, setOrderStatus, currentOrderStatus: orderStatus, setIsDirty }
         });
     };
     // --- 輔助邏輯 (保持不變) ---
@@ -1348,21 +1754,23 @@ const handleTableChange = async (event) => {
 
     const handleQuantitySave = (newQty) => {
         if (quantityTarget.type === 'item') {
-            // 用於處理數量鍵盤輸入的餐點數量
+            const currentItem = currentOrder.find(i => i.internalId === quantityTarget.internalId);
+            if (currentItem && newQty > currentItem.quantity) {
+                const orderWithout = currentOrder.map(i =>
+                    i.internalId === quantityTarget.internalId ? { ...i, quantity: 0 } : i
+                );
+                const limit = checkStockLimit({ ...currentItem }, newQty, orderWithout);
+                if (limit) {
+                    setStockLimitWarning({ ...limit, action: 'changeQty', payload: { internalId: quantityTarget.internalId, newQty } });
+                    setQuantityTarget(null);
+                    return;
+                }
+            }
             dispatch({
                 type: ACTION_TYPE.CHANGE_QUANTITY,
-                payload: {
-                    internalId: quantityTarget.internalId,
-                    newQty: newQty,
-                    setFinishTime,
-                    setSendTime,
-                    setOrderStatus,
-                    currentOrderStatus: orderStatus,
-                    
-                }
+                payload: { internalId: quantityTarget.internalId, newQty, setFinishTime, setSendTime, setOrderStatus, currentOrderStatus: orderStatus, setIsDirty }
             });
         } else if (quantityTarget.type === 'customer') {
-            // 用於處理數量鍵盤輸入的顧客人數
             setCustomerCount(Math.max(isTakeout ? 0 : 1, newQty));
             setIsDirty(true);
         }
@@ -1381,6 +1789,28 @@ const handleTableChange = async (event) => {
         setQuantityTarget({ type: 'customer', currentValue: customerCount });
         setIsQuantityModalOpen(true);
     };
+
+    // 點擊 isSent 圖示，切換送出註記並存 DB
+    // handleToggleItemSent 已移除 UI 觸發，isSent 由系統自動管理（廚房單印出時設定）
+
+    const handleToggleItemServed = useCallback(async (item) => {
+        if (isLoading || !currentOrderId) return;
+        const newIsServed = !item.isServed;
+        dispatch({ type: ACTION_TYPE.TOGGLE_ITEM_SERVED, payload: { internalId: item.internalId } });
+        setOriginalItems(prev => prev.map(i =>
+            i.internalId === item.internalId ? { ...i, isServed: newIsServed } : i
+        ));
+        try {
+            const updatedItems = currentOrder.map(i =>
+                i.internalId === item.internalId ? { ...i, isServed: newIsServed } : i
+            ).map(({ id, name, price, quantity, isSent, isServed, isPaid, category, internalId, sortOrder, remarks }) =>
+                ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, category, internalId, sortOrder, remarks: remarks || [] })
+            );
+            await updateOrderStatus({ orderId: currentOrderId, newStatus: orderStatus, newItems: updatedItems });
+        } catch (e) {
+            console.error('更新 isServed 失敗：', e);
+        }
+    }, [isLoading, currentOrderId, currentOrder, orderStatus, dispatch]);
 
     return (
         <div 
@@ -1509,12 +1939,13 @@ const handleTableChange = async (event) => {
                                         JSON.stringify((item.remarks || []).slice().sort());
                                     const mergeKey = (item) => `${item.id}:::${remarkKey(item)}`;
 
-                                    // 依合併模式決定顯示列表
+                                    // 新點的在上、先點的在下：反轉後處理
+                                    const reversedUnpaid = [...unpaidItems].reverse();
                                     let displayRows;
                                     if (isOrderMerged) {
                                         const map = new Map();
                                         const order = [];
-                                        for (const item of unpaidItems) {
+                                        for (const item of reversedUnpaid) {
                                             const k = mergeKey(item);
                                             if (map.has(k)) {
                                                 map.get(k).quantity += item.quantity;
@@ -1526,7 +1957,7 @@ const handleTableChange = async (event) => {
                                         }
                                         displayRows = order;
                                     } else {
-                                        displayRows = unpaidItems;
+                                        displayRows = reversedUnpaid;
                                     }
 
                                     return (
@@ -1567,15 +1998,18 @@ const handleTableChange = async (event) => {
                                                             : (hasApplicableGroups ? () => handleCartItemClick(item) : undefined)
                                                         }
                                                     >
-                                                        {/* 1. 狀態圓圈 */}
-                                                        <div className="w-5 h-5 mr-2 mt-0.5 flex-shrink-0 flex items-center justify-center">
+                                                        {/* 1. 出餐圓圈（手動記錄是否已出餐給客人） */}
+                                                        <div
+                                                            className="w-5 h-5 mr-2 mt-0.5 flex-shrink-0 flex items-center justify-center cursor-pointer"
+                                                            onClick={(e) => { e.stopPropagation(); if (!isPartialCheckoutMode) handleToggleItemServed(item); }}
+                                                        >
                                                             {isPartialCheckoutMode ? (
                                                                 selectedItemsForCheckout.includes(item.internalId)
                                                                     ? <svg className="w-full h-full text-orange-600" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
                                                                     : <div className="w-full h-full rounded-full border-2 border-gray-400" />
                                                             ) : (
-                                                                item.isSent
-                                                                    ? <svg className="w-full h-full text-red-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
+                                                                item.isServed
+                                                                    ? <svg className="w-full h-full text-green-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
                                                                     : <div className="w-full h-full rounded-full border-2 border-gray-400" />
                                                             )}
                                                         </div>
@@ -1588,7 +2022,7 @@ const handleTableChange = async (event) => {
                                                                         <span className="text-white font-bold text-[10px] leading-none">{item.sortOrder}</span>
                                                                     </div>
                                                                 )}
-                                                                <span className="font-bold text-lg whitespace-nowrap">{item.name}</span>
+                                                                <span className="font-bold text-2xl whitespace-nowrap">{item.name}</span>
                                                                 {hasApplicableGroups && !isPartialCheckoutMode && (
                                                                     <svg className={`w-3 h-3 flex-shrink-0 ${isEditingThis ? 'text-teal-500' : hasItemRemarks ? 'text-amber-500' : 'text-gray-300'}`} fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" /></svg>
                                                                 )}
@@ -1629,10 +2063,22 @@ const handleTableChange = async (event) => {
                                             </div>
                                             <span className="text-base font-black pr-2">${formatCurrency(paidTotal)}</span>
                                         </div>
-                                        {paidItems.map(item => (
-                                            <div key={item.internalId} className="flex items-start justify-between p-2 border border-green-200 rounded-xl mb-1 bg-white shadow-sm">
-                                                <div className="w-5 h-5 mr-2 mt-0.5 flex-shrink-0 flex items-center justify-center">
-                                                    {item.isSent
+                                        {paidItems.map(item => {
+                                            const hasApplicableGroups = remarkGroups.some(g => g.appliesTo && g.appliesTo.includes(item.id));
+                                            const isEditingThis = pendingRemarkItem?.editingInternalId === item.internalId;
+                                            const hasItemRemarks = item.remarks && item.remarks.length > 0;
+                                            return (
+                                            <div
+                                                key={item.internalId}
+                                                className={`flex items-start justify-between p-2 border border-green-200 rounded-xl mb-1 bg-white shadow-sm transition-colors
+                                                    ${hasApplicableGroups ? `cursor-pointer ${isEditingThis ? 'border-teal-400 bg-teal-50 ring-2 ring-teal-400' : 'hover:bg-amber-50 hover:border-amber-200'}` : ''}`}
+                                                onClick={hasApplicableGroups ? () => handleCartItemClick(item) : undefined}
+                                            >
+                                                <div
+                                                    className="w-5 h-5 mr-2 mt-0.5 flex-shrink-0 flex items-center justify-center cursor-pointer"
+                                                    onClick={(e) => { e.stopPropagation(); handleToggleItemServed(item); }}
+                                                >
+                                                    {item.isServed
                                                         ? <svg className="w-full h-full text-green-600" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
                                                         : <div className="w-full h-full rounded-full border-2 border-gray-400" />
                                                     }
@@ -1644,7 +2090,10 @@ const handleTableChange = async (event) => {
                                                                 <span className="text-white font-bold text-[10px] leading-none">{Number(item.sortOrder)}</span>
                                                             </div>
                                                         )}
-                                                        <span className="font-bold text-lg whitespace-nowrap">{item.name}</span>
+                                                        <span className="font-bold text-2xl whitespace-nowrap">{item.name}</span>
+                                                        {hasApplicableGroups && (
+                                                            <svg className={`w-3 h-3 flex-shrink-0 ${isEditingThis ? 'text-teal-500' : hasItemRemarks ? 'text-amber-500' : 'text-gray-300'}`} fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" /></svg>
+                                                        )}
                                                     </div>
                                                     <RemarkBadges remarks={item.remarks} />
                                                 </div>
@@ -1653,7 +2102,8 @@ const handleTableChange = async (event) => {
                                                     <span className="text-xs font-black text-gray-800 pr-1">${formatCurrency(item.price * item.quantity)}</span>
                                                 </div>
                                             </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 )}
                             </>
@@ -1702,7 +2152,7 @@ const handleTableChange = async (event) => {
                                         <button
                                             onClick={handlePreCheckout}
                                             className="flex-1 py-3 bg-red-600 text-white rounded-xl font-black text-base shadow-lg active:scale-95"
-                                            disabled={isLoading || unpaidItems.length === 0}
+                                            disabled={isLoading || currentOrder.length === 0}
                                         >
                                             結帳
                                         </button>
@@ -1761,7 +2211,7 @@ const handleTableChange = async (event) => {
                         {/* 移除左右 padding (px-0)，並確保寬度為 full */}
                         <div className="w-full px-0 py-2"> 
                             {/* 設定 gap-3 並確保 grid 撐滿全寬 */}
-                            <div className="grid grid-cols-5 gap-3 w-full"> 
+                            <div className="grid grid-cols-5 gap-2 w-full">
     {filteredMenu.flatMap(item => {
         // 判斷條件：當前是主餐 Tab，且項目編號是 10
         if (item.category === '主餐' && Number(item.sortOrder) === 10 || item.category === '單點' && Number(item.sortOrder) === 46) {
@@ -1811,14 +2261,46 @@ const handleTableChange = async (event) => {
                 onClose={() => setIsCheckoutOptionModalOpen(false)}
                 onFullCheckout={handleFullCheckout}
                 onStartPartialCheckout={handleStartPartialCheckout}
-                onPrint={handlePrintReceipt}
+                onPrintKitchen={handlePrintKitchen}
+                onPrintCustomer={handlePrintCustomer}
+                isAllPaid={unpaidItems.length === 0}
             />
-            
+
+
+            <PartialCheckoutConfirmModal
+                isOpen={!!partialConfirmItems}
+                items={partialConfirmItems}
+                onConfirm={handlePartialConfirm}
+                onCancel={() => setPartialConfirmItems(null)}
+            />
+
             {/* 停售確認 Modal */}
             <SoldOutModal
                 item={soldOutItem}
                 onConfirm={handleConfirmSoldOut}
                 onCancel={() => setSoldOutItem(null)}
+            />
+
+            {/* 售完確認 Modal */}
+            <DepletedConfirmModal
+                item={depletedConfirmItem}
+                onConfirm={handleConfirmDepletedOrder}
+                onCancel={() => setDepletedConfirmItem(null)}
+            />
+
+            {/* 即時庫存不足 Modal */}
+            <StockLimitModal
+                warning={stockLimitWarning}
+                onConfirm={handleConfirmStockLimit}
+                onCancel={() => setStockLimitWarning(null)}
+            />
+
+            <CheckoutSuccessModal
+                isOpen={!!checkoutResult}
+                total={checkoutResult?.total || 0}
+                isPartial={checkoutResult?.isPartial || false}
+                isTakeout={isTakeout}
+                onConfirm={handleCheckoutResultConfirm}
             />
 
             {/* 恢復供應確認 Modal */}

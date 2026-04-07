@@ -1,7 +1,7 @@
 // src/pages/TableManagement.js (修正換桌邏輯版本)
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
     getActiveOrders,
     updateOrderStatus,
@@ -15,10 +15,11 @@ const TABLE_OPTIONS = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8'];
 
 const TableManagementPage = () => {
     const navigate = useNavigate();
+    const location = useLocation();
     const [tableStatuses, setTableStatuses] = useState({});
     const [isLoading, setIsLoading] = useState(true);
     const [hasTakeoutOrders, setHasTakeoutOrders] = useState(false);
-    
+
     const tableStatusesRef = useRef(tableStatuses);
 
     useEffect(() => {
@@ -32,18 +33,18 @@ const TableManagementPage = () => {
         if (manualRefresh || Object.keys(tableStatusesRef.current).length === 0) {
              setIsLoading(true);
         }
-        
+
         try {
             const dbTableRecords = await getTableStatuses();
             const dbTableMap = new Map();
             dbTableRecords.forEach(record => dbTableMap.set(record.tableNumber, record));
-            
+
             const statuses = {};
             TABLE_OPTIONS.forEach(tableId => {
                 const dbRecord = dbTableMap.get(tableId);
-                statuses[tableId] = { 
-                    id: tableId, 
-                    orders: [] 
+                statuses[tableId] = {
+                    id: tableId,
+                    orders: []
                 };
 
                 if (dbRecord && dbRecord.status === 'open' && !dbRecord.orderId) {
@@ -56,36 +57,55 @@ const TableManagementPage = () => {
                 }
             });
 
-            const activeOrders = await getActiveOrders(); 
+            const activeOrders = await getActiveOrders();
             activeOrders.forEach(order => {
                 const tableId = order.table;
                 if (statuses.hasOwnProperty(tableId)) {
                     const normalizedItems = (order.items || []).map((item) => ({
                         ...item,
-                        isSent: !!item.isSent, 
+                        isSent: !!item.isSent,
                     }));
 
-                    statuses[tableId].orders.push({ 
-                        ...order, 
+                    statuses[tableId].orders.push({
+                        ...order,
                         orderId: order.id,
                         items: normalizedItems,
                         timestamp: order.timestamp
                     });
                 }
             });
+
+            // 同一桌有多張單時，未結帳（served/open）優先顯示，其次依 id 降冪（新的在前）
+            const STATUS_PRIORITY = { served: 0, open: 1, paid: 2 };
+            Object.keys(statuses).forEach(tid => {
+                statuses[tid].orders.sort((a, b) => {
+                    const pa = STATUS_PRIORITY[a.status] ?? 3;
+                    const pb = STATUS_PRIORITY[b.status] ?? 3;
+                    if (pa !== pb) return pa - pb;
+                    return (b.orderId || 0) - (a.orderId || 0);
+                });
+            });
+
             setTableStatuses(statuses);
             const activeTakeout = activeOrders.filter(o => o.table === '外帶');
             setHasTakeoutOrders(activeTakeout.length > 0);
         } catch (error) {
             console.error("載入桌位狀態失敗:", error);
         } finally {
-            setIsLoading(false); 
+            setIsLoading(false);
         }
-    }, []); 
+    }, []);
 
+    // 每次導航進入此頁面時強制刷新（含結帳後返回的情況）
     useEffect(() => {
         loadTableStatuses(true);
-    }, [loadTableStatuses]); 
+    }, [loadTableStatuses, location.key]);
+
+    // 每 30 秒自動輪詢，多裝置同步用
+    useEffect(() => {
+        const interval = setInterval(() => loadTableStatuses(false), 30000);
+        return () => clearInterval(interval);
+    }, [loadTableStatuses]);
 
     /**
      * 【修正處】處理拖曳換桌邏輯
@@ -133,14 +153,15 @@ const TableManagementPage = () => {
         const openTimestamp = currentOrder?.timestamp || Date.now();
 
         if (isOccupied) {
-             navigate('/order', { 
-                state: { 
-                    initialTableNumber: tableId, 
-                    orderId: currentOrder?.orderId || null, 
-                    orderStatus: status, 
+             navigate('/order', {
+                state: {
+                    initialTableNumber: tableId,
+                    orderId: currentOrder?.orderId || null,
+                    orderStatus: status,
                     openTimestamp: openTimestamp,
                     customerCount: currentOrder?.customerCount || 1,
-                } 
+                    sendTime: currentOrder?.sendTime || null,
+                }
             });
             return;
         }
@@ -153,15 +174,15 @@ const TableManagementPage = () => {
         });
     }, [navigate]);
     
-    const handleToggleItemSentOnTable = useCallback(async (tableId, orderId, itemId, currentIsSent) => {
+    const handleToggleItemSentOnTable = useCallback(async (tableId, orderId, itemId, currentIsServed) => {
         if (!orderId || !tableId) return;
-        const currentData = tableStatusesRef.current[tableId]; 
+        const currentData = tableStatusesRef.current[tableId];
         const order = currentData?.orders?.find(o => o.orderId === orderId);
         if (!order) return;
-        
+
         const newItems = order.items.map(item => {
             const itemUniqueId = item.internalId || item.id;
-            return (itemUniqueId === itemId) ? { ...item, isSent: !currentIsSent } : item;
+            return (itemUniqueId === itemId) ? { ...item, isServed: !currentIsServed } : item;
         });
         
         setIsLoading(true);

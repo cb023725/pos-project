@@ -1,6 +1,6 @@
 // src/pages/MenuManagement.js
-import React, { useState, useEffect } from 'react'; 
-import { getMenuItems, updateMenuItem, addMenuItem, deleteMenuItem } from '../db';
+import React, { useState, useEffect } from 'react';
+import { getMenuItems, getInventoryItems, updateMenuItem, addMenuItem, deleteMenuItem } from '../db';
 
 // ======================================================================
 // ⭐️ 靜態資料定義 ⭐️
@@ -8,23 +8,6 @@ import { getMenuItems, updateMenuItem, addMenuItem, deleteMenuItem } from '../db
 
 const CATEGORIES = ['主餐', '小點', '飲品', '冷凍包', '單點']; 
 
-const ALL_INVENTORY_ITEMS = [
-    // 庫存項目定義    
-    { id: 'beef', name: '紅燒牛腩筋', category: '主食庫存' },
-    { id: 'pork_ribs', name: '無錫排骨', category: '主食庫存' },
-    { id: 'pork_shoulder', name: '松阪豬', category: '主食庫存' },
-    { id: 'chicken_soup', name: '菜脯雞湯', category: '主食庫存' },
-    { id: 'curry_chicken', name: '咖哩雞胸', category: '主食庫存' },
-    { id: 'salted_pork', name: '鹹豬肉', category: '主食庫存' },
-    { id: 'goulash', name: '匈牙利牛肉湯', category: '主食庫存' },
-    { id: 'pig_balls', name: '小豬球', category: '點心庫存' },
-    { id: 'fried_chicken', name: '炸雞', category: '點心庫存' },
-];
-
-const INVENTORY_GROUPS = ALL_INVENTORY_ITEMS.reduce((acc, item) => {
-    (acc[item.category] = acc[item.category] || []).push(item);
-    return acc;
-}, {});
 
 // ======================================================================
 // 輔助函式
@@ -71,7 +54,7 @@ const deduplicateAndFormat = (items) => {
 // ======================================================================
 // 子元件：新增/編輯共用 Modal 邏輯 (保持不變)
 // ======================================================================
-const ItemModal = ({ item, onClose, onSave, isAdding = false }) => {
+const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [] }) => {
     const baseItem = { name: '', printName: '', price: 0, category: CATEGORIES[0], imageUrl: '', stock: 0, consumes: [] };
     const initialData = isAdding ? baseItem : {
         ...baseItem,
@@ -191,19 +174,28 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false }) => {
                         <p className="text-sm text-gray-600 mb-3">勾選此菜單品項售出時，將會消耗的庫存原料項目。</p>
                         
                         <div className="space-y-4 max-h-72 overflow-y-auto pr-3">
-                            {Object.entries(INVENTORY_GROUPS).map(([category, items]) => (
-                                <div key={category} className="border border-green-200 p-3 rounded-lg bg-white shadow-sm">
-                                    <p className="text-base font-black text-green-800 mb-2">{category}</p>
-                                    <div className="grid grid-cols-2 gap-2">
-                                        {items.map(inventoryItem => (
-                                            <label key={inventoryItem.id} className="flex items-center space-x-2 text-base cursor-pointer hover:bg-green-100 p-2 rounded-lg transition-colors">
-                                                <input type="checkbox" checked={formData.consumes.includes(inventoryItem.id)} onChange={() => handleConsumeToggle(inventoryItem.id)} className="form-checkbox text-green-600 h-5 w-5 rounded focus:ring-green-500" />
-                                                <span className={`${formData.consumes.includes(inventoryItem.id) ? 'font-bold text-green-700' : 'text-gray-800'}`}>{inventoryItem.name}</span>
-                                            </label>
-                                        ))}
+                            {inventoryItems.length === 0 ? (
+                                <p className="text-sm text-gray-400">無庫存項目</p>
+                            ) : (
+                                Object.entries(
+                                    inventoryItems.reduce((acc, inv) => {
+                                        (acc[inv.category] = acc[inv.category] || []).push(inv);
+                                        return acc;
+                                    }, {})
+                                ).map(([category, items]) => (
+                                    <div key={category} className="border border-green-200 p-3 rounded-lg bg-white shadow-sm">
+                                        <p className="text-base font-black text-green-800 mb-2">{category}</p>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            {items.map(inventoryItem => (
+                                                <label key={inventoryItem.id} className="flex items-center space-x-2 text-base cursor-pointer hover:bg-green-100 p-2 rounded-lg transition-colors">
+                                                    <input type="checkbox" checked={formData.consumes.includes(inventoryItem.id)} onChange={() => handleConsumeToggle(inventoryItem.id)} className="form-checkbox text-green-600 h-5 w-5 rounded focus:ring-green-500" />
+                                                    <span className={`${formData.consumes.includes(inventoryItem.id) ? 'font-bold text-green-700' : 'text-gray-800'}`}>{inventoryItem.name}</span>
+                                                </label>
+                                            ))}
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
+                                ))
+                            )}
                         </div>
                     </div>
 
@@ -223,26 +215,24 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false }) => {
 const MenuManagementPage = () => {
     
     const [menuItems, setMenuItems] = useState([]);
+    const [inventoryItems, setInventoryItems] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
-    
-    const [editingItem, setEditingItem] = useState(null); 
+
+    const [editingItem, setEditingItem] = useState(null);
     const [isAddingNew, setIsAddingNew] = useState(false);
-    
-    const [filterCategory, setFilterCategory] = useState(CATEGORIES[0]); 
+
+    const [filterCategory, setFilterCategory] = useState(CATEGORIES[0]);
 
     useEffect(() => {
-        const loadMenuItems = async () => {
+        const loadData = async () => {
             setIsLoading(true);
-            const items = await getMenuItems();
-            
-            const uniqueItems = deduplicateAndFormat(items);
-            
-            setMenuItems(uniqueItems); 
+            const [items, invItems] = await Promise.all([getMenuItems(), getInventoryItems()]);
+            setMenuItems(deduplicateAndFormat(items));
+            setInventoryItems(invItems);
             setIsLoading(false);
         };
-        loadMenuItems();
-        
-    }, []); 
+        loadData();
+    }, []);
 
 
     const handleAddItem = async (newItemData) => {
@@ -413,11 +403,11 @@ const MenuManagementPage = () => {
 
             {/* Modal 渲染 (保持不變) */}
             {editingItem && (
-                <ItemModal item={editingItem} onClose={() => setEditingItem(null)} onSave={handleSaveEdit} isAdding={false} />
+                <ItemModal item={editingItem} onClose={() => setEditingItem(null)} onSave={handleSaveEdit} isAdding={false} inventoryItems={inventoryItems} />
             )}
-            
+
             {isAddingNew && (
-                <ItemModal item={null} onClose={() => setIsAddingNew(false)} onSave={handleAddItem} isAdding={true} />
+                <ItemModal item={null} onClose={() => setIsAddingNew(false)} onSave={handleAddItem} isAdding={true} inventoryItems={inventoryItems} />
             )}
         </div>
     );

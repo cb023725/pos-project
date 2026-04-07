@@ -93,8 +93,8 @@ export const getMenuItems = getMenuItemsForOrder;
 
 export async function getInventoryItems() {
     const items = await api('GET', '/api/menu');
-    return items.filter(i => (i.category||'').includes('庫存') || i.stock != null)
-        .sort((a,b) => a.name.localeCompare(b.name, 'zh-TW'));
+    return items.filter(i => (i.category||'').includes('庫存'))
+        .sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99));
 }
 
 export async function addMenuItem(item) {
@@ -111,6 +111,15 @@ export async function deleteMenuItem(id) {
 }
 export async function resetAllSoldOut() {
     return api('POST', '/api/menu/reset-soldout');
+}
+
+// ── 庫存異動紀錄 ──────────────────────────────────────────────
+export async function getInventoryLogs(itemId) {
+    const params = itemId ? `?item_id=${encodeURIComponent(itemId)}` : '';
+    return api('GET', `/api/inventory-logs${params}`);
+}
+export async function addInventoryLog(itemId, itemName, changeAmount, note) {
+    return api('POST', '/api/inventory-logs', { itemId, itemName, changeAmount, note });
 }
 
 // 初始化：若 Supabase 沒有任何菜單資料，則填入預設
@@ -263,8 +272,8 @@ export async function getReportOrders() {
 export async function getInvoices() {
     return api('GET', '/api/invoices');
 }
-export async function voidInvoice(invoiceId) {
-    await api('POST', `/api/invoices/${invoiceId}/void`);
+export async function voidInvoice(invoiceId, restoreStock = false) {
+    await api('POST', `/api/invoices/${invoiceId}/void`, { restoreStock });
 }
 
 // ======================================================================
@@ -344,9 +353,15 @@ export async function saveRemarkGroup(group) {
 }
 export async function migrateRemarkGroups() {
     const existing = await api('GET', '/api/remarks');
-    if (existing.length > 0) return; // 已有資料
-    for (const group of DEFAULT_REMARK_GROUPS) {
-        await api('POST', '/api/remarks', { ...group, sortOrder: group.sortOrder || 99 });
+    // 若資料存在且至少有一筆有效選項，則不重新初始化
+    const hasValidData = existing.some(g => g.options && g.options.length > 0);
+    if (existing.length > 0 && hasValidData) return;
+    // 清除損壞或空白的舊資料
+    if (existing.length > 0) {
+        await api('DELETE', '/api/remarks/all');
+    }
+    for (const [i, group] of DEFAULT_REMARK_GROUPS.entries()) {
+        await api('POST', '/api/remarks', { ...group, sortOrder: i });
     }
 }
 

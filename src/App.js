@@ -1,19 +1,17 @@
 // src/App.js (對應發票功能與錢櫃功能修正版本)
 
-import React, { useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Layout from './components/Layout';
 import { populateInitialData, migrateMenuPrintNames, migrateRemarkGroups } from './db';
 
 // ----------------------------------------------------------------------
 // 引入頁面組件
 // ----------------------------------------------------------------------
-import HomePage from './pages/Home';
 import OrderPage from './pages/Order';
 import MenuManagementPage from './pages/MenuManagement';
-import ReportPage from './pages/Reports'; 
+import ReportPage from './pages/Reports';
 import InventoryPage from './pages/Inventory';
-import PrintPage from './pages/Print';
 import TableManagementPage from './pages/TableManagement'; 
 import DrawerTest from './pages/DrawerTest';
 // 📑 發票管理頁面
@@ -30,7 +28,6 @@ import './index.css';
 // 未完成頁面占位
 // ----------------------------------------------------------------------
 const EmptyPage = ({ name }) => <h1 className="text-3xl font-bold pt-4">{name} - 🚧 施工中</h1>;
-const PaymentPage = () => <EmptyPage name="付款結帳" />;
 const SettingsPage = () => <EmptyPage name="設定" />;
 
 /**
@@ -46,22 +43,15 @@ function AppContent() {
   return (
     <Layout hideTimeBar={hideTimeBar}>
       <Routes>
-        <Route path="/" element={<HomePage />} />
+        <Route path="/" element={<Navigate to="/tables" replace />} />
         <Route path="/order" element={<OrderPage />} />
         <Route path="/tables" element={<TableManagementPage />} />
         <Route path="/takeout" element={<TakeoutPage />} />
-        <Route path="/payment" element={<PaymentPage />} />
-        
-        {/* 📑 發票與報表相關路由 */}
-        <Route path="/invoices" element={<InvoiceManagementPage />} /> 
-        <Route path="/reports" element={<ReportPage />} /> 
-        
-        {/* 💰 錢櫃相關路由 */}
+        <Route path="/invoices" element={<InvoiceManagementPage />} />
+        <Route path="/reports" element={<ReportPage />} />
         <Route path="/cash-drawer" element={<CashDrawerPage />} />
-
         <Route path="/menu" element={<MenuManagementPage />} />
         <Route path="/inventory" element={<InventoryPage />} />
-        <Route path="/print" element={<PrintPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/customers" element={<CustomerManagementPage />} />
         <Route path="/remarks" element={<RemarkManagementPage />} />
@@ -75,6 +65,14 @@ function AppContent() {
  * 主程式組件
  */
 function App() {
+  const [isDevMode, setIsDevMode] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/health').then(r => r.json()).then(d => {
+      if (d.dev) setIsDevMode(true);
+    }).catch(() => {});
+  }, []);
+
   useEffect(() => {
     // 初始化 IndexedDB 資料 (包含 V4 的 Invoices store 升級)
     populateInitialData().catch(err => {
@@ -90,6 +88,16 @@ function App() {
 
   return (
     <Router>
+      {isDevMode && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
+          background: '#f97316', color: 'white', textAlign: 'center',
+          padding: '4px 0', fontSize: '13px', fontWeight: 'bold',
+          letterSpacing: '0.05em'
+        }}>
+          ⚠️ 測試模式 — 資料不會影響正式營業
+        </div>
+      )}
       <AppContent />
     </Router>
   );

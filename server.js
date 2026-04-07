@@ -1,5 +1,6 @@
 // server.js
-require('dotenv').config();
+const IS_DEV = process.argv.includes('--dev');
+require('dotenv').config({ path: IS_DEV ? '.env.dev' : '.env' });
 const express    = require('express');
 const bodyParser = require('body-parser');
 const cors       = require('cors');
@@ -18,7 +19,7 @@ const supabase = createClient(
 );
 
 const app  = express();
-const PORT = 3000;
+const PORT = IS_DEV ? 3001 : 3000;
 
 // ----------------------------------------------------
 // 【印表機設定】從 .env 讀取，避免 IP 硬寫進程式碼
@@ -35,8 +36,10 @@ const MARGIN_SIDE = 4;                       // 左右最小留邊 4pt（驅動�
 const CONT_W      = PAGE_W - MARGIN_SIDE * 2;
 
 // 字型：品項用 SimHei（黑體，視覺效果等同 Bold）；分類標題用 JhengHei（細）
-const FONT_BOLD = '/Library/Fonts/Microsoft/SimHei.ttf';
-const FONT_REG  = '/Library/Fonts/Microsoft/Microsoft Jhenghei.ttf';
+// 啟動時一次性載入至記憶體，避免每次生成 PDF 都從磁碟讀取大型中文字型（各 10-21MB）
+const FONT_BOLD = fs.readFileSync('/Library/Fonts/Microsoft/SimHei.ttf');
+const FONT_REG  = fs.readFileSync('/Library/Fonts/Microsoft/Microsoft Jhenghei.ttf');
+console.log('字型已載入記憶體（Bold:', Math.round(FONT_BOLD.length/1024/1024*10)/10, 'MB, Reg:', Math.round(FONT_REG.length/1024/1024*10)/10, 'MB）');
 
 // ----------------------------------------------------
 // Middleware
@@ -389,12 +392,12 @@ function buildReceiptPDF(data, filePath, groups) {
     });
 }
 
-// lp 列印並刪除暫存檔
-function printPDF(filePath, pageH) {
+// lp 列印並刪除暫存檔（copies = 份數，預設 1，多份以多次 lp 送出以確保切割）
+function printOnce(filePath, pageH) {
     return new Promise((resolve, reject) => {
         const media = `Custom.${PAGE_W}x${Math.ceil(pageH)}`;
-        execFile('lp', ['-d', CUPS_PRINTER, '-o', `media=${media}`, filePath], (err, stdout, stderr) => {
-            fs.unlink(filePath, () => {});
+        const args = ['-d', CUPS_PRINTER, '-o', `media=${media}`, '-o', 'CashDrawerSetting=0DoNotOpenDrawers', filePath];
+        execFile('lp', args, (err, stdout, stderr) => {
             if (err) {
                 console.error('lp 失敗：', stderr);
                 reject(err);
@@ -404,6 +407,16 @@ function printPDF(filePath, pageH) {
             }
         });
     });
+}
+
+async function printPDF(filePath, pageH, copies = 1) {
+    try {
+        for (let i = 0; i < copies; i++) {
+            await printOnce(filePath, pageH);
+        }
+    } finally {
+        fs.unlink(filePath, () => {});
+    }
 }
 
 // ----------------------------------------------------
@@ -898,57 +911,65 @@ function buildCustomerReceiptPDF(data, filePath) {
 }
 
 // ----------------------------------------------------
-// 【列印】POST /print  → 廚房單 + 吧台單（各一張）
+// 【列印】POST /print
+// printMode: 'kitchen' → 廚房聯×2, 'customer' → 顧客聯×1, 'all' → 廚房聯×2 + 顧客聯×1
 // ----------------------------------------------------
 app.post('/print', printRateLimit, async (req, res) => {
     const data = req.body;
     if (!data) return res.status(400).json({ error: '格式錯誤' });
 
-    console.log('--- 收到列印請求 ---', data.table, data.orderNo);
+    const printMode = data.printMode || 'kitchen';
+    const kitchenCopies = data.kitchenCopies !== undefined ? Number(data.kitchenCopies) : 2;
+    const openDrawer = !!data.openDrawer;
+    console.log('--- 收到列印請求 ---', data.table, data.orderNo, 'mode:', printMode, 'kitchenCopies:', kitchenCopies, 'openDrawer:', openDrawer);
 
-    try {
-        const rawItems = data.items || [];
-        // 無備註的相同品項合併數量
-        const allItems = mergeNoRemarkItems(rawItems);
+    // 立即回應前端，印表在背景執行（避免前端等待印表完成才解鎖）
+    res.json({ status: '列印請求已送出' });
 
-        // 依廚房 / 吧台拆分品項
-        const kitchenItems = allItems.filter(i => !BAR_CATS.has(i.category || ''));
-        const barItems     = allItems.filter(i =>  BAR_CATS.has(i.category || ''));
+    // 背景非同步執行印表與開錢櫃
+    (async () => {
+        try {
+            // 開錢櫃（僅結帳顧客聯才開，且在印單前執行）
+            if (openDrawer) {
+                await new Promise((resolve) => {
+                    const client = new net.Socket();
+                    client.connect(PRINTER_PORT, PRINTER_IP, () => {
+                        const cmd = Buffer.from([0x07]);
+                        client.write(cmd, () => { client.end(); resolve(); });
+                    });
+                    client.on('error', (e) => {
+                        console.warn('開錢櫃失敗：', e.message);
+                        resolve();
+                    });
+                });
+                console.log('開錢櫃指令已發送');
+            }
 
-        const kitchenGroups = groupByCategory(kitchenItems);
-        const barGroups     = groupByCategory(barItems);
+            const rawItems = data.items || [];
+            const allItems = mergeNoRemarkItems(rawItems);
 
-        // 顧客聯（最先印，交給顧客）
-        {
-            const f = path.join(os.tmpdir(), `receipt_c_${Date.now()}.pdf`);
-            const h = await buildCustomerReceiptPDF(data, f);
-            await printPDF(f, h);
-            console.log('顧客聯已送出');
+            // 廚房聯（kitchen 或 all 模式）：預設 2 份各自切割，kitchenCopies 可覆蓋
+            if (printMode === 'kitchen' || printMode === 'all') {
+                const allGroups = groupByCategory(allItems);
+                if (allGroups.length > 0) {
+                    const f = path.join(os.tmpdir(), `receipt_k_${Date.now()}.pdf`);
+                    const h = await buildReceiptPDF(data, f, allGroups);
+                    await printPDF(f, h, kitchenCopies);
+                    console.log(`廚房聯已送出（${kitchenCopies}份，各自切割）`);
+                }
+            }
+
+            // 顧客聯（customer 或 all 模式）：印一張
+            if (printMode === 'customer' || printMode === 'all') {
+                const f = path.join(os.tmpdir(), `receipt_c_${Date.now()}.pdf`);
+                const h = await buildCustomerReceiptPDF(data, f);
+                await printPDF(f, h, 1);
+                console.log('顧客聯已送出（1份）');
+            }
+        } catch (e) {
+            console.error('🔴 列印錯誤：', e);
         }
-
-        // 廚房單（小點→主餐→單點，若有品項才印）
-        if (kitchenGroups.length > 0) {
-            const f = path.join(os.tmpdir(), `receipt_k_${Date.now()}.pdf`);
-            const h = await buildReceiptPDF(data, f, kitchenGroups);
-            await printPDF(f, h);
-            console.log('廚房單已送出');
-        }
-
-        // 吧台單（飲料→冷凍包，若有品項才印）
-        if (barGroups.length > 0) {
-            const f = path.join(os.tmpdir(), `receipt_b_${Date.now()}.pdf`);
-            const h = await buildReceiptPDF(data, f, barGroups);
-            await printPDF(f, h);
-            console.log('吧台單已送出');
-        }
-
-        res.json({ status: '列印請求已送出' });
-
-    } catch (e) {
-        console.error('🔴 列印錯誤：', e);
-        if (!res.headersSent)
-            res.status(500).json({ error: e.message });
-    }
+    })();
 });
 
 // ----------------------------------------------------
@@ -986,7 +1007,7 @@ const rowsToCamel = r => Array.isArray(r) ? r.map(rowToCamel) : rowToCamel(r);
 // ---- 健康檢查 ----
 app.get('/api/health', async (req, res) => {
     const { error } = await supabase.from('menu_items').select('id').limit(1);
-    res.json({ ok: !error, supabase: error ? error.message : 'connected' });
+    res.json({ ok: !error, supabase: error ? error.message : 'connected', dev: IS_DEV });
 });
 
 // ============================================================
@@ -995,19 +1016,29 @@ app.get('/api/health', async (req, res) => {
 app.get('/api/menu', async (req, res) => {
     const { data, error } = await supabase.from('menu_items').select('*').order('sort_order');
     if (error) return res.status(500).json({ error: error.message });
-    // map snake→camel
-    res.json((data||[]).map(r => ({
-        id: r.id, name: r.name, printName: r.print_name, price: r.price,
-        category: r.category, sortOrder: r.sort_order, stock: r.stock,
-        soldOut: r.sold_out, consumes: r.consumes||[], imageUrl: r.image_url,
-    })));
+    // 建立庫存品項 stock 對照表
+    const invMap = {};
+    (data||[]).forEach(r => { if ((r.category||'').includes('庫存')) invMap[r.id] = r.stock; });
+    res.json((data||[]).map(r => {
+        const consumes = r.consumes || [];
+        const linkedStocks = consumes.filter(cId => cId in invMap && invMap[cId] !== null).map(cId => invMap[cId]);
+        const linkedStock = linkedStocks.length > 0 ? Math.min(...linkedStocks) : null;
+        return {
+            id: r.id, name: r.name, printName: r.print_name, price: r.price,
+            category: r.category, sortOrder: r.sort_order, stock: r.stock,
+            soldOut: r.sold_out, consumes, imageUrl: r.image_url,
+            thresholds: r.thresholds || null,
+            depleted: consumes.some(cId => cId in invMap && invMap[cId] !== null && invMap[cId] <= 0),
+            linkedStock,
+        };
+    }));
 });
 app.post('/api/menu', async (req, res) => {
     const b = req.body;
     const row = { id: b.id, name: b.name, print_name: b.printName||'',
         price: b.price, category: b.category||'', sort_order: b.sortOrder,
         stock: b.stock, sold_out: b.soldOut||false, consumes: b.consumes||[],
-        image_url: b.imageUrl||null };
+        image_url: b.imageUrl||null, thresholds: b.thresholds||null };
     const { data, error } = await supabase.from('menu_items').upsert(row).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(rowToCamel(data));
@@ -1022,8 +1053,9 @@ app.patch('/api/menu/:id', async (req, res) => {
     if (b.sortOrder   !== undefined) updates.sort_order = b.sortOrder;
     if (b.stock       !== undefined) updates.stock      = b.stock;
     if (b.soldOut     !== undefined) updates.sold_out   = b.soldOut;
-    if (b.consumes    !== undefined) updates.consumes   = b.consumes;
+    if (b.consumes    !== undefined) updates.consumes    = b.consumes;
     if (b.imageUrl    !== undefined) updates.image_url  = b.imageUrl;
+    if (b.thresholds  !== undefined) updates.thresholds = b.thresholds;
     const { data, error } = await supabase.from('menu_items').update(updates).eq('id', req.params.id).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(rowToCamel(data));
@@ -1037,6 +1069,25 @@ app.post('/api/menu/reset-soldout', async (req, res) => {
     const { error } = await supabase.from('menu_items').update({ sold_out: false }).eq('sold_out', true);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ ok: true });
+});
+
+// ============================================================
+// 庫存異動紀錄
+// ============================================================
+app.get('/api/inventory-logs', async (req, res) => {
+    const { item_id } = req.query;
+    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    let q = supabase.from('inventory_logs').select('*').gte('created_at', threeDaysAgo).order('created_at', { ascending: false }).limit(200);
+    if (item_id) q = q.eq('item_id', item_id);
+    const { data, error } = await q;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json((data||[]).map(r => ({ id: r.id, itemId: r.item_id, itemName: r.item_name, changeAmount: r.change_amount, note: r.note, createdAt: r.created_at })));
+});
+app.post('/api/inventory-logs', async (req, res) => {
+    const { itemId, itemName, changeAmount, note } = req.body;
+    const { data, error } = await supabase.from('inventory_logs').insert({ item_id: itemId, item_name: itemName, change_amount: changeAmount, note: note || null }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ id: data.id, itemId: data.item_id, itemName: data.item_name, changeAmount: data.change_amount, note: data.note, createdAt: data.created_at });
 });
 
 // ============================================================
@@ -1251,16 +1302,23 @@ app.post('/api/orders/:id/complete', async (req, res) => {
             total: amountNow, amount: amountNow,
             items_snapshot: snapshot, status: '已開立', void_time: null,
         }).select().single();
-        // 扣庫存
+        // 扣庫存 + 寫紀錄
         for (const it of snapshot) {
-            await supabase.from('menu_items').select('stock,consumes').eq('id', it.id).single().then(async ({ data: mi }) => {
-                if (!mi) return;
-                if (mi.stock != null) await supabase.from('menu_items').update({ stock: Math.max(0, mi.stock - (it.quantity||1)) }).eq('id', it.id);
-                for (const cId of (mi.consumes||[])) {
-                    const { data: ci } = await supabase.from('menu_items').select('stock').eq('id', cId).single();
-                    if (ci?.stock != null) await supabase.from('menu_items').update({ stock: Math.max(0, ci.stock - (it.quantity||1)) }).eq('id', cId);
-                }
-            });
+            const { data: mi } = await supabase.from('menu_items').select('stock,consumes').eq('id', it.id).single();
+            if (!mi) continue;
+            const qty = it.quantity || 1;
+            if (mi.stock != null) {
+                const newStock = mi.stock - qty;
+                await supabase.from('menu_items').update({ stock: newStock }).eq('id', it.id);
+                await supabase.from('inventory_logs').insert({ item_id: it.id, item_name: it.name, change_amount: -qty, note: '點餐消耗' });
+            }
+            for (const cId of (mi.consumes||[])) {
+                const { data: ci } = await supabase.from('menu_items').select('name,stock').eq('id', cId).single();
+                if (!ci || ci.stock == null) continue;
+                const newStock = ci.stock - qty;
+                await supabase.from('menu_items').update({ stock: newStock }).eq('id', cId);
+                await supabase.from('inventory_logs').insert({ item_id: cId, item_name: ci.name, change_amount: -qty, note: `點餐消耗 (${it.name})` });
+            }
         }
     }
     if (tableNumber && tableNumber !== '外帶') {
@@ -1284,6 +1342,7 @@ app.get('/api/invoices', async (req, res) => {
 // 作廢發票
 app.post('/api/invoices/:id/void', async (req, res) => {
     const invId = parseInt(req.params.id);
+    const { restoreStock = false } = req.body || {};
     const now = new Date().toISOString();
     const { data: inv, error: fe } = await supabase.from('invoices').select('*').eq('id', invId).single();
     if (fe || !inv) return res.status(404).json({ error: '找不到發票' });
@@ -1304,14 +1363,22 @@ app.post('/api/invoices/:id/void', async (req, res) => {
         if (!isArchived && !isReleased && tableRow) {
             await supabase.from('tables').upsert({ table_number: ord.table_number, status: 'served', order_id: ord.id, updated_at: now });
         }
-        // 還庫存
-        for (const it of (inv.items_snapshot||[])) {
-            const { data: mi } = await supabase.from('menu_items').select('stock,consumes').eq('id', it.id).single();
-            if (!mi) continue;
-            if (mi.stock != null) await supabase.from('menu_items').update({ stock: mi.stock + (it.quantity||1) }).eq('id', it.id);
-            for (const cId of (mi.consumes||[])) {
-                const { data: ci } = await supabase.from('menu_items').select('stock').eq('id', cId).single();
-                if (ci?.stock != null) await supabase.from('menu_items').update({ stock: ci.stock + (it.quantity||1) }).eq('id', cId);
+        // 還庫存（依 restoreStock 決定是否執行）
+        if (restoreStock) {
+            for (const it of (inv.items_snapshot||[])) {
+                const { data: mi } = await supabase.from('menu_items').select('stock,consumes').eq('id', it.id).single();
+                if (!mi) continue;
+                const qty = it.quantity || 1;
+                if (mi.stock != null) {
+                    await supabase.from('menu_items').update({ stock: mi.stock + qty }).eq('id', it.id);
+                    await supabase.from('inventory_logs').insert({ item_id: it.id, item_name: it.name, change_amount: qty, note: `發票作廢還原` });
+                }
+                for (const cId of (mi.consumes||[])) {
+                    const { data: ci } = await supabase.from('menu_items').select('name,stock').eq('id', cId).single();
+                    if (!ci || ci.stock == null) continue;
+                    await supabase.from('menu_items').update({ stock: ci.stock + qty }).eq('id', cId);
+                    await supabase.from('inventory_logs').insert({ item_id: cId, item_name: ci.name, change_amount: qty, note: `發票作廢還原 (${it.name})` });
+                }
             }
         }
     }
@@ -1324,14 +1391,37 @@ app.post('/api/invoices/:id/void', async (req, res) => {
 app.get('/api/remarks', async (req, res) => {
     const { data, error } = await supabase.from('remark_groups').select('*').order('sort_order');
     if (error) return res.status(500).json({ error: error.message });
-    res.json(data||[]);
+    res.json((data||[]).map(r => ({
+        id: r.id,
+        name: r.name,
+        type: r.type || 'single',
+        required: r.required || false,
+        options: r.options || [],
+        appliesTo: r.applies_to || [],
+        optionItemMap: r.option_item_map || {},
+        sortOrder: r.sort_order || 99,
+    })));
 });
 app.post('/api/remarks', async (req, res) => {
     const b = req.body;
-    const row = { id: b.id, name: b.name, remarks: b.remarks||[], sort_order: b.sortOrder||99 };
+    const row = {
+        id: b.id,
+        name: b.name,
+        type: b.type || 'single',
+        required: b.required || false,
+        options: b.options || [],
+        applies_to: b.appliesTo || [],
+        option_item_map: b.optionItemMap || {},
+        sort_order: b.sortOrder || 99,
+    };
     const { data, error } = await supabase.from('remark_groups').upsert(row).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
+});
+app.delete('/api/remarks/all', async (req, res) => {
+    const { error } = await supabase.from('remark_groups').delete().not('id', 'is', null);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
 });
 app.delete('/api/remarks/:id', async (req, res) => {
     const { error } = await supabase.from('remark_groups').delete().eq('id', req.params.id);
@@ -1408,7 +1498,7 @@ function orderToCamel(r) {
         paidAmount: r.paid_amount||0, dailyOrderNo: r.daily_order_no,
         customerCount: r.customer_count||1, customerName: r.customer_name||'',
         customerPhone: r.customer_phone||'', customerId: r.customer_id||null,
-        needsUtensils: r.needs_utensils||false, pickupTime: r.pickup_time||null,
+        needsUtensils: r.needs_utensils||false, pickupTime: r.pickup_time != null ? Number(r.pickup_time) : null,
         date: r.order_date, timestamp: r.timestamp ? new Date(r.timestamp).getTime() : null,
         sendTime: r.send_time, finishTime: r.finish_time,
     };
@@ -1424,6 +1514,121 @@ function invoiceToCamel(r) {
         customerCount: r.customer_count||0, voidTime: r.void_time||null,
     };
 }
+
+// ----------------------------------------------------
+// 【列印預覽】GET /print-preview（測試用）
+// ----------------------------------------------------
+app.get('/print-preview', (req, res) => {
+    res.send(`<!DOCTYPE html>
+<html lang="zh-TW">
+<head><meta charset="UTF-8"><title>列印預覽</title>
+<style>
+  body { font-family: sans-serif; background: #1a1a1a; color: #eee; margin: 0; padding: 20px; }
+  h2 { color: #f97316; }
+  textarea { width: 100%; height: 200px; font-size: 12px; background: #2a2a2a; color: #eee; border: 1px solid #444; padding: 8px; border-radius: 4px; }
+  button { margin-top: 12px; padding: 10px 28px; background: #f97316; color: white; border: none; border-radius: 6px; font-size: 15px; cursor: pointer; }
+  button:hover { background: #ea6c0a; }
+  #frames { margin-top: 24px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .frame-wrap { background: #2a2a2a; border-radius: 8px; padding: 10px; }
+  .frame-wrap h3 { margin: 0 0 8px; font-size: 13px; color: #aaa; }
+  embed { border: none; }
+</style>
+</head>
+<body>
+<h2>⚠️ 列印預覽（開發測試用）</h2>
+<p style="color:#aaa;font-size:13px">貼上或編輯下方 JSON，點「預覽」查看各張出單版面</p>
+<textarea id="json">${JSON.stringify({
+    table: 'A3',
+    orderNo: 7,
+    total: 1190,
+    items: [
+        { id: 'beefNoodle', name: '紅燒牛腩筋飯', printName: '牛腩筋飯', category: '主餐', sortOrder: 1, price: 340, qty: 2, remarks: ['七分'] },
+        { id: 'pastaSpicy', name: '清炒鹹豬肉義大利麵', printName: '鹹豬肉義', category: '義大利麵', sortOrder: 12, price: 270, qty: 1, remarks: [] },
+        { id: 'cola', name: '可樂', printName: '可樂', category: '飲料', sortOrder: 0, price: 50, qty: 2, remarks: [] },
+        { id: 'rice', name: '關山香Ｑ白米飯', printName: '白飯', category: '附餐', sortOrder: 0, price: 30, qty: 1, remarks: ['加飯'] },
+    ]
+}, null, 2)}</textarea>
+<button onclick="preview()">預覽出單</button>
+<div id="frames"></div>
+<script>
+async function preview() {
+    const json = document.getElementById('json').value;
+    let data;
+    try { data = JSON.parse(json); } catch(e) { alert('JSON 格式錯誤：' + e.message); return; }
+    const btn = document.querySelector('button');
+    btn.textContent = '產生中...'; btn.disabled = true;
+    const res = await fetch('/print-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    });
+    const result = await res.json();
+    btn.textContent = '預覽出單'; btn.disabled = false;
+    const frames = document.getElementById('frames');
+    frames.innerHTML = '';
+    for (const slip of result.slips) {
+        const div = document.createElement('div');
+        div.className = 'frame-wrap';
+        const h = Math.min(Math.round(slip.height * 2.83) + 40, 700);
+        div.innerHTML = \`<h3>\${slip.name} <a href="\${slip.url}" target="_blank" style="color:#f97316;font-size:11px;margin-left:8px">新分頁開啟</a></h3>
+<iframe src="\${slip.url}" width="220" height="\${h}" style="border:1px solid #444;border-radius:4px;background:white"></iframe>\`;
+        frames.appendChild(div);
+    }
+}
+</script>
+</body></html>`);
+});
+
+// 提供預覽 PDF 檔案
+app.get('/print-preview/:file', (req, res) => {
+    const f = path.join(os.tmpdir(), req.params.file);
+    if (!fs.existsSync(f)) return res.status(404).send('not found');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.sendFile(f);
+});
+
+app.post('/print-preview', async (req, res) => {
+    const data = req.body;
+    if (!data) return res.status(400).json({ error: '格式錯誤' });
+    try {
+        const rawItems = data.items || [];
+        const allItems = mergeNoRemarkItems(rawItems);
+        const kitchenItems = allItems.filter(i => !BAR_CATS.has(i.category || ''));
+        const barItems     = allItems.filter(i =>  BAR_CATS.has(i.category || ''));
+        const kitchenGroups = groupByCategory(kitchenItems);
+        const barGroups     = groupByCategory(barItems);
+
+        const ts = Date.now();
+        const slips = [];
+
+        // 顧客聯
+        {
+            const fname = `preview_c_${ts}.pdf`;
+            const f = path.join(os.tmpdir(), fname);
+            const h = await buildCustomerReceiptPDF(data, f);
+            slips.push({ name: '顧客聯', url: `/print-preview/${fname}`, height: h });
+        }
+        // 廚房單
+        if (kitchenGroups.length > 0) {
+            const fname = `preview_k_${ts}.pdf`;
+            const f = path.join(os.tmpdir(), fname);
+            const h = await buildReceiptPDF(data, f, kitchenGroups);
+            slips.push({ name: '廚房單', url: `/print-preview/${fname}`, height: h });
+        }
+        // 吧台單
+        if (barGroups.length > 0) {
+            const fname = `preview_b_${ts}.pdf`;
+            const f = path.join(os.tmpdir(), fname);
+            const h = await buildReceiptPDF(data, f, barGroups);
+            slips.push({ name: '吧台單', url: `/print-preview/${fname}`, height: h });
+        }
+
+        res.json({ slips });
+    } catch (e) {
+        console.error('預覽錯誤：', e);
+        res.status(500).json({ error: e.message });
+    }
+});
 
 // ----------------------------------------------------
 // React build 靜態檔案（API 路由之後）

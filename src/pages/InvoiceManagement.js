@@ -7,10 +7,11 @@ import { getInvoices, voidInvoice, getOrderById, getTableStatuses } from '../db'
 const InvoiceManagementPage = () => {
     const navigate = useNavigate();
     const [invoices, setInvoices] = useState([]);
-    const [tableStatuses, setTableStatuses] = useState([]); 
+    const [tableStatuses, setTableStatuses] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [selectedOrder, setSelectedOrder] = useState(null); 
+    const [selectedOrder, setSelectedOrder] = useState(null);
     const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+    const [voidModal, setVoidModal] = useState(null); // { invoice, displayNum }
     // 輔助函式：取得本地 YYYY-MM-DD 字串，解決 ISOString 的時區差問題
     const getLocalDateString = (date) => {
         const year = date.getFullYear();
@@ -121,19 +122,23 @@ const InvoiceManagementPage = () => {
         return false;
     };
 
-    const handleVoid = async (invoice) => {
+    const handleVoid = (invoice) => {
         if (!canVoidInvoice(invoice)) {
             alert("安全性限制：該桌位尚未執行「離開（清桌）」動作，請先至桌位總覽執行客離。");
             return;
         }
         const displayNum = getDisplayInvoiceNumber(invoice.id);
-        if (window.confirm(`確定要作廢發票 ${displayNum} 嗎？`)) {
-            try {
-                await voidInvoice(invoice.id);
-                navigate(`/tables?reopenOrderId=${invoice.orderId}&tableName=${invoice.tableName || '外帶'}`);
-            } catch (error) {
-                alert("作廢失敗: " + error.message);
-            }
+        setVoidModal({ invoice, displayNum });
+    };
+
+    const handleVoidConfirm = async (restoreStock) => {
+        const { invoice } = voidModal;
+        setVoidModal(null);
+        try {
+            await voidInvoice(invoice.id, restoreStock);
+            navigate(`/tables?reopenOrderId=${invoice.orderId}&tableName=${invoice.tableName || '外帶'}`);
+        } catch (error) {
+            alert("作廢失敗: " + error.message);
         }
     };
 
@@ -306,6 +311,28 @@ const InvoiceManagementPage = () => {
                 </div>
             </div>
 
+
+            {/* 作廢確認 Modal */}
+            {voidModal && (
+                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full">
+                        <h3 className="text-xl font-black text-gray-800 mb-2">確認作廢發票</h3>
+                        <p className="text-gray-600 mb-1">發票 <span className="font-mono font-bold text-red-600">{voidModal.displayNum}</span></p>
+                        <p className="text-gray-600 mb-6">作廢後是否要將此筆訂單消耗的庫存歸還？</p>
+                        <div className="flex flex-col gap-3">
+                            <button onClick={() => handleVoidConfirm(true)} className="w-full py-3 bg-green-600 text-white rounded-xl font-bold hover:bg-green-700 transition-colors">
+                                作廢並恢復庫存
+                            </button>
+                            <button onClick={() => handleVoidConfirm(false)} className="w-full py-3 bg-red-500 text-white rounded-xl font-bold hover:bg-red-600 transition-colors">
+                                作廢，不恢復庫存
+                            </button>
+                            <button onClick={() => setVoidModal(null)} className="w-full py-3 bg-gray-200 text-gray-700 rounded-xl font-bold hover:bg-gray-300 transition-colors">
+                                取消
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* 發票明細 Modal */}
             {isDetailModalOpen && selectedOrder && (

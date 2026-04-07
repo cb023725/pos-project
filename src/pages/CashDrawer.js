@@ -142,6 +142,7 @@ const CashDrawerPage = () => {
         if (last) return last;
         const d = new Date(); d.setHours(0, 0, 0, 0);
         return d.getTime();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isClosed]);
 
     const periodStartLabel = useMemo(() => {
