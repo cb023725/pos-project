@@ -1435,6 +1435,14 @@ app.post('/api/remarks', async (req, res) => {
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
 });
+app.patch('/api/remarks/reorder', async (req, res) => {
+    const updates = req.body; // [{ id, sortOrder }]
+    for (const { id, sortOrder } of updates) {
+        const { error } = await supabase.from('remark_groups').update({ sort_order: sortOrder }).eq('id', id);
+        if (error) return res.status(500).json({ error: error.message });
+    }
+    res.json({ ok: true });
+});
 app.delete('/api/remarks/all', async (req, res) => {
     const { error } = await supabase.from('remark_groups').delete().not('id', 'is', null);
     if (error) return res.status(500).json({ error: error.message });

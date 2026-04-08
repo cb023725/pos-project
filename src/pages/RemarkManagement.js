@@ -3,6 +3,7 @@ import {
     getRemarkGroups,
     saveRemarkGroup,
     deleteRemarkGroup,
+    reorderRemarkGroups,
     getMenuItems,
 } from '../db';
 
@@ -444,7 +445,7 @@ const RemarkManagementPage = () => {
         [newGroups[index], newGroups[target]] = [newGroups[target], newGroups[index]];
         const reordered = newGroups.map((g, i) => ({ ...g, sortOrder: i }));
         setGroups(reordered);
-        await Promise.all(reordered.map(g => saveRemarkGroup(g)));
+        await reorderRemarkGroups(reordered);
     };
 
     if (isLoading) {

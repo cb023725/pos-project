@@ -403,6 +403,9 @@ export async function getRemarkGroups() {
 export async function saveRemarkGroup(group) {
     await api('POST', '/api/remarks', group);
 }
+export async function reorderRemarkGroups(groups) {
+    await api('PATCH', '/api/remarks/reorder', groups.map(g => ({ id: g.id, sortOrder: g.sortOrder })));
+}
 export async function deleteRemarkGroup(id) {
     await api('DELETE', `/api/remarks/${id}`);
 }
