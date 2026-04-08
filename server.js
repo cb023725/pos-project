@@ -1416,7 +1416,7 @@ app.get('/api/remarks', async (req, res) => {
         options: r.options || [],
         appliesTo: r.applies_to || [],
         optionItemMap: r.option_item_map || {},
-        sortOrder: r.sort_order || 99,
+        sortOrder: r.sort_order ?? 99,
     })));
 });
 app.post('/api/remarks', async (req, res) => {
