@@ -134,6 +134,25 @@ export async function saveCategorySettings(settings) {
     return api('POST', '/api/settings/category_settings', { value: JSON.stringify(settings) });
 }
 
+// ── 常用標籤 ───────────────────────────────────────────────────────────────
+export const DEFAULT_QUICK_TAGS = {
+    expense: ["冠成", "楓康", "銘利行", "晉新", "小北", "午餐", "晚餐", "市場", "樹森", "米食家", "開元", "瓦斯", "彩券(私人)"],
+    income: ["退瓶", "廢油"],
+    nonCash: ["轉帳", "訂金"],
+};
+
+export async function getQuickTags() {
+    try {
+        const { value } = await api('GET', '/api/settings/quick_tags');
+        if (value) return JSON.parse(value);
+    } catch {}
+    return DEFAULT_QUICK_TAGS;
+}
+
+export async function saveQuickTags(tags) {
+    return api('POST', '/api/settings/quick_tags', { value: JSON.stringify(tags) });
+}
+
 // ── 庫存異動紀錄 ──────────────────────────────────────────────
 export async function getInventoryLogs(itemId) {
     const params = itemId ? `?item_id=${encodeURIComponent(itemId)}` : '';

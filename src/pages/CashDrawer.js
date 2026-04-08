@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { getInvoices, getLastCloseTime, performDayClose, getCategorySettings } from '../db';
+import { getInvoices, getLastCloseTime, performDayClose, getCategorySettings, getQuickTags, saveQuickTags, DEFAULT_QUICK_TAGS } from '../db';
 
 const BACKEND_URL = '';
 const RESERVE_KEY      = 'pos_reserve_amount';
@@ -126,6 +126,98 @@ const PinModal = ({ title, onSuccess, onCancel }) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 常用標籤管理 Modal
+// ─────────────────────────────────────────────────────────────────────────────
+const TAG_TYPE_LABELS = { expense: '支出', income: '收入', nonCash: '非現金' };
+
+const TagManagerModal = ({ type, tags, onSave, onClose }) => {
+    const [items, setItems] = useState([...tags]);
+    const [input, setInput] = useState('');
+    const [editIndex, setEditIndex] = useState(null);
+    const [editValue, setEditValue] = useState('');
+
+    const handleAdd = () => {
+        const v = input.trim();
+        if (!v || items.includes(v)) return;
+        setItems([...items, v]);
+        setInput('');
+    };
+
+    const handleDelete = (idx) => {
+        setItems(items.filter((_, i) => i !== idx));
+    };
+
+    const handleEditStart = (idx) => {
+        setEditIndex(idx);
+        setEditValue(items[idx]);
+    };
+
+    const handleEditSave = () => {
+        const v = editValue.trim();
+        if (!v) { setEditIndex(null); return; }
+        const next = [...items];
+        next[editIndex] = v;
+        setItems(next);
+        setEditIndex(null);
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+                <h2 className="text-lg font-black mb-4">管理常用標籤 — {TAG_TYPE_LABELS[type]}</h2>
+                <div className="space-y-2 mb-4 max-h-64 overflow-y-auto">
+                    {items.map((tag, idx) => (
+                        <div key={idx} className="flex items-center gap-2">
+                            {editIndex === idx ? (
+                                <>
+                                    <input
+                                        className="flex-1 p-1 border rounded-lg font-bold outline-none focus:ring-2 focus:ring-amber-200"
+                                        value={editValue}
+                                        onChange={e => setEditValue(e.target.value)}
+                                        onKeyDown={e => e.key === 'Enter' && handleEditSave()}
+                                        autoFocus
+                                    />
+                                    <button onClick={handleEditSave}
+                                        className="px-3 py-1 bg-amber-700 text-white rounded-lg font-bold text-sm">確定</button>
+                                    <button onClick={() => setEditIndex(null)}
+                                        className="px-3 py-1 bg-gray-200 rounded-lg font-bold text-sm">取消</button>
+                                </>
+                            ) : (
+                                <>
+                                    <span className="flex-1 font-bold text-gray-700">{tag}</span>
+                                    <button onClick={() => handleEditStart(idx)}
+                                        className="px-3 py-1 bg-gray-100 rounded-lg font-bold text-sm hover:bg-gray-200">改名</button>
+                                    <button onClick={() => handleDelete(idx)}
+                                        className="px-3 py-1 bg-red-100 text-red-600 rounded-lg font-bold text-sm hover:bg-red-200">刪除</button>
+                                </>
+                            )}
+                        </div>
+                    ))}
+                    {items.length === 0 && <p className="text-gray-400 text-sm text-center py-4">尚無標籤</p>}
+                </div>
+                <div className="flex gap-2 mb-4">
+                    <input
+                        className="flex-1 p-2 border rounded-xl font-bold outline-none focus:ring-2 focus:ring-amber-200"
+                        placeholder="新增標籤"
+                        value={input}
+                        onChange={e => setInput(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && handleAdd()}
+                    />
+                    <button onClick={handleAdd}
+                        className="px-4 py-2 bg-amber-700 text-white rounded-xl font-black hover:bg-amber-900">新增</button>
+                </div>
+                <div className="flex gap-2">
+                    <button onClick={() => onSave(items)}
+                        className="flex-1 py-2 bg-amber-700 text-white rounded-xl font-black hover:bg-amber-900">儲存</button>
+                    <button onClick={onClose}
+                        className="flex-1 py-2 bg-gray-200 rounded-xl font-black hover:bg-gray-300">取消</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 主頁面
 // ─────────────────────────────────────────────────────────────────────────────
 const CashDrawerPage = () => {
@@ -183,9 +275,9 @@ const CashDrawerPage = () => {
     const [pinModal, setPinModal] = useState(null);
     const [drawerMsg, setDrawerMsg] = useState(null); // null | 'ok' | 'fail'
 
-    const expenseOptions  = ["冠成", "楓康", "銘利行", "晉新", "小北", "午餐", "晚餐", "市場", "樹森", "米食家", "開元", "瓦斯", "彩券(私人)"];
-    const incomeOptions   = ["退瓶", "廢油"];
-    const nonCashOptions  = ["轉帳", "訂金"];
+    // ── 常用標籤 ──────────────────────────────────────────────────────────────
+    const [quickTags, setQuickTags] = useState(DEFAULT_QUICK_TAGS);
+    const [tagManagerOpen, setTagManagerOpen] = useState(null); // null | 'expense' | 'income' | 'nonCash'
 
     // ── 類別設定 ──────────────────────────────────────────────────────────────
     const [catSettings, setCatSettings] = useState([]);
@@ -200,9 +292,10 @@ const CashDrawerPage = () => {
     const loadInvoices = async () => {
         setIsLoading(true);
         try {
-            const [invData, cats] = await Promise.all([getInvoices(), getCategorySettings()]);
+            const [invData, cats, tags] = await Promise.all([getInvoices(), getCategorySettings(), getQuickTags()]);
             setInvoices(invData);
             setCatSettings(cats);
+            setQuickTags(tags);
         } catch (e) { console.error(e); }
         finally { setIsLoading(false); }
     };
@@ -521,9 +614,9 @@ const CashDrawerPage = () => {
                                 ))}
                             </div>
                             <div className="flex flex-wrap gap-2 mb-4 p-2 bg-gray-50 rounded-lg">
-                                {(newType === 'income'   ? incomeOptions
-                                  : newType === 'non-cash' ? nonCashOptions
-                                  : expenseOptions
+                                {(newType === 'income'   ? quickTags.income
+                                  : newType === 'non-cash' ? quickTags.nonCash
+                                  : quickTags.expense
                                 ).map(opt => (
                                     <button key={opt} onClick={() => setNewNote(opt)}
                                         className={`px-4 py-1 rounded-lg text-[13px] font-bold border transition-colors
@@ -531,6 +624,13 @@ const CashDrawerPage = () => {
                                         {opt}
                                     </button>
                                 ))}
+                                <button
+                                    onClick={() => setTagManagerOpen(
+                                        newType === 'income' ? 'income' : newType === 'non-cash' ? 'nonCash' : 'expense'
+                                    )}
+                                    className="px-3 py-1 rounded-lg text-[13px] font-bold border border-dashed border-gray-400 text-gray-400 hover:border-amber-700 hover:text-amber-700 transition-colors">
+                                    管理標籤
+                                </button>
                             </div>
                             <div className="flex gap-3">
                                 <input type="text" placeholder="項目說明" value={newNote}
@@ -831,6 +931,21 @@ const CashDrawerPage = () => {
                         </div>
                     </div>
                 </div>
+            )}
+
+            {/* 常用標籤管理 Modal */}
+            {tagManagerOpen && (
+                <TagManagerModal
+                    type={tagManagerOpen}
+                    tags={quickTags[tagManagerOpen]}
+                    onSave={async (newTags) => {
+                        const updated = { ...quickTags, [tagManagerOpen]: newTags };
+                        setQuickTags(updated);
+                        await saveQuickTags(updated);
+                        setTagManagerOpen(null);
+                    }}
+                    onClose={() => setTagManagerOpen(null)}
+                />
             )}
         </div>
     );
