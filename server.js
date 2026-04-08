@@ -1429,7 +1429,7 @@ app.post('/api/remarks', async (req, res) => {
         options: b.options || [],
         applies_to: b.appliesTo || [],
         option_item_map: b.optionItemMap || {},
-        sort_order: b.sortOrder || 99,
+        sort_order: b.sortOrder ?? 99,
     };
     const { data, error } = await supabase.from('remark_groups').upsert(row).select().single();
     if (error) return res.status(500).json({ error: error.message });
