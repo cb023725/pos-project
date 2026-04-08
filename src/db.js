@@ -153,6 +153,18 @@ export async function saveQuickTags(tags) {
     return api('POST', '/api/settings/quick_tags', { value: JSON.stringify(tags) });
 }
 
+// ── 通用 app_settings 讀寫 ────────────────────────────────────────────────
+export async function getSettingValue(key, defaultValue = null) {
+    try {
+        const { value } = await api('GET', `/api/settings/${key}`);
+        if (value !== undefined && value !== null) return value;
+    } catch {}
+    return defaultValue;
+}
+export async function saveSettingValue(key, value) {
+    return api('POST', `/api/settings/${key}`, { value });
+}
+
 // ── 庫存異動紀錄 ──────────────────────────────────────────────
 export async function getInventoryLogs(itemId) {
     const params = itemId ? `?item_id=${encodeURIComponent(itemId)}` : '';

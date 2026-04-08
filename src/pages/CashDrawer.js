@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { getInvoices, getLastCloseTime, performDayClose, getCategorySettings, getQuickTags, saveQuickTags, DEFAULT_QUICK_TAGS } from '../db';
+import { getInvoices, getLastCloseTime, performDayClose, getCategorySettings, getQuickTags, saveQuickTags, DEFAULT_QUICK_TAGS, getSettingValue, saveSettingValue } from '../db';
 
 const BACKEND_URL = '';
 const RESERVE_KEY      = 'pos_reserve_amount';
@@ -30,6 +30,7 @@ const calcFrozenAmount = (invList) =>
 const PASSWORD_KEY     = 'pos_cash_password';
 const TX_KEY           = 'pos_pending_transactions';
 const CLOSE_REPORT_KEY = 'pos_last_close_report';
+const DENOM_KEY        = 'pos_denominations';
 
 const DEFAULT_PASSWORD = '1234';
 const DEFAULT_RESERVE  = 3000;
@@ -247,10 +248,7 @@ const CashDrawerPage = () => {
     const [isLoading, setIsLoading] = useState(true);
 
     // ── 臨時收支 ──────────────────────────────────────────────────────────────
-    const [transactions, setTransactions] = useState(() => {
-        const saved = localStorage.getItem(TX_KEY);
-        return saved ? JSON.parse(saved) : [];
-    });
+    const [transactions, setTransactions] = useState([]);
     const [newNote, setNewNote]     = useState('');
     const [newAmount, setNewAmount] = useState('');
     const [newType, setNewType]     = useState('expense');
@@ -258,13 +256,13 @@ const CashDrawerPage = () => {
     // ── 點鈔 ──────────────────────────────────────────────────────────────────
     const denoms = [1000, 500, 100, 50, 10, 5, 1];
     const inputRefs = useRef({});
-    const [denominations, setDenominations] = useState({ 1000: 0, 500: 0, 100: 0, 50: 0, 10: 0, 5: 0, 1: 0 });
+    const [denominations, setDenominations] = useState(() => {
+        const saved = localStorage.getItem(DENOM_KEY);
+        return saved ? JSON.parse(saved) : { 1000: 0, 500: 0, 100: 0, 50: 0, 10: 0, 5: 0, 1: 0 };
+    });
 
     // ── 零用金 ────────────────────────────────────────────────────────────────
-    const [reserveAmount, setReserveAmount] = useState(() => {
-        const v = localStorage.getItem(RESERVE_KEY);
-        return v !== null ? parseInt(v, 10) : DEFAULT_RESERVE;
-    });
+    const [reserveAmount, setReserveAmount] = useState(DEFAULT_RESERVE);
     const reserveTimerRef      = useRef(null);
     const reserveDidLongPress  = useRef(false);
     const [editReserveOpen, setEditReserveOpen]   = useState(false);
@@ -286,16 +284,29 @@ const CashDrawerPage = () => {
     useEffect(() => { loadInvoices(); }, []);
 
     useEffect(() => {
-        localStorage.setItem(TX_KEY, JSON.stringify(transactions));
+        saveSettingValue('pending_transactions', JSON.stringify(transactions)).catch(() => {});
+        localStorage.setItem(TX_KEY, JSON.stringify(transactions)); // 本機備份
     }, [transactions]);
+
+    useEffect(() => {
+        localStorage.setItem(DENOM_KEY, JSON.stringify(denominations));
+    }, [denominations]);
 
     const loadInvoices = async () => {
         setIsLoading(true);
         try {
-            const [invData, cats, tags] = await Promise.all([getInvoices(), getCategorySettings(), getQuickTags()]);
+            const [invData, cats, tags, reserveRaw, txRaw] = await Promise.all([
+                getInvoices(),
+                getCategorySettings(),
+                getQuickTags(),
+                getSettingValue('reserve_amount', null),
+                getSettingValue('pending_transactions', null),
+            ]);
             setInvoices(invData);
             setCatSettings(cats);
             setQuickTags(tags);
+            if (reserveRaw !== null) setReserveAmount(parseInt(reserveRaw, 10));
+            if (txRaw !== null) setTransactions(JSON.parse(txRaw));
         } catch (e) { console.error(e); }
         finally { setIsLoading(false); }
     };
@@ -450,7 +461,8 @@ const CashDrawerPage = () => {
         const v = parseInt(editReserveInput, 10);
         if (!isNaN(v) && v >= 0) {
             setReserveAmount(v);
-            localStorage.setItem(RESERVE_KEY, String(v));
+            saveSettingValue('reserve_amount', String(v)).catch(() => {});
+            localStorage.setItem(RESERVE_KEY, String(v)); // 本機備份
         }
         setEditReserveOpen(false);
     };
@@ -541,9 +553,13 @@ const CashDrawerPage = () => {
         localStorage.setItem(CLOSE_REPORT_KEY, JSON.stringify(closeData));
 
         await performDayClose();
-        localStorage.setItem(RESERVE_KEY, String(finalReserve));
         setTransactions([]);
+        await saveSettingValue('pending_transactions', JSON.stringify([]));
         localStorage.removeItem(TX_KEY);
+        await saveSettingValue('reserve_amount', String(finalReserve));
+        localStorage.setItem(RESERVE_KEY, String(finalReserve));
+        setDenominations({ 1000: 0, 500: 0, 100: 0, 50: 0, 10: 0, 5: 0, 1: 0 });
+        localStorage.removeItem(DENOM_KEY);
         setIsClosed(true);
 
         await sendPrintClose(closeData);
