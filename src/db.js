@@ -372,6 +372,9 @@ export async function getRemarkGroups() {
 export async function saveRemarkGroup(group) {
     await api('POST', '/api/remarks', group);
 }
+export async function deleteRemarkGroup(id) {
+    await api('DELETE', `/api/remarks/${id}`);
+}
 export async function migrateRemarkGroups() {
     const existing = await api('GET', '/api/remarks');
     // 若資料存在且至少有一筆有效選項，則不重新初始化

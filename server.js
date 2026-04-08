@@ -127,7 +127,7 @@ const QTY_BOX_H = 20;   // 數量框高
 const QTY_PAD   = 3;    // 名稱與數量框間距
 const TEXT_W    = CONT_W - QTY_BOX_W - QTY_PAD;  // 品項名稱可用寬度
 
-// 分類排列順序（前三張廚房單，後兩張吧台單）
+// 廚房單分類列印順序：小點 → 主餐 → 單點 → 飲品 → 冷凍包
 const CAT_ORDER    = ['小點', '主餐', '單點', '飲品', '冷凍包'];
 const KITCHEN_CATS = new Set(['小點', '主餐', '單點']);
 const BAR_CATS     = new Set(['飲品', '冷凍包']);
@@ -151,7 +151,7 @@ function mergeNoRemarkItems(items) {
     return order;
 }
 
-// 依分類分組，並依 CAT_ORDER 排序
+// 依分類分組：分類依 CAT_ORDER 排序，同分類內品項依 sortOrder 排序
 function groupByCategory(items) {
     const map = new Map();
     for (const item of items) {
@@ -165,7 +165,10 @@ function groupByCategory(items) {
             const bi = CAT_ORDER.indexOf(b);
             return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
         })
-        .map(([category, items]) => ({ category, items }));
+        .map(([category, catItems]) => ({
+            category,
+            items: catItems.slice().sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99)),
+        }));
 }
 
 // 出單短字：截到最多 8 個字元

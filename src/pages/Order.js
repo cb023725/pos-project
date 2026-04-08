@@ -17,6 +17,7 @@ import {
     resetAllSoldOut,
     getRemarkGroups,
     getCategorySettings,
+    DEFAULT_CATEGORY_SETTINGS,
 } from '../db';
 
 // ----------------------------------------------------------------------
@@ -80,7 +81,7 @@ const useDynamicVh = () => {
 
 // --- 常數定義 ---
 const TABLE_OPTIONS = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', '外帶'];
-const CATEGORY_ORDER = ['小點', '主餐', '飲品', '冷凍包', '單點']; // fallback only
+const CATEGORY_ORDER = ['主餐', '小點', '飲品', '冷凍包', '單點'];
 
 // --- 輔助函數 ---
 const formatCurrency = (number) => {
@@ -693,22 +694,9 @@ const TakeoutCustomerInfo = ({ customerName, setCustomerName, customerPhone, set
     );
 };
 
-// ─── 備註排序順序（依品項類型） ─────────────────────────────────────────────
-const PASTA_ITEM_IDS = new Set([
-    'pork_noodle','mentaiko_pasta','shrimp_pasta','salted_pork_pasta','mushroom_pasta',
-    'pork_noodle1','mentaiko_pasta1','shrimp_pasta1','salted_pork_pasta1','mushroom_pasta1',
-    'fried_egg',
-]);
-const PASTA_GROUP_ORDER  = ['bread_rice','egg_type','side_choice','side_veg','noodle','flavor','other','drink_temp','coke_ice','honey_ver','clam_shrimp','rice_amount'];
-const DEFAULT_GROUP_ORDER = ['bread_rice','rice_amount','side_choice','side_veg','other','flavor','egg_type','noodle','drink_temp','coke_ice','honey_ver','clam_shrimp'];
-
-const sortRemarkGroups = (groups, itemId) => {
-    const order = PASTA_ITEM_IDS.has(itemId) ? PASTA_GROUP_ORDER : DEFAULT_GROUP_ORDER;
-    return [...groups].sort((a, b) => {
-        const ai = order.indexOf(a.id);
-        const bi = order.indexOf(b.id);
-        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-    });
+// ─── 備註群組排序（依 DB sortOrder） ────────────────────────────────────────
+const sortRemarkGroups = (groups) => {
+    return [...groups].sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99));
 };
 
 // 根據 optionItemMap 過濾出該品項可看到的選項
@@ -755,7 +743,7 @@ const RemarkSelectionModal = ({ item, groups, initialRemarks, onToggle, onCancel
 
     if (!item) return null;
 
-    const sortedGroups = sortRemarkGroups(groups, item.id);
+    const sortedGroups = sortRemarkGroups(groups);
 
     // 計算目前 selections 對應的備註陣列
     const computeRemarks = (sels) => {
@@ -851,7 +839,7 @@ const OrderPage = () => {
     const { currentOrder, menuItems } = state;
 
     // --- 狀態與 Hooks ---
-    const [selectedCategory, setSelectedCategory] = useState(CATEGORY_ORDER[1] || CATEGORY_ORDER[0]);
+    const [selectedCategory, setSelectedCategory] = useState('主餐');
     const [soldOutItem, setSoldOutItem] = useState(null); // 停售確認 modal
     const [depletedConfirmItem, setDepletedConfirmItem] = useState(null); // 售完確認 modal
     const [stockLimitWarning, setStockLimitWarning] = useState(null); // 即時庫存不足警告
@@ -878,7 +866,7 @@ const OrderPage = () => {
 
     const [originalItems, setOriginalItems] = useState([]);
 
-    const [isLoading, setIsLoading] = useState(true);
+    const [isLoading, setIsLoading] = useState(false);
     const [isDirty, setIsDirty] = useState(false); // 標記訂單是否有變動
     const [openTimestamp, setOpenTimestamp] = useState(initialOpenTime);
     const [sendTime, setSendTime] = useState(location.state?.sendTime || null);
@@ -941,7 +929,7 @@ const OrderPage = () => {
 
     // 庫存品項（for 即時庫存驗證，與 menuItems 分開存放）
     const [invItems, setInvItems] = useState([]);
-    const [categorySettings, setCategorySettings] = useState([]);
+    const [categorySettings, setCategorySettings] = useState(DEFAULT_CATEGORY_SETTINGS);
 
     // --- 資料載入邏輯 ---
     const loadMenuData = useCallback(async () => {
@@ -1131,7 +1119,6 @@ const OrderPage = () => {
     useEffect(() => {
         // 根據桌號載入或清空訂單
         if (tableNumber && menuItems.length > 0) {
-            setIsLoading(true);
             loadOpenOrder(tableNumber);
         }
         if (!tableNumber) {
