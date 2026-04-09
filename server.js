@@ -1127,20 +1127,57 @@ app.put('/api/tables/:tableNumber', async (req, res) => {
 app.post('/api/tables/:tableNumber/reset', async (req, res) => {
     const tn = req.params.tableNumber;
     const now = new Date().toISOString();
-    // 找到該桌的訂單
-    const { data: tableRow } = await supabase.from('tables').select('*').eq('table_number', tn).single();
-    if (tableRow?.order_id) {
-        const { data: ord } = await supabase.from('orders').select('*').eq('id', tableRow.order_id).single();
-        if (ord) {
-            const newStatus = ord.status === 'paid' ? 'archived_paid' : null;
-            if (newStatus) {
-                await supabase.from('orders').update({ status: newStatus, updated_at: now }).eq('id', ord.id);
-            } else {
-                await supabase.from('orders').delete().eq('id', ord.id);
-            }
+    const { consumeInventory = false } = req.body || {};
+    // 優先使用 body 傳入的 orderId（外帶棄單需要），否則從 tables 表查
+    let ord = null;
+    if (req.body.orderId) {
+        const { data } = await supabase.from('orders').select('*').eq('id', req.body.orderId).single();
+        ord = data;
+    } else {
+        const { data: tableRow } = await supabase.from('tables').select('*').eq('table_number', tn).single();
+        if (tableRow?.order_id) {
+            const { data } = await supabase.from('orders').select('*').eq('id', tableRow.order_id).single();
+            ord = data;
         }
     }
-    await supabase.from('tables').upsert({ table_number: tn, status: 'idle', order_id: null, updated_at: now });
+    if (ord) {
+        const newStatus = ord.status === 'paid'   ? 'archived_paid'
+                        : ord.status === 'served' ? 'abandoned'   // 有餐未結帳 → 保留 orderID
+                        : null;                                    // new/open → 直接刪除
+        if (newStatus) {
+            await supabase.from('orders').update({ status: newStatus, updated_at: now }).eq('id', ord.id);
+            // 棄單庫存扣除（依員工選擇）
+            // 注意：庫存只在結帳時扣除，所以只處理「尚未結帳」的品項（isPaid !== true）
+            if (newStatus === 'abandoned' && consumeInventory) {
+                const merged = new Map();
+                (ord.items || []).filter(it => !it.isPaid).forEach(it => {
+                    const e = merged.get(it.id);
+                    if (e) e.quantity += (it.quantity || 1);
+                    else merged.set(it.id, { ...it, quantity: it.quantity || 1 });
+                });
+                for (const [, it] of merged) {
+                    const { data: mi } = await supabase.from('menu_items').select('stock,consumes').eq('id', it.id).single();
+                    if (!mi) continue;
+                    const qty = it.quantity;
+                    if (mi.stock != null) {
+                        await supabase.from('menu_items').update({ stock: mi.stock - qty }).eq('id', it.id);
+                        await supabase.from('inventory_logs').insert({ item_id: it.id, item_name: it.name, change_amount: -qty, note: '棄單消耗' });
+                    }
+                    for (const cId of (mi.consumes || [])) {
+                        const { data: ci } = await supabase.from('menu_items').select('name,stock').eq('id', cId).single();
+                        if (!ci || ci.stock == null) continue;
+                        await supabase.from('menu_items').update({ stock: ci.stock - qty }).eq('id', cId);
+                        await supabase.from('inventory_logs').insert({ item_id: cId, item_name: ci.name, change_amount: -qty, note: `棄單消耗 (${it.name})` });
+                    }
+                }
+            }
+        } else {
+            await supabase.from('orders').delete().eq('id', ord.id);
+        }
+    }
+    if (tn !== '外帶') {
+        await supabase.from('tables').upsert({ table_number: tn, status: 'idle', order_id: null, updated_at: now });
+    }
     res.json({ ok: true });
 });
 // 佔位但不開單（occupyTableWithoutOrder）
@@ -1282,58 +1319,66 @@ app.post('/api/orders/:id/complete', async (req, res) => {
     const finalItems = newItems || existing.items || [];
     const currentTotal = finalItems.reduce((s, i) => s + (i.price||0) * (i.quantity||1), 0);
     const prevPaid = existing.paid_amount || 0;
-    const amountNow = currentTotal - prevPaid;
+
+    // 查已開立的發票，避免重複計入庫存／重複開立
+    const { data: prevInvs } = await supabase.from('invoices').select('*').eq('order_id', orderId).eq('status', '已開立');
+    const alreadyCounted = new Map();
+    (prevInvs||[]).forEach(inv => (inv.items_snapshot||[]).forEach(it => {
+        alreadyCounted.set(it.id, (alreadyCounted.get(it.id)||0) + (it.quantity||1));
+    }));
+
+    // 本次結帳品項：
+    // - 全額結帳：所有品項
+    // - 部分結帳：僅 isPaid=true 的品項（本次被選中結帳的）
+    const itemsToCount = isFullyPaid ? finalItems : finalItems.filter(it => it.isPaid);
+    const merged = new Map();
+    itemsToCount.forEach(it => {
+        const e = merged.get(it.id);
+        if (e) e.quantity += it.quantity; else merged.set(it.id, { ...it });
+    });
+
+    // 扣掉已開立發票中已計入的數量，得到本次實際新增的快照
+    const snapshot = [];
+    merged.forEach((it) => {
+        const diff = it.quantity - (alreadyCounted.get(it.id)||0);
+        if (diff > 0) snapshot.push({ ...it, quantity: diff });
+    });
+
+    const amountNow = snapshot.reduce((s, it) => s + (it.price||0) * (it.quantity||1), 0);
+    const newPaidAmount = prevPaid + amountNow;
 
     await supabase.from('orders').update({
         status: isFullyPaid ? 'paid' : 'served',
         items: finalItems, total: currentTotal,
-        paid_amount: isFullyPaid ? currentTotal : prevPaid,
+        paid_amount: newPaidAmount,
         send_time: sendTime || existing.send_time || Date.now(),
         updated_at: now,
     }).eq('id', orderId);
 
-    if (isFullyPaid && amountNow > 0) {
-        // 查已開立的發票（避免重複）
-        const { data: prevInvs } = await supabase.from('invoices').select('*').eq('order_id', orderId).eq('status', '已開立');
-        const alreadyCounted = new Map();
-        (prevInvs||[]).forEach(inv => (inv.items_snapshot||[]).forEach(it => {
-            alreadyCounted.set(it.id, (alreadyCounted.get(it.id)||0) + (it.quantity||1));
-        }));
-        // 合計所有品項
-        const merged = new Map();
-        finalItems.forEach(it => {
-            const e = merged.get(it.id);
-            if (e) e.quantity += it.quantity; else merged.set(it.id, { ...it });
-        });
-        const snapshot = [];
-        merged.forEach((it) => {
-            const diff = it.quantity - (alreadyCounted.get(it.id)||0);
-            if (diff > 0) snapshot.push({ ...it, quantity: diff });
-        });
-        const invoiceNumber = `INV-${Date.now()}`;
-        const { data: newInv } = await supabase.from('invoices').insert({
-            invoice_number: invoiceNumber, payment_time: now,
+    if (amountNow > 0) {
+        // 建立發票（部分結帳也會建立，每次結帳一張）
+        await supabase.from('invoices').insert({
+            invoice_number: `INV-${Date.now()}`,
+            payment_time: now,
             order_id: orderId, daily_order_no: existing.daily_order_no,
             order_type: tableNumber === '外帶' ? '外帶' : '內用',
             table_name: tableNumber, customer_count: existing.customer_count||0,
             total: amountNow, amount: amountNow,
             items_snapshot: snapshot, status: '已開立', void_time: null,
-        }).select().single();
+        });
         // 扣庫存 + 寫紀錄
         for (const it of snapshot) {
             const { data: mi } = await supabase.from('menu_items').select('stock,consumes').eq('id', it.id).single();
             if (!mi) continue;
             const qty = it.quantity || 1;
             if (mi.stock != null) {
-                const newStock = mi.stock - qty;
-                await supabase.from('menu_items').update({ stock: newStock }).eq('id', it.id);
+                await supabase.from('menu_items').update({ stock: mi.stock - qty }).eq('id', it.id);
                 await supabase.from('inventory_logs').insert({ item_id: it.id, item_name: it.name, change_amount: -qty, note: '點餐消耗' });
             }
             for (const cId of (mi.consumes||[])) {
                 const { data: ci } = await supabase.from('menu_items').select('name,stock').eq('id', cId).single();
                 if (!ci || ci.stock == null) continue;
-                const newStock = ci.stock - qty;
-                await supabase.from('menu_items').update({ stock: newStock }).eq('id', cId);
+                await supabase.from('menu_items').update({ stock: ci.stock - qty }).eq('id', cId);
                 await supabase.from('inventory_logs').insert({ item_id: cId, item_name: ci.name, change_amount: -qty, note: `點餐消耗 (${it.name})` });
             }
         }

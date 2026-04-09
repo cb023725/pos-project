@@ -263,9 +263,12 @@ export async function occupyTableWithoutOrder(tableNumber, timestamp) {
     await api('POST', `/api/tables/${tableNumber}/occupy`, { timestamp });
     return true;
 }
-export async function resetTableStatus(tableNumber) {
-    if (!tableNumber || tableNumber === '外帶') return false;
-    await api('POST', `/api/tables/${tableNumber}/reset`);
+export async function resetTableStatus(tableNumber, orderId, consumeInventory = false) {
+    if (!tableNumber) return false;
+    const body = {};
+    if (orderId) body.orderId = orderId;
+    if (consumeInventory) body.consumeInventory = true;
+    await api('POST', `/api/tables/${tableNumber}/reset`, body);
     return true;
 }
 

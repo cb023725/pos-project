@@ -79,11 +79,7 @@ const TableCard = ({ tableData, handleTableClick, handleToggleItemSentOnTable, h
     const handleQuickReset = (e) => {
         e.stopPropagation();
         if (isLoading || !currentOrder) return;
-        if (isUnpaid && window.confirm('⚠️ 確定要執行清桌嗎？')) {
-            handleResetTable(tableId, currentOrder.orderId);
-        } else if (!isUnpaid) {
-            handleResetTable(tableId, currentOrder.orderId);
-        }
+        handleResetTable(tableId, currentOrder.orderId);
     };
 
     const handleActionButtonClick = (e) => {

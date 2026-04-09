@@ -409,6 +409,7 @@ const RemarkManagementPage = () => {
     const [menuItems, setMenuItems] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [showAddModal, setShowAddModal] = useState(false);
+    const [saveError, setSaveError] = useState(null);
 
     const load = useCallback(async () => {
         const [g, m] = await Promise.all([getRemarkGroups(), getMenuItems()]);
@@ -445,7 +446,12 @@ const RemarkManagementPage = () => {
         [newGroups[index], newGroups[target]] = [newGroups[target], newGroups[index]];
         const reordered = newGroups.map((g, i) => ({ ...g, sortOrder: i }));
         setGroups(reordered);
-        await reorderRemarkGroups(reordered);
+        try {
+            await reorderRemarkGroups(reordered);
+            setSaveError(null);
+        } catch (e) {
+            setSaveError(e.message);
+        }
     };
 
     if (isLoading) {
@@ -481,6 +487,13 @@ const RemarkManagementPage = () => {
                     新增群組
                 </button>
             </div>
+
+            {/* 排序儲存錯誤提示 */}
+            {saveError && (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-3 mb-4 text-sm text-red-700 font-bold">
+                    ⚠️ 排序儲存失敗：{saveError}
+                </div>
+            )}
 
             {/* 說明 */}
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 text-sm text-blue-700">

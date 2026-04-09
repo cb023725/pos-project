@@ -564,6 +564,75 @@ const PartialCheckoutConfirmModal = ({ isOpen, items, onConfirm, onCancel }) => 
     );
 };
 
+// --- 棄單確認彈窗 ---
+const AbandonOrderModal = ({ isOpen, tableNumber, onConfirm, onCancel }) => {
+    const navigate = useNavigate();
+    const [consumeChoice, setConsumeChoice] = useState(null);
+    useEffect(() => { if (!isOpen) setConsumeChoice(null); }, [isOpen]);
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+                <div className="flex flex-col items-center pt-8 pb-5 px-6">
+                    <div className="w-20 h-20 rounded-full bg-red-50 border-[3px] border-red-400 flex items-center justify-center mb-5">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                            <line x1="12" y1="9" x2="12" y2="13"/>
+                            <line x1="12" y1="17" x2="12.01" y2="17"/>
+                        </svg>
+                    </div>
+                    <h3 className="text-2xl font-black text-gray-800 mb-3">客人離開確認</h3>
+                    <p className="text-lg text-gray-600 text-center leading-relaxed font-bold">
+                        此單尚未結帳，<br />確認客人已離開嗎？
+                    </p>
+                    <div className="mt-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3 w-full text-center">
+                        <span className="text-sm text-red-500 font-bold">
+                            {tableNumber && tableNumber !== '外帶' ? `${tableNumber} 訂單` : '此訂單'}將標記為棄單，不產生結帳記錄
+                        </span>
+                    </div>
+                    <div className="w-full mt-4">
+                        <p className="text-xs font-bold text-gray-400 mb-2 text-center tracking-wide">食材備製狀態</p>
+                        <div className="grid grid-cols-2 gap-2">
+                            <button
+                                onClick={() => setConsumeChoice(true)}
+                                className={`py-3 px-2 rounded-xl border-2 text-center transition-all ${consumeChoice === true ? 'bg-amber-500 border-amber-500 text-white' : 'border-gray-200 text-gray-600 hover:border-amber-300'}`}
+                            >
+                                <div className="text-xl mb-0.5">🍳</div>
+                                <div className="font-black text-sm">食材已備製</div>
+                                <div className="text-xs opacity-75">扣除庫存</div>
+                            </button>
+                            <button
+                                onClick={() => setConsumeChoice(false)}
+                                className={`py-3 px-2 rounded-xl border-2 text-center transition-all ${consumeChoice === false ? 'bg-green-500 border-green-500 text-white' : 'border-gray-200 text-gray-600 hover:border-green-300'}`}
+                            >
+                                <div className="text-xl mb-0.5">🚫</div>
+                                <div className="font-black text-sm">食材未備製</div>
+                                <div className="text-xs opacity-75">庫存不異動</div>
+                            </button>
+                        </div>
+                    </div>
+                    <button onClick={() => navigate('/inventory')} className="mt-3 text-xs text-blue-400 font-bold hover:text-blue-600 transition-colors">
+                        查看庫存頁面 →
+                    </button>
+                </div>
+                <div className="border-t border-gray-100" />
+                <div className="flex divide-x divide-gray-100">
+                    <button onClick={onCancel} className="flex-1 py-5 text-gray-400 font-black text-xl hover:bg-gray-50 transition-colors">
+                        取消
+                    </button>
+                    <button
+                        onClick={() => consumeChoice !== null && onConfirm(consumeChoice)}
+                        disabled={consumeChoice === null}
+                        className={`flex-1 py-5 font-black text-xl transition-colors ${consumeChoice === null ? 'text-gray-300 cursor-not-allowed' : 'text-red-500 hover:bg-red-50'}`}
+                    >
+                        確認棄單
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 // --- 外帶顧客資訊元件 ---
 const TakeoutCustomerInfo = ({ customerName, setCustomerName, customerPhone, setCustomerPhone, needsUtensils, setNeedsUtensils, pickupTime, setPickupTime, customerSuggestions, setCustomerSuggestions }) => {
     const phoneSearchTimeout = React.useRef(null);
@@ -879,6 +948,7 @@ const OrderPage = () => {
 
     const [isCheckoutOptionModalOpen, setIsCheckoutOptionModalOpen] = useState(false);
     const [checkoutResult, setCheckoutResult] = useState(null); // { total, isPartial, navigateTo }
+    const [showAbandonModal, setShowAbandonModal] = useState(false);
     const [partialConfirmItems, setPartialConfirmItems] = useState(null); // 分開結帳確認 modal
     const [isPartialCheckoutMode, setIsPartialCheckoutMode] = useState(false);
     const [selectedItemsForCheckout, setSelectedItemsForCheckout] = useState([]); // 部分結帳時選中的項目 internalId
@@ -919,6 +989,13 @@ const OrderPage = () => {
         const paidT = paid.reduce((sum, item) => sum + (item.price * item.quantity), 0);
         return { unpaidItems: unpaid, paidItems: paid, unpaidTotal: unpaidT, paidTotal: paidT };
     }, [currentOrder]);
+
+    const selectedTotal = useMemo(() =>
+        currentOrder
+            .filter(item => selectedItemsForCheckout.includes(item.internalId))
+            .reduce((sum, item) => sum + item.price * item.quantity, 0),
+        [currentOrder, selectedItemsForCheckout]
+    );
     
     // 檢查是否可以清桌 (所有項目都已結帳)
     const canAbortOrder = useMemo(() => {
@@ -1272,30 +1349,46 @@ const OrderPage = () => {
             } finally {
                 setIsLoading(false);
             }
-        } else if (isDirty && isStructureChanged) {
+        } else if (isDirty && isStructureChanged && orderStatus !== 'new') {
             const confirmDiscard = window.confirm("您有未儲存的點餐變動！\n確定要返回嗎？");
             if (!confirmDiscard) return;
             setIsDirty(false);
         }
-        
-        // 其餘原本的佔桌邏輯...
+
+        // 佔桌邏輯：status='new' 且無已存訂單 → 佔桌（若人數有變動則建立含人數的訂單記錄）
         if (orderStatus === 'new' && currentOrder.length === 0 && tableNumber && tableNumber !== '外帶') {
-            setIsLoading(true);
-            await occupyTableWithoutOrder(tableNumber, openTimestamp);
-            setIsLoading(false);
+            if (!currentOrderId) {
+                setIsLoading(true);
+                if (hasCountChanged) {
+                    await createNewOrder({ table: tableNumber, status: 'open', items: [], customerCount, total: 0, subTotal: 0, timestamp: openTimestamp });
+                } else {
+                    await occupyTableWithoutOrder(tableNumber, openTimestamp);
+                }
+                setIsLoading(false);
+            }
         }
         navigate(isTakeout ? '/takeout' : '/tables');
     };
 
     const handleAbortOrder = async () => {
         if (!canAbortOrder) {
-            alert("尚有未結帳項目，請先結清或手動移除所有項目。");
+            // 有未結帳項目 → 顯示棄單確認彈窗
+            setShowAbandonModal(true);
             return;
         }
         if (!window.confirm(`確定 ${tableNumber} 客人離開並清空計時？`)) return;
         setIsLoading(true);
         try {
             await resetTableStatus(tableNumber);
+            navigate(isTakeout ? '/takeout' : '/tables');
+        } catch (e) { alert("操作失敗"); } finally { setIsLoading(false); }
+    };
+
+    const handleConfirmAbandon = async (consumeInventory) => {
+        setShowAbandonModal(false);
+        setIsLoading(true);
+        try {
+            await resetTableStatus(tableNumber, currentOrderId, consumeInventory);
             navigate(isTakeout ? '/takeout' : '/tables');
         } catch (e) { alert("操作失敗"); } finally { setIsLoading(false); }
     };
@@ -1578,7 +1671,7 @@ const handleConfirmOrder = async () => {
             setCheckoutResult({
                 total: totalToPay,
                 isPartial,
-                navigateTo: finalStatus === 'paid' ? (isTakeout ? '/takeout' : '/tables') : null,
+                navigateTo: (!isPartial && finalStatus === 'paid') ? (isTakeout ? '/takeout' : '/tables') : null,
             });
 
         } catch (e) {
@@ -1638,12 +1731,21 @@ const handleConfirmOrder = async () => {
     };
     
     // 點擊訂單項目行事件 (正常模式下僅靜態顯示，分帳模式下選取)
-    const handleItemClick = (item) => {
-        if (item.isPaid || isLoading) return; 
+    const handleItemClick = (item, groupIds) => {
+        if (item.isPaid || isLoading) return;
 
         if (isPartialCheckoutMode) {
-            // 分帳模式：選取項目
-            toggleItemSelection(item);
+            if (groupIds && groupIds.length > 1) {
+                // 合併模式：一次全選/全取消該群組所有原始項目
+                const allSelected = groupIds.every(id => selectedItemsForCheckout.includes(id));
+                setSelectedItemsForCheckout(prev =>
+                    allSelected
+                        ? prev.filter(id => !groupIds.includes(id))
+                        : [...prev.filter(id => !groupIds.includes(id)), ...groupIds]
+                );
+            } else {
+                toggleItemSelection(item);
+            }
         } else {
             // 正常模式：不執行任何操作
             return;
@@ -1955,12 +2057,16 @@ const handleTableChange = async (event) => {
 
                                     // 新點的在上、先點的在下：反轉後處理
                                     const reversedUnpaid = [...unpaidItems].reverse();
+                                    // 合併模式：同品項 internalId 群組對應表
+                                    const mergedGroupIds = new Map(); // mergeKey → [internalId, ...]
                                     let displayRows;
                                     if (isOrderMerged) {
                                         const map = new Map();
                                         const order = [];
                                         for (const item of reversedUnpaid) {
                                             const k = mergeKey(item);
+                                            if (!mergedGroupIds.has(k)) mergedGroupIds.set(k, []);
+                                            mergedGroupIds.get(k).push(item.internalId);
                                             if (map.has(k)) {
                                                 map.get(k).quantity += item.quantity;
                                             } else {
@@ -1990,7 +2096,11 @@ const handleTableChange = async (event) => {
                                                     >
                                                         {isOrderMerged ? '展開' : '合併'}
                                                     </button>
-                                                    <span className="text-base font-black pr-1">${formatCurrency(unpaidTotal)}</span>
+                                                    <span className="text-base font-black pr-1">
+                                                        {isPartialCheckoutMode && selectedItemsForCheckout.length > 0
+                                                            ? <span className="text-orange-600">${formatCurrency(selectedTotal)} 已選</span>
+                                                            : `$${formatCurrency(unpaidTotal)}`}
+                                                    </span>
                                                 </div>
                                             </div>
 
@@ -1999,26 +2109,32 @@ const handleTableChange = async (event) => {
                                                 const hasItemRemarks = item.remarks && item.remarks.length > 0;
                                                 const hasApplicableGroups = remarkGroups.some(g => g.appliesTo && g.appliesTo.includes(item.id));
                                                 const isEditingThis = pendingRemarkItem?.editingInternalId === item.internalId;
+                                                const rowGroupIds = isOrderMerged ? (mergedGroupIds.get(mergeKey(item)) || [item.internalId]) : null;
+                                                const isRowSelected = isPartialCheckoutMode && (
+                                                    rowGroupIds
+                                                        ? rowGroupIds.some(id => selectedItemsForCheckout.includes(id))
+                                                        : selectedItemsForCheckout.includes(item.internalId)
+                                                );
                                                 return (
                                                     <div
                                                         key={item.internalId}
-                                                        className={`flex items-start justify-between p-2 border rounded-xl mb-0.5 bg-white shadow-sm transition-colors
+                                                        className={`flex items-center justify-between ${isPartialCheckoutMode ? 'p-3' : 'p-2'} border rounded-xl mb-0.5 bg-white shadow-sm transition-colors
                                                             ${isPartialCheckoutMode
-                                                                ? (selectedItemsForCheckout.includes(item.internalId) ? 'border-orange-500 bg-orange-50 ring-2 ring-orange-500 cursor-pointer' : 'hover:bg-gray-100 cursor-pointer')
+                                                                ? (isRowSelected ? 'border-orange-500 bg-orange-50 ring-2 ring-orange-500 cursor-pointer' : 'hover:bg-gray-100 cursor-pointer')
                                                                 : (hasApplicableGroups ? `cursor-pointer ${isEditingThis ? 'border-teal-400 bg-teal-50 ring-2 ring-teal-400' : 'hover:bg-amber-50 hover:border-amber-200'}` : '')
                                                             }`}
                                                         onClick={isPartialCheckoutMode
-                                                            ? () => handleItemClick(item)
+                                                            ? () => handleItemClick(item, rowGroupIds)
                                                             : (hasApplicableGroups ? () => handleCartItemClick(item) : undefined)
                                                         }
                                                     >
                                                         {/* 1. 出餐圓圈（手動記錄是否已出餐給客人） */}
                                                         <div
-                                                            className="w-5 h-5 mr-2 mt-0.5 flex-shrink-0 flex items-center justify-center cursor-pointer"
+                                                            className="w-5 h-5 mr-2 flex-shrink-0 flex items-center justify-center cursor-pointer"
                                                             onClick={(e) => { e.stopPropagation(); if (!isPartialCheckoutMode) handleToggleItemServed(item); }}
                                                         >
                                                             {isPartialCheckoutMode ? (
-                                                                selectedItemsForCheckout.includes(item.internalId)
+                                                                isRowSelected
                                                                     ? <svg className="w-full h-full text-orange-600" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
                                                                     : <div className="w-full h-full rounded-full border-2 border-gray-400" />
                                                             ) : (
@@ -2128,8 +2244,10 @@ const handleTableChange = async (event) => {
                     <div className="p-3 bg-gray-50 border-t flex-shrink-0">
                         
                         <div className="border p-2 rounded-lg mb-2 bg-white shadow-inner flex justify-between items-center">
-                             <span className="font-bold text-gray-800">總金額</span>
-                             <span className="font-black text-2xl text-red-600">NT$ {formatCurrency(subTotal)}</span>
+                             <span className="font-bold text-gray-800">{isPartialCheckoutMode ? '本次結帳' : '總金額'}</span>
+                             <span className={`font-black text-2xl ${isPartialCheckoutMode ? 'text-orange-600' : 'text-red-600'}`}>
+                                 NT$ {isPartialCheckoutMode ? formatCurrency(selectedTotal) : formatCurrency(subTotal)}
+                             </span>
                         </div>
                         
                         {/* 根據模式顯示不同按鈕 */}
@@ -2179,12 +2297,12 @@ const handleTableChange = async (event) => {
                             )}
 
                             {/* 清桌/離開按鈕，只有在全部 paid 或無項目時才能用 */}
-                            <button 
-                                onClick={handleAbortOrder} 
-                                className={`w-full py-1 font-bold text-xs transition-colors ${canAbortOrder ? 'text-blue-600 hover:bg-blue-50' : 'text-gray-400 cursor-not-allowed'}`} 
+                            <button
+                                onClick={handleAbortOrder}
+                                className={`w-full py-1 font-bold text-xs transition-colors ${canAbortOrder ? 'text-blue-600 hover:bg-blue-50' : 'text-red-400 hover:bg-red-50'}`}
                                 disabled={isLoading}
                             >
-                                客人離開 ({canAbortOrder ? '清空桌位' : '請先結清或手動移除所有項目'})
+                                客人離開 ({canAbortOrder ? '清空桌位' : '棄單離開'})
                             </button>
                         </div>
                     </div>
@@ -2286,6 +2404,13 @@ const handleTableChange = async (event) => {
                 items={partialConfirmItems}
                 onConfirm={handlePartialConfirm}
                 onCancel={() => setPartialConfirmItems(null)}
+            />
+
+            <AbandonOrderModal
+                isOpen={showAbandonModal}
+                tableNumber={tableNumber}
+                onConfirm={handleConfirmAbandon}
+                onCancel={() => setShowAbandonModal(false)}
             />
 
             {/* 停售確認 Modal */}

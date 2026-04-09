@@ -9,15 +9,78 @@ import {
     getTableStatuses,
 } from '../db';
 
-import TableCard from '../components/TableCard'; 
+import TableCard from '../components/TableCard';
 
 const TABLE_OPTIONS = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8'];
+
+const AbandonOrderModal = ({ target, onConfirm, onCancel }) => {
+    const navigate = useNavigate();
+    const [consumeChoice, setConsumeChoice] = React.useState(null);
+    React.useEffect(() => { if (!target) setConsumeChoice(null); }, [target]);
+    if (!target) return null;
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+                <div className="flex flex-col items-center pt-8 pb-5 px-6">
+                    <div className="w-20 h-20 rounded-full bg-red-50 border-[3px] border-red-400 flex items-center justify-center mb-5">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                            <line x1="12" y1="9" x2="12" y2="13"/>
+                            <line x1="12" y1="17" x2="12.01" y2="17"/>
+                        </svg>
+                    </div>
+                    <h3 className="text-2xl font-black text-gray-800 mb-3">客人離開確認</h3>
+                    <p className="text-lg text-gray-600 text-center leading-relaxed font-bold">
+                        此單尚未結帳，<br />確認客人已離開嗎？
+                    </p>
+                    <div className="mt-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3 w-full text-center">
+                        <span className="text-sm text-red-500 font-bold">{target.label} 訂單將標記為棄單，不產生結帳記錄</span>
+                    </div>
+                    <div className="w-full mt-4">
+                        <p className="text-xs font-bold text-gray-400 mb-2 text-center tracking-wide">食材備製狀態</p>
+                        <div className="grid grid-cols-2 gap-2">
+                            <button
+                                onClick={() => setConsumeChoice(true)}
+                                className={`py-3 px-2 rounded-xl border-2 text-center transition-all ${consumeChoice === true ? 'bg-amber-500 border-amber-500 text-white' : 'border-gray-200 text-gray-600 hover:border-amber-300'}`}
+                            >
+                                <div className="text-xl mb-0.5">🍳</div>
+                                <div className="font-black text-sm">食材已備製</div>
+                                <div className="text-xs opacity-75">扣除庫存</div>
+                            </button>
+                            <button
+                                onClick={() => setConsumeChoice(false)}
+                                className={`py-3 px-2 rounded-xl border-2 text-center transition-all ${consumeChoice === false ? 'bg-green-500 border-green-500 text-white' : 'border-gray-200 text-gray-600 hover:border-green-300'}`}
+                            >
+                                <div className="text-xl mb-0.5">🚫</div>
+                                <div className="font-black text-sm">食材未備製</div>
+                                <div className="text-xs opacity-75">庫存不異動</div>
+                            </button>
+                        </div>
+                    </div>
+                    <button onClick={() => navigate('/inventory')} className="mt-3 text-xs text-blue-400 font-bold hover:text-blue-600 transition-colors">
+                        查看庫存頁面 →
+                    </button>
+                </div>
+                <div className="border-t border-gray-100" />
+                <div className="flex divide-x divide-gray-100">
+                    <button onClick={onCancel} className="flex-1 py-5 text-gray-400 font-black text-xl hover:bg-gray-50 transition-colors">取消</button>
+                    <button
+                        onClick={() => consumeChoice !== null && onConfirm(consumeChoice)}
+                        disabled={consumeChoice === null}
+                        className={`flex-1 py-5 font-black text-xl transition-colors ${consumeChoice === null ? 'text-gray-300 cursor-not-allowed' : 'text-red-500 hover:bg-red-50'}`}
+                    >確認棄單</button>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 const TableManagementPage = () => {
     const navigate = useNavigate();
     const location = useLocation();
     const [tableStatuses, setTableStatuses] = useState({});
     const [isLoading, setIsLoading] = useState(true);
+    const [abandonTarget, setAbandonTarget] = useState(null); // { tableNumber, orderId, label }
     const [hasTakeoutOrders, setHasTakeoutOrders] = useState(false);
 
     const tableStatusesRef = useRef(tableStatuses);
@@ -202,22 +265,26 @@ const TableManagementPage = () => {
 
     const handleResetTable = useCallback(async (tableNumber, orderId) => {
         const currentTableData = tableStatusesRef.current[tableNumber];
-        const targetOrder = orderId 
+        const targetOrder = orderId
             ? currentTableData?.orders?.find(o => o.orderId === orderId)
             : currentTableData?.orders?.[0];
 
         const currentStatus = targetOrder?.status;
         const isOnlyOccupied = currentStatus === 'open' && !orderId;
-        const isFullyPaid = currentStatus === 'paid'; 
-        const isServed = currentStatus === 'served'; 
-        
+        const isFullyPaid = currentStatus === 'paid';
+        const isServed = currentStatus === 'served';
+
+        if (isServed) {
+            // 有未結帳餐點 → 顯示棄單確認 modal
+            setAbandonTarget({ tableNumber, orderId, label: tableNumber });
+            return;
+        }
+
         let msg = '';
         if (isFullyPaid) {
             msg = `確定要將 ${tableNumber} 該筆訂單結案並清桌嗎？`;
         } else if (isOnlyOccupied) {
             msg = `確定要取消 ${tableNumber} 的佔位嗎？`;
-        } else if (isServed) {
-            msg = `⚠️ 桌位 ${tableNumber} 此單尚未結帳 (出餐中)。\n若客人已離開，點擊「確定」將強制刪除此單並清桌。`;
         } else {
             alert(`桌位 ${tableNumber} 目前狀態為點餐中，無法直接清桌。`);
             return;
@@ -226,8 +293,8 @@ const TableManagementPage = () => {
         if (window.confirm(msg)) {
             setIsLoading(true);
             try {
-                await resetTableStatus(tableNumber, orderId); 
-                await loadTableStatuses(true); 
+                await resetTableStatus(tableNumber, orderId);
+                await loadTableStatuses(true);
             } catch (error) {
                 console.error("清桌操作失敗:", error);
             } finally {
@@ -235,6 +302,21 @@ const TableManagementPage = () => {
             }
         }
     }, [loadTableStatuses]);
+
+    const handleConfirmAbandon = async (consumeInventory) => {
+        if (!abandonTarget) return;
+        const { tableNumber, orderId } = abandonTarget;
+        setAbandonTarget(null);
+        setIsLoading(true);
+        try {
+            await resetTableStatus(tableNumber, orderId, consumeInventory);
+            await loadTableStatuses(true);
+        } catch (e) {
+            console.error("棄單失敗:", e);
+        } finally {
+            setIsLoading(false);
+        }
+    };
 
     return (
         <div className="h-[100dvh] w-full overflow-hidden grid grid-rows-2 font-sans gap-4 p-4 bg-gray-50">
@@ -300,6 +382,11 @@ const TableManagementPage = () => {
                 </>
             )}
 
+            <AbandonOrderModal
+                target={abandonTarget}
+                onConfirm={handleConfirmAbandon}
+                onCancel={() => setAbandonTarget(null)}
+            />
         </div>
     );
 };

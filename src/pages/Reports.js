@@ -35,7 +35,7 @@ const formatDateTime = (ts) => {
 
 // display dailyOrderNo if available, else zero-padded id
 const displayOrderId = (o) =>
-    o.dailyOrderNo ? String(o.dailyOrderNo).padStart(3, '0') : String(o.orderId || o.id || 0).padStart(3, '0');
+    o.dailyOrderNo ? String(o.dailyOrderNo).padStart(3, '0') : String(o.orderId || o.id || 0).slice(-3).padStart(3, '0');
 
 const today = () => tsToDayTW(Date.now());
 
