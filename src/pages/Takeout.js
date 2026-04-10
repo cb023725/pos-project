@@ -79,6 +79,7 @@ const TakeoutPage = () => {
                     openTimestamp: order.timestamp ? new Date(order.timestamp).getTime() : Date.now(),
                     customerCount: order.customerCount || 1,
                     sendTime: order.sendTime || null,
+                    dailyOrderNo: order.dailyOrderNo || null,
                 }
             });
             return;
@@ -111,6 +112,7 @@ const TakeoutPage = () => {
                 openTimestamp: order.timestamp ? new Date(order.timestamp).getTime() : Date.now(),
                 customerCount: order.customerCount || 1,
                 sendTime: order.sendTime || null,
+                dailyOrderNo: order.dailyOrderNo || null,
             }
         });
     };

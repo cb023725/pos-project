@@ -8,6 +8,7 @@ import {
     createNewOrder,
     updateOrderStatus,
     completeOrderAndReport,
+    assignOrderNo,
     occupyTableWithoutOrder,
     resetTableStatus,
     getTableStatuses,
@@ -565,6 +566,34 @@ const PartialCheckoutConfirmModal = ({ isOpen, items, onConfirm, onCancel }) => 
 };
 
 // --- 棄單確認彈窗 ---
+const ClearTableModal = ({ isOpen, tableNumber, onConfirm, onCancel }) => {
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+                <div className="flex flex-col items-center pt-8 pb-5 px-6">
+                    <div className="w-20 h-20 rounded-full bg-gray-100 border-[3px] border-gray-300 flex items-center justify-center mb-5">
+                        <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                            <polyline points="16 17 21 12 16 7"/>
+                            <line x1="21" y1="12" x2="9" y2="12"/>
+                        </svg>
+                    </div>
+                    <h3 className="text-2xl font-black text-gray-800 mb-2">清桌確認</h3>
+                    <p className="text-base text-gray-500 text-center leading-relaxed font-medium">
+                        <span className="font-black text-gray-700">{tableNumber}</span> 客人離開，<br />確定清除佔位嗎？
+                    </p>
+                </div>
+                <div className="border-t border-gray-100" />
+                <div className="flex divide-x divide-gray-100">
+                    <button onClick={onCancel} className="flex-1 py-5 text-gray-400 font-black text-xl hover:bg-gray-50 transition-colors">取消</button>
+                    <button onClick={onConfirm} className="flex-1 py-5 text-gray-600 font-black text-xl hover:bg-gray-100 transition-colors">確認清桌</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const AbandonOrderModal = ({ isOpen, tableNumber, onConfirm, onCancel }) => {
     const navigate = useNavigate();
     const [consumeChoice, setConsumeChoice] = useState(null);
@@ -914,7 +943,7 @@ const OrderPage = () => {
     const [stockLimitWarning, setStockLimitWarning] = useState(null); // 即時庫存不足警告
     const [showResumeConfirm, setShowResumeConfirm] = useState(false); // 恢復供應確認 modal
     const [currentOrderId, setCurrentOrderId] = useState(initialOrderId);
-    const [dailyOrderNo, setDailyOrderNo] = useState(null);
+    const [dailyOrderNo, setDailyOrderNo] = useState(location.state?.dailyOrderNo || null);
     const [orderStatus, setOrderStatus] = useState(location.state?.orderStatus || (initialOrderId ? 'open' : 'new')); 
     const [tableNumber, setTableNumber] = useState(isTakeout ? '外帶' : initialTableNumber);
     const [customerCount, setCustomerCount] = useState(
@@ -949,6 +978,7 @@ const OrderPage = () => {
     const [isCheckoutOptionModalOpen, setIsCheckoutOptionModalOpen] = useState(false);
     const [checkoutResult, setCheckoutResult] = useState(null); // { total, isPartial, navigateTo }
     const [showAbandonModal, setShowAbandonModal] = useState(false);
+    const [showClearModal,  setShowClearModal]  = useState(false);
     const [partialConfirmItems, setPartialConfirmItems] = useState(null); // 分開結帳確認 modal
     const [isPartialCheckoutMode, setIsPartialCheckoutMode] = useState(false);
     const [selectedItemsForCheckout, setSelectedItemsForCheckout] = useState([]); // 部分結帳時選中的項目 internalId
@@ -1193,6 +1223,17 @@ const OrderPage = () => {
 
     useEffect(() => { loadMenuData().then(() => setIsLoading(false)); }, [loadMenuData]);
 
+    // 全新開桌（非返回既有訂單）→ 立即記錄開桌時間 + 標記桌位佔用
+    useEffect(() => {
+        const isNewTable = !isTakeout && tableNumber && tableNumber !== '外帶'
+            && !initialOrderId && !location.state?.orderStatus;
+        if (isNewTable) {
+            // localStorage 記錄開桌時間（tables.updated_at 會被 Supabase 觸發器覆蓋，不可靠）
+            localStorage.setItem(`table_open_${tableNumber}`, String(initialOpenTime));
+            occupyTableWithoutOrder(tableNumber, initialOpenTime);
+        }
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
     useEffect(() => {
         // 根據桌號載入或清空訂單
         if (tableNumber && menuItems.length > 0) {
@@ -1297,31 +1338,52 @@ const OrderPage = () => {
 
     const handleGoBack = async () => {
         if (isLoading) return;
-        
-        const hasCountChanged = customerCount !== originalCustomerCount;
-        const hasUtensilsChanged = isTakeout && needsUtensils !== originalNeedsUtensils;
-        const hasPickupChanged = isTakeout && pickupTime !== originalPickupTime;
 
-        if ((hasCountChanged || hasUtensilsChanged || hasPickupChanged) && currentOrderId) {
+        const hasCountChanged    = customerCount !== originalCustomerCount;
+        const hasUtensilsChanged = isTakeout && needsUtensils !== originalNeedsUtensils;
+        const hasPickupChanged   = isTakeout && pickupTime !== originalPickupTime;
+        const hasMetaChanged     = hasCountChanged || hasUtensilsChanged || hasPickupChanged;
+
+        const isContentChanged  = JSON.stringify(currentOrder) !== JSON.stringify(originalItems);
+        const stripRemarks      = arr => JSON.stringify(arr.map(({ remarks, ...rest }) => rest));
+        const isStructureChanged = stripRemarks(currentOrder) !== stripRemarks(originalItems);
+
+        const hasAnyChange = isContentChanged || hasMetaChanged;
+
+        if (hasAnyChange) {
+            // 任何變動（品項/人數/備註/設定）→ 統一靜默儲存，不派 dailyOrderNo
             setIsLoading(true);
             try {
                 const itemsToSave = currentOrder.map(({ id, name, price, quantity, isSent, isPaid, category, internalId, sortOrder, remarks }) =>
                     ({ id, name, price, quantity, isSent: !!isSent, isPaid: !!isPaid, category, internalId, sortOrder, remarks: remarks || [] })
                 );
-                await updateOrderStatus({
-                    orderId: currentOrderId,
-                    newStatus: orderStatus,
-                    newItems: itemsToSave,
-                    customerCount: customerCount,
-                    needsUtensils: isTakeout ? needsUtensils : undefined,
-                    pickupTime: isTakeout ? pickupTime : undefined,
-                    sendTime: sendTime,
-                    finishTime: finishTime
-                });
-                setOriginalCustomerCount(customerCount);
-                setOriginalNeedsUtensils(needsUtensils);
-                setOriginalPickupTime(pickupTime);
-                setOriginalItems(currentOrder);
+                if (currentOrderId) {
+                    await updateOrderStatus({
+                        orderId: currentOrderId,
+                        newStatus: orderStatus === 'new' ? 'open' : orderStatus,
+                        newItems: itemsToSave,
+                        customerCount,
+                        needsUtensils: isTakeout ? needsUtensils : undefined,
+                        pickupTime: isTakeout ? pickupTime : undefined,
+                        sendTime,
+                        finishTime,
+                    });
+                } else if (currentOrder.length > 0 || (hasCountChanged && !isTakeout)) {
+                    // 有品項 OR 內用只改人數 → 建立新訂單（daily_order_no 恆為 null）
+                    const result = await createNewOrder({
+                        table: tableNumber || '外帶',
+                        status: 'open',
+                        items: itemsToSave,
+                        customerCount,
+                        total: 0,
+                        subTotal: 0,
+                        timestamp: openTimestamp,
+                        needsUtensils: isTakeout ? needsUtensils : undefined,
+                        pickupTime: isTakeout ? pickupTime : undefined,
+                    });
+                    if (result?.id) setCurrentOrderId(result.id);
+                }
+                setIsDirty(false);
             } catch (e) {
                 console.error("自動儲存失敗:", e);
             } finally {
@@ -1329,44 +1391,11 @@ const OrderPage = () => {
             }
         }
 
-        // 檢查變動類型：僅備註變動（排除 remarks 後內容相同）→ 自動儲存；有新增/刪除品項 → 跳通知
-        const isContentChanged = JSON.stringify(currentOrder) !== JSON.stringify(originalItems);
-        const stripRemarks = arr => JSON.stringify(arr.map(({ remarks, ...rest }) => rest));
-        const isStructureChanged = stripRemarks(currentOrder) !== stripRemarks(originalItems);
-        const isRemarksOnlyChanged = isContentChanged && !isStructureChanged;
-
-        if (isRemarksOnlyChanged && currentOrderId) {
-            setIsLoading(true);
-            try {
-                const itemsToSave = currentOrder.map(({ id, name, price, quantity, isSent, isPaid, category, internalId, sortOrder, remarks }) =>
-                    ({ id, name, price, quantity, isSent: !!isSent, isPaid: !!isPaid, category, internalId, sortOrder, remarks: remarks || [] })
-                );
-                await updateOrderStatus({ orderId: currentOrderId, newStatus: orderStatus, newItems: itemsToSave, sendTime, finishTime });
-                setOriginalItems(currentOrder);
-                setIsDirty(false);
-            } catch (e) {
-                console.error("備註自動儲存失敗:", e);
-            } finally {
-                setIsLoading(false);
-            }
-        } else if (isDirty && isStructureChanged && orderStatus !== 'new') {
-            const confirmDiscard = window.confirm("您有未儲存的點餐變動！\n確定要返回嗎？");
-            if (!confirmDiscard) return;
-            setIsDirty(false);
+        // 純佔桌：無任何變動、無已建訂單、內用桌 → 只佔位不建訂單
+        if (!hasAnyChange && !currentOrderId && tableNumber && tableNumber !== '外帶') {
+            await occupyTableWithoutOrder(tableNumber, openTimestamp);
         }
 
-        // 佔桌邏輯：status='new' 且無已存訂單 → 佔桌（若人數有變動則建立含人數的訂單記錄）
-        if (orderStatus === 'new' && currentOrder.length === 0 && tableNumber && tableNumber !== '外帶') {
-            if (!currentOrderId) {
-                setIsLoading(true);
-                if (hasCountChanged) {
-                    await createNewOrder({ table: tableNumber, status: 'open', items: [], customerCount, total: 0, subTotal: 0, timestamp: openTimestamp });
-                } else {
-                    await occupyTableWithoutOrder(tableNumber, openTimestamp);
-                }
-                setIsLoading(false);
-            }
-        }
         navigate(isTakeout ? '/takeout' : '/tables');
     };
 
@@ -1376,7 +1405,12 @@ const OrderPage = () => {
             setShowAbandonModal(true);
             return;
         }
-        if (!window.confirm(`確定 ${tableNumber} 客人離開並清空計時？`)) return;
+        // 可清桌 → 顯示 Tailwind 清桌確認 modal
+        setShowClearModal(true);
+    };
+
+    const handleConfirmClear = async () => {
+        setShowClearModal(false);
         setIsLoading(true);
         try {
             await resetTableStatus(tableNumber);
@@ -1401,6 +1435,15 @@ const handleConfirmOrder = async () => {
 
         setIsLoading(true);
         try {
+            // 首次送單：若訂單尚未分配 dailyOrderNo（佔桌時 skipDailyOrderNo=true），此時補派
+            if (!dailyOrderNo && currentOrderId) {
+                const assigned = await assignOrderNo(currentOrderId);
+                if (assigned) {
+                    setDailyOrderNo(assigned);
+                    pendingDailyOrderNoRef.current = assigned;
+                }
+            }
+
             const now = Date.now();
             const targetStatus = (orderStatus === 'paid' || orderStatus === 'new' || orderStatus === 'open') ? 'served' : orderStatus;
             const newSendTime = sendTime || now;
@@ -1418,11 +1461,20 @@ const handleConfirmOrder = async () => {
                 idSet.has(i.internalId) ? { ...i, isSent: true } : i
             );
 
-            // 儲存訂單（含 isSent:true，同時設定 pendingDailyOrderNoRef）
+            // 儲存訂單（含 isSent:true）
             const orderId = await saveOrderBeforeNavigate(
                 tableNumber, orderWithSent, currentOrderId,
                 customerCount, subTotal, targetStatus, newSendTime, newFinishTime
             );
+
+            // 補派 dailyOrderNo（currentOrderId=null 時 pre-check 未執行，此處補上）
+            if (orderId && !pendingDailyOrderNoRef.current) {
+                const assigned = await assignOrderNo(orderId);
+                if (assigned) {
+                    setDailyOrderNo(assigned);
+                    pendingDailyOrderNoRef.current = assigned;
+                }
+            }
 
             if (orderId) {
                 // 外帶：自動儲存顧客資料
@@ -1567,17 +1619,27 @@ const handleConfirmOrder = async () => {
             
             // 2. 【DB 主訂單狀態更新】儲存訂單到 DB
             const orderId = await saveOrderBeforeNavigate(tableNumber, updatedOrderForDb, currentOrderId, customerCount, subTotal, finalStatus, newSendTime, newFinishTime);
-            
+
             if (!orderId) {
                 throw new Error("DB 訂單主狀態更新失敗。");
             }
-            
+
+            // 補派 dailyOrderNo（直接結帳但未曾送廚房單時）
+            if (!pendingDailyOrderNoRef.current && !dailyOrderNo) {
+                const assigned = await assignOrderNo(currentOrderId || orderId);
+                if (assigned) {
+                    setDailyOrderNo(assigned);
+                    pendingDailyOrderNoRef.current = assigned;
+                }
+            }
+
             // 3. 【DB 結帳記錄/庫存扣減】建立結帳記錄
             const completeSuccess = await completeOrderAndReport({
-                orderId: currentOrderId || orderId, 
-                itemsToCheckout: itemsToCheckout, 
-                tableNumber: tableNumber, 
-                isFullyPaid: isFullyPaid 
+                orderId: currentOrderId || orderId,
+                itemsToCheckout: itemsToCheckout,
+                tableNumber: tableNumber,
+                isFullyPaid: isFullyPaid,
+                sendTime: newSendTime,
             });
             
             if (!completeSuccess) {
@@ -2010,7 +2072,7 @@ const handleTableChange = async (event) => {
                             <div className="py-1 px-3 bg-red-500 text-white flex justify-between items-center text-sm font-bold">
                                 <div className="flex items-center">
                                     <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2H7a2 2 0 00-2 2v2M7 7a2 2 0 012-2h6a2 2 0 012 2v2H7V7z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                                    <span className="text-base">{dailyOrderNo ? String(dailyOrderNo).padStart(3, '0') : formatOrderId(currentOrderId)}</span>
+                                    <span className="text-base">{dailyOrderNo ? String(dailyOrderNo).padStart(3, '0') : '---'}</span>
                                 </div>
                                 <div className="text-right pr-1">
                                     <span>商品總數 {totalItems}</span>
@@ -2404,6 +2466,13 @@ const handleTableChange = async (event) => {
                 items={partialConfirmItems}
                 onConfirm={handlePartialConfirm}
                 onCancel={() => setPartialConfirmItems(null)}
+            />
+
+            <ClearTableModal
+                isOpen={showClearModal}
+                tableNumber={tableNumber}
+                onConfirm={handleConfirmClear}
+                onCancel={() => setShowClearModal(false)}
             />
 
             <AbandonOrderModal

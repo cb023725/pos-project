@@ -248,6 +248,7 @@ const CashDrawerPage = () => {
     const [isLoading, setIsLoading] = useState(true);
 
     // ── 臨時收支 ──────────────────────────────────────────────────────────────
+    const txInitialized = useRef(false); // 載入完成前不覆寫 Supabase
     const [transactions, setTransactions] = useState([]);
     const [newNote, setNewNote]     = useState('');
     const [newAmount, setNewAmount] = useState('');
@@ -284,6 +285,7 @@ const CashDrawerPage = () => {
     useEffect(() => { loadInvoices(); }, []);
 
     useEffect(() => {
+        if (!txInitialized.current) return; // 初始載入前不覆寫
         saveSettingValue('pending_transactions', JSON.stringify(transactions)).catch(() => {});
         localStorage.setItem(TX_KEY, JSON.stringify(transactions)); // 本機備份
     }, [transactions]);
@@ -307,7 +309,8 @@ const CashDrawerPage = () => {
             setQuickTags(tags);
             if (reserveRaw !== null) setReserveAmount(parseInt(reserveRaw, 10));
             if (txRaw !== null) setTransactions(JSON.parse(txRaw));
-        } catch (e) { console.error(e); }
+            txInitialized.current = true;
+        } catch (e) { console.error(e); txInitialized.current = true; }
         finally { setIsLoading(false); }
     };
 

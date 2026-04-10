@@ -283,9 +283,7 @@ export async function getOrderById(orderId, invoiceId = null) {
     return api('GET', url);
 }
 export async function createNewOrder(orderData) {
-    const storedCloseOrderId = getLastCloseOrderId();
-    const lastCloseTs = getLastCloseTime();
-    return api('POST', '/api/orders/new', { ...orderData, storedCloseOrderId, lastCloseTs });
+    return api('POST', '/api/orders/new', orderData);
 }
 export async function updateOrderStatus({ orderId, newStatus, newItems, subTotal, total, sendTime, finishTime, customerCount, customerName, customerPhone, needsUtensils, pickupTime, customerId }) {
     if (!orderId || !newStatus) return false;
@@ -301,6 +299,11 @@ export async function updateOrderStatus({ orderId, newStatus, newItems, subTotal
     if (customerId    !== undefined) updates.customerId    = customerId;
     await api('PATCH', `/api/orders/${orderId}`, updates);
     return true;
+}
+export async function assignOrderNo(orderId) {
+    if (!orderId) return null;
+    const result = await api('POST', `/api/orders/${orderId}/assign-no`, {});
+    return result?.dailyOrderNo || null;
 }
 export async function completeOrderAndReport({ orderId, newItems, tableNumber, isFullyPaid, sendTime }) {
     if (!orderId) return false;

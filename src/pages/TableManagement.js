@@ -13,6 +13,34 @@ import TableCard from '../components/TableCard';
 
 const TABLE_OPTIONS = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8'];
 
+const ClearTableModal = ({ target, onConfirm, onCancel }) => {
+    if (!target) return null;
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+                <div className="flex flex-col items-center pt-8 pb-5 px-6">
+                    <div className="w-20 h-20 rounded-full bg-gray-100 border-[3px] border-gray-300 flex items-center justify-center mb-5">
+                        <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                            <polyline points="16 17 21 12 16 7"/>
+                            <line x1="21" y1="12" x2="9" y2="12"/>
+                        </svg>
+                    </div>
+                    <h3 className="text-2xl font-black text-gray-800 mb-2">清桌確認</h3>
+                    <p className="text-base text-gray-500 text-center leading-relaxed font-medium">
+                        <span className="font-black text-gray-700">{target.label}</span> 尚未點餐，<br />確定清除佔位嗎？
+                    </p>
+                </div>
+                <div className="border-t border-gray-100" />
+                <div className="flex divide-x divide-gray-100">
+                    <button onClick={onCancel} className="flex-1 py-5 text-gray-400 font-black text-xl hover:bg-gray-50 transition-colors">取消</button>
+                    <button onClick={onConfirm} className="flex-1 py-5 text-gray-600 font-black text-xl hover:bg-gray-100 transition-colors">確認清桌</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const AbandonOrderModal = ({ target, onConfirm, onCancel }) => {
     const navigate = useNavigate();
     const [consumeChoice, setConsumeChoice] = React.useState(null);
@@ -80,7 +108,8 @@ const TableManagementPage = () => {
     const location = useLocation();
     const [tableStatuses, setTableStatuses] = useState({});
     const [isLoading, setIsLoading] = useState(true);
-    const [abandonTarget, setAbandonTarget] = useState(null); // { tableNumber, orderId, label }
+    const [abandonTarget, setAbandonTarget] = useState(null);    // { tableNumber, orderId, label }
+    const [clearTarget, setClearTarget]     = useState(null);    // { tableNumber, orderId, label }
     const [hasTakeoutOrders, setHasTakeoutOrders] = useState(false);
 
     const tableStatusesRef = useRef(tableStatuses);
@@ -111,9 +140,11 @@ const TableManagementPage = () => {
                 };
 
                 if (dbRecord && dbRecord.status === 'open' && !dbRecord.orderId) {
+                    // tables.updated_at 被 Supabase 觸發器覆蓋，改從 localStorage 讀開桌時間
+                    const storedOpenTime = localStorage.getItem(`table_open_${tableId}`);
                     statuses[tableId].orders.push({
                         status: 'open',
-                        timestamp: dbRecord.lastOrderTime,
+                        timestamp: storedOpenTime ? parseInt(storedOpenTime) : Date.now(),
                         items: [],
                         orderId: null
                     });
@@ -224,6 +255,7 @@ const TableManagementPage = () => {
                     openTimestamp: openTimestamp,
                     customerCount: currentOrder?.customerCount || 1,
                     sendTime: currentOrder?.sendTime || null,
+                    dailyOrderNo: currentOrder?.dailyOrderNo || null,
                 }
             });
             return;
@@ -269,39 +301,56 @@ const TableManagementPage = () => {
             ? currentTableData?.orders?.find(o => o.orderId === orderId)
             : currentTableData?.orders?.[0];
 
-        const currentStatus = targetOrder?.status;
+        const currentStatus  = targetOrder?.status;
         const isOnlyOccupied = currentStatus === 'open' && !orderId;
-        const isFullyPaid = currentStatus === 'paid';
-        const isServed = currentStatus === 'served';
+        const isEmptyOrder   = currentStatus === 'open' && !!orderId && !(targetOrder?.items?.length);
+        const isFullyPaid    = currentStatus === 'paid';
+        const isServed       = currentStatus === 'served';
 
         if (isServed) {
-            // 有未結帳餐點 → 顯示棄單確認 modal
             setAbandonTarget({ tableNumber, orderId, label: tableNumber });
             return;
         }
 
-        let msg = '';
-        if (isFullyPaid) {
-            msg = `確定要將 ${tableNumber} 該筆訂單結案並清桌嗎？`;
-        } else if (isOnlyOccupied) {
-            msg = `確定要取消 ${tableNumber} 的佔位嗎？`;
-        } else {
-            alert(`桌位 ${tableNumber} 目前狀態為點餐中，無法直接清桌。`);
+        if (isOnlyOccupied || isEmptyOrder) {
+            // 純佔桌 或 有 orderId 但未點餐（只改人數）→ 清桌確認 modal
+            setClearTarget({ tableNumber, orderId: isEmptyOrder ? orderId : null, label: tableNumber });
             return;
         }
 
-        if (window.confirm(msg)) {
-            setIsLoading(true);
-            try {
-                await resetTableStatus(tableNumber, orderId);
-                await loadTableStatuses(true);
-            } catch (error) {
-                console.error("清桌操作失敗:", error);
-            } finally {
-                setIsLoading(false);
+        if (isFullyPaid) {
+            if (window.confirm(`確定要將 ${tableNumber} 該筆訂單結案並清桌嗎？`)) {
+                setIsLoading(true);
+                try {
+                    await resetTableStatus(tableNumber, orderId);
+                    await loadTableStatuses(true);
+                } catch (error) {
+                    console.error("清桌操作失敗:", error);
+                } finally {
+                    setIsLoading(false);
+                }
             }
+            return;
         }
+
+        alert(`桌位 ${tableNumber} 目前狀態為點餐中，無法直接清桌。`);
     }, [loadTableStatuses]);
+
+    const handleConfirmClear = async () => {
+        if (!clearTarget) return;
+        const { tableNumber, orderId } = clearTarget;
+        setClearTarget(null);
+        setIsLoading(true);
+        try {
+            localStorage.removeItem(`table_open_${tableNumber}`);
+            await resetTableStatus(tableNumber, orderId);
+            await loadTableStatuses(true);
+        } catch (error) {
+            console.error("清桌操作失敗:", error);
+        } finally {
+            setIsLoading(false);
+        }
+    };
 
     const handleConfirmAbandon = async (consumeInventory) => {
         if (!abandonTarget) return;
@@ -309,6 +358,7 @@ const TableManagementPage = () => {
         setAbandonTarget(null);
         setIsLoading(true);
         try {
+            localStorage.removeItem(`table_open_${tableNumber}`);
             await resetTableStatus(tableNumber, orderId, consumeInventory);
             await loadTableStatuses(true);
         } catch (e) {
@@ -382,6 +432,11 @@ const TableManagementPage = () => {
                 </>
             )}
 
+            <ClearTableModal
+                target={clearTarget}
+                onConfirm={handleConfirmClear}
+                onCancel={() => setClearTarget(null)}
+            />
             <AbandonOrderModal
                 target={abandonTarget}
                 onConfirm={handleConfirmAbandon}

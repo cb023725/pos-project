@@ -1113,7 +1113,7 @@ app.post('/api/inventory-logs', async (req, res) => {
 app.get('/api/tables', async (req, res) => {
     const { data, error } = await supabase.from('tables').select('*');
     if (error) return res.status(500).json({ error: error.message });
-    res.json((data||[]).map(r => ({ tableNumber: r.table_number, status: r.status, orderId: r.order_id })));
+    res.json((data||[]).map(r => ({ tableNumber: r.table_number, status: r.status, orderId: r.order_id, lastOrderTime: r.updated_at })));
 });
 app.put('/api/tables/:tableNumber', async (req, res) => {
     const b = req.body;
@@ -1245,35 +1245,20 @@ app.get('/api/orders/:id', async (req, res) => {
     if (error) return res.status(404).json({ error: error.message });
     res.json(orderToCamel(data));
 });
-// 建立新訂單（含 dailyOrderNo 計算）
+// 建立新訂單（daily_order_no 一律為 null，待確認點餐時透過 /assign-no 補派）
 app.post('/api/orders/new', async (req, res) => {
-    const { storedCloseOrderId, lastCloseTs, ...od } = req.body;
-    let periodCount = 0;
-    if (storedCloseOrderId > 0) {
-        const { count } = await supabase.from('orders').select('id', { count: 'exact', head: true }).gt('id', storedCloseOrderId);
-        periodCount = count || 0;
-    } else if (lastCloseTs) {
-        const { data: before } = await supabase.from('orders').select('id')
-            .lt('timestamp', new Date(lastCloseTs).toISOString()).order('id', { ascending: false }).limit(1);
-        const lastId = before?.[0]?.id || 0;
-        const { count } = await supabase.from('orders').select('id', { count: 'exact', head: true }).gt('id', lastId);
-        periodCount = count || 0;
-    } else {
-        const midnight = new Date(); midnight.setHours(0,0,0,0);
-        const { count } = await supabase.from('orders').select('id', { count: 'exact', head: true }).gte('timestamp', midnight.toISOString());
-        periodCount = count || 0;
-    }
-    const dailyOrderNo = periodCount + 1;
+    const od = req.body;
     const now = new Date().toISOString();
     const row = {
         table_number: od.table, order_type: od.table === '外帶' ? '外帶' : '內用',
         status: od.status || 'open', items: od.items || [], total: od.total || 0,
-        daily_order_no: dailyOrderNo, sub_total: od.subTotal || 0, paid_amount: 0,
+        daily_order_no: null, sub_total: od.subTotal || 0, paid_amount: 0,
         customer_count: od.customerCount || 1, customer_name: od.customerName || '',
         customer_phone: od.customerPhone || '', customer_id: od.customerId || null,
         needs_utensils: od.needsUtensils || false, pickup_time: od.pickupTime || null,
         order_date: od.date || now,
         timestamp: od.timestamp ? new Date(od.timestamp).toISOString() : now,
+        send_time: od.sendTime || null,
         updated_at: now,
     };
     const { data, error } = await supabase.from('orders').insert(row).select().single();
@@ -1281,7 +1266,43 @@ app.post('/api/orders/new', async (req, res) => {
     if (od.table && od.table !== '外帶') {
         await supabase.from('tables').upsert({ table_number: od.table, status: od.status||'open', order_id: data.id, updated_at: now });
     }
-    res.json({ id: data.id, dailyOrderNo });
+    res.json({ id: data.id, dailyOrderNo: null });
+});
+// 為 daily_order_no=null 的訂單補派單號（首次送單時呼叫）
+app.post('/api/orders/:id/assign-no', async (req, res) => {
+    const orderId = parseInt(req.params.id);
+    // 從 Supabase app_settings 讀取關帳邊界，不信任 client localStorage（多裝置不一致）
+    const [{ data: closeIdRow }, { data: closeTsRow }] = await Promise.all([
+        supabase.from('app_settings').select('value').eq('key', 'last_close_order_id').single(),
+        supabase.from('app_settings').select('value').eq('key', 'last_close_time').single(),
+    ]);
+    const storedCloseOrderId = parseInt(closeIdRow?.value || '0', 10);
+    const lastCloseTs = closeTsRow?.value || null;
+    const { data: existing } = await supabase.from('orders').select('daily_order_no').eq('id', orderId).single();
+    if (!existing) return res.status(404).json({ error: 'not found' });
+    if (existing.daily_order_no) return res.json({ dailyOrderNo: existing.daily_order_no }); // 已派過
+    // 計算：與 /api/orders/new 相同的期間邊界，只計已派號的訂單
+    let count = 0;
+    if (storedCloseOrderId > 0) {
+        const { count: c } = await supabase.from('orders').select('id', { count: 'exact', head: true })
+            .gt('id', storedCloseOrderId).not('daily_order_no', 'is', null);
+        count = c || 0;
+    } else if (lastCloseTs) {
+        const { data: before } = await supabase.from('orders').select('id')
+            .lt('timestamp', new Date(lastCloseTs).toISOString()).order('id', { ascending: false }).limit(1);
+        const lastId = before?.[0]?.id || 0;
+        const { count: c } = await supabase.from('orders').select('id', { count: 'exact', head: true })
+            .gt('id', lastId).not('daily_order_no', 'is', null);
+        count = c || 0;
+    } else {
+        const midnight = new Date(); midnight.setHours(0,0,0,0);
+        const { count: c } = await supabase.from('orders').select('id', { count: 'exact', head: true })
+            .gte('timestamp', midnight.toISOString()).not('daily_order_no', 'is', null);
+        count = c || 0;
+    }
+    const dailyOrderNo = count + 1;
+    await supabase.from('orders').update({ daily_order_no: dailyOrderNo }).eq('id', orderId);
+    res.json({ dailyOrderNo });
 });
 // 更新訂單狀態
 app.patch('/api/orders/:id', async (req, res) => {
@@ -1570,7 +1591,8 @@ function orderToCamel(r) {
         customerPhone: r.customer_phone||'', customerId: r.customer_id||null,
         needsUtensils: r.needs_utensils||false, pickupTime: r.pickup_time != null ? Number(r.pickup_time) : null,
         date: r.order_date, timestamp: r.timestamp ? new Date(r.timestamp).getTime() : null,
-        sendTime: r.send_time, finishTime: r.finish_time,
+        sendTime: r.send_time ? Number(r.send_time) : null,
+        finishTime: r.finish_time ? Number(r.finish_time) : null,
     };
 }
 function invoiceToCamel(r) {
@@ -1714,4 +1736,13 @@ app.get(/.*/, (req, res) => {
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Node server running on http://localhost:${PORT}`);
     console.log(`CUPS Printer: ${CUPS_PRINTER}`);
+
+    // 啟動時清空 CUPS 佇列，避免藍牙重連後印出積壓的舊工作
+    execFile('cancel', ['-a', CUPS_PRINTER], (err, stdout, stderr) => {
+        if (err && !stderr.includes('No jobs')) {
+            console.warn('清空 CUPS 佇列失敗：', stderr || err.message);
+        } else {
+            console.log('CUPS 佇列已清空');
+        }
+    });
 });
