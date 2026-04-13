@@ -330,6 +330,10 @@ export async function getReportOrders() {
 export async function getInvoices() {
     return api('GET', '/api/invoices');
 }
+export async function getAbandonedOrders(since) {
+    const qs = since ? `?since=${since}` : '';
+    return api('GET', `/api/orders/abandoned${qs}`);
+}
 export async function voidInvoice(invoiceId, restoreStock = false) {
     await api('POST', `/api/invoices/${invoiceId}/void`, { restoreStock });
 }

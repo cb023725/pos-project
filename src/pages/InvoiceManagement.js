@@ -4,6 +4,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getInvoices, voidInvoice, getOrderById, getTableStatuses } from '../db';
 
+const BACKEND_URL = '';
+
 const InvoiceManagementPage = () => {
     const navigate = useNavigate();
     const [invoices, setInvoices] = useState([]);
@@ -136,10 +138,35 @@ const InvoiceManagementPage = () => {
         setVoidModal(null);
         try {
             await voidInvoice(invoice.id, restoreStock);
-            navigate(`/tables?reopenOrderId=${invoice.orderId}&tableName=${invoice.tableName || '外帶'}`);
+            navigate('/tables');
         } catch (error) {
             alert("作廢失敗: " + error.message);
         }
+    };
+
+    const handleReprintCustomer = () => {
+        if (!selectedOrder) return;
+        fetch(`${BACKEND_URL}/print`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                table: selectedOrder.table || '外帶',
+                orderNo: selectedOrder.dailyOrderNo || selectedOrder.id || 0,
+                total: selectedOrder.total,
+                items: (selectedOrder.items || []).map(i => ({
+                    id: i.id,
+                    name: i.name,
+                    printName: i.printName || null,
+                    category: i.category || null,
+                    sortOrder: i.sortOrder != null ? i.sortOrder : null,
+                    price: i.price || 0,
+                    qty: i.quantity || 1,
+                    remarks: i.remarks || [],
+                })),
+                printMode: 'customer',
+                openDrawer: false,
+            }),
+        }).catch(e => console.warn('補印失敗：', e.message));
     };
 
     const showOrderDetail = async (inv) => {
@@ -383,8 +410,11 @@ const InvoiceManagementPage = () => {
                             </div>
                         </div>
 
-                        <div className="p-4 bg-gray-50 text-center">
-                            <button onClick={() => setIsDetailModalOpen(false)} className="w-full py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-gray-800 transition-colors">
+                        <div className="p-4 bg-gray-50 flex gap-3">
+                            <button onClick={handleReprintCustomer} className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors">
+                                補印顧客聯
+                            </button>
+                            <button onClick={() => setIsDetailModalOpen(false)} className="flex-1 py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-gray-800 transition-colors">
                                 關閉
                             </button>
                         </div>

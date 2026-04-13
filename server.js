@@ -437,35 +437,41 @@ function buildCloseReportPDF(data, filePath) {
             return `${fmtDate(ts)} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
         };
 
-        // 支援新格式（range）與舊格式（activeInvoices array）
         const activeCount  = data.activeCount  ?? (data.activeInvoices?.length || 0);
         const invoiceRange = data.invoiceRange ?? '';
         const voidedCount  = data.voidedCount  ?? (data.voidedInvoices?.length || 0);
-        const voidedNums   = data.voidedNums   ?? [];   // 每張作廢號碼（獨立列印）
+        const voidedNums   = data.voidedNums   ?? [];
         const voidedAmount = data.voidedAmount ?? (data.voidedInvoices || []).reduce((s, i) => s + (i.amount || 0), 0);
-        const expenses = data.expenses || [];
-        const incomes  = data.incomes  || [];
+        const expenses     = data.expenses || [];
+        const incomes      = data.incomes  || [];
+        const cancelledItems = data.cancelledItems || [];
 
         // ── 常數 ─────────────────────────────────────────────────────
-        const CR_MT  = Math.round(1 * MM);  // 上邊距 1mm
-        const CR_MB  = Math.round(5 * MM);  // 下邊距 5mm
-        const CL     = 0;                   // 左起點（無邊距）
-        const CW     = PAGE_W;              // 內容全寬（無左右邊距）
-        const AMT_PR = 5;                   // 金額右側留白 pt
-        const BH     = 26;  // 單行黑色標題列高
-        const RH     = 18;  // 一般 row 高
-        const SRH    = 13;  // 小字 row 高
-        const SH     = 6;   // 分隔線（含間距）
-        const GAP    = 4;   // 黑色列後空白
-        const TCH    = 36;  // 兩欄金額（數字 + 標籤）
-        const HALF   = Math.floor((CW - 4) / 2);  // 並排每欄寬
+        const CR_MT  = Math.round(1 * MM);
+        const CR_MB  = Math.round(5 * MM);
+        const CL     = 0;
+        const CW     = PAGE_W;
+        const AMT_PR = 5;           // 右側留白
+        const BH     = 26;          // 黑色標題列高
+        const RH     = 20;          // 一般 row 高
+        const SRH    = 14;          // 小字 row 高
+        const SH     = 7;           // 分隔線高（含間距）
+        const GAP    = 4;           // 黑色列後空白
+        const TCH    = 38;          // 兩欄金額（大數字 + 小標籤）
+        const HALF   = Math.floor((CW - 4) / 2);
+        const IH     = 22;          // 單品 row 高
+        // 版面：品名 | qty框 | 金額
+        const PRICE_W = 44;         // 金額欄寬（含 AMT_PR）
+        const BOX_W   = 24;
+        const BOX_H   = 17;
+        const boxX    = CW - AMT_PR - PRICE_W - 4 - BOX_W;
+        const nameW   = boxX - 4;
 
-        // ── 相容新舊格式：customGroups 陣列 或 舊有 frozenSales ─────────
         const customGroups = data.customGroups
             || (data.frozenSales > 0 ? [{ name: '冷凍包', amount: data.frozenSales }] : []);
         const activeCustomGroups = customGroups.filter(g => (g.amount || 0) > 0);
 
-        // ── 短溢原因預量測（字多自動換行，需先知道高度才能計算頁高） ──
+        // ── 短溢原因預量測 ────────────────────────────────────────────
         let diffNoteH = 0;
         if (data.diff && data.diff !== 0 && data.discrepancyNote) {
             const mDoc = new PDFDocument({ size: [PAGE_W, 1000] });
@@ -476,31 +482,33 @@ function buildCloseReportPDF(data, filePath) {
 
         // ── 計算頁面高度 ──────────────────────────────────────────────
         let h = CR_MT;
-
-        // 關帳紀錄 (3行黑色列)
-        h += (BH + SRH + SRH) + GAP;
-        h += RH + SH;                                             // 營業日期
-        h += RH + SH;                                             // 營業額（不含自訂分組）
-        activeCustomGroups.forEach(() => { h += RH + SH; });     // 每個自訂分組（冷凍包/年菜…）
+        h += (BH + SRH + SRH) + GAP;                              // 關帳紀錄 header
+        h += RH + SH;                                              // 營業日期
+        h += RH + SH;                                              // 營業額
+        activeCustomGroups.forEach(() => { h += RH + SH; });
         if (expenses.length > 0) h += SRH + Math.ceil(expenses.length / 2) * RH + SH;
         if (incomes.length  > 0) h += SRH + Math.ceil(incomes.length  / 2) * RH + SH;
-        if (data.diff && data.diff !== 0) h += RH + diffNoteH + SH;  // 短溢金額列 + 原因列（可多行）
+        if (data.diff && data.diff !== 0) h += RH + diffNoteH + SH;
 
-        // 發票/收據
-        h += BH + GAP;
-        h += RH + SH;                          // 發票張數
-        if (activeCount > 0 && invoiceRange)
-            h += RH + RH + SH;                 // 發票號碼標籤列 + 號碼列
+        h += BH + GAP;                                             // 發票/收據 header
+        h += RH + SH;                                              // 發票張數
+        if (activeCount > 0 && invoiceRange) h += RH + SH;        // 發票號碼（一行）
         if (voidedCount > 0) {
-            h += RH + SH;                          // 本期作廢張數/金額
-            if (voidedNums.length > 0)
-                h += SRH + voidedNums.length * SRH + SH;  // 「作廢號碼」標籤 + 每張一列
+            h += RH + SH;                                          // 作廢張數/金額
+            h += Math.max(1, voidedNums.length) * RH + SH;        // 作廢號碼
         }
-        h += TCH + SH;                         // 匯出 | 留存
 
+        h += BH + GAP;                                             // 現金取出 header
+        h += TCH + SH;
+
+        if (cancelledItems.length > 0) {
+            h += BH + GAP;                                         // 註銷單品 header
+            h += cancelledItems.length * IH + SH;
+            h += TCH + SH;
+        }
         h += CR_MB + 8;
 
-        // ── 建立 PDF ─────────────────────────────────────────────────
+        // ── 建立 PDF ──────────────────────────────────────────────────
         const doc = new PDFDocument({
             size:    [PAGE_W, h],
             margins: { top: CR_MT, bottom: CR_MB, left: 0, right: 0 },
@@ -515,43 +523,44 @@ function buildCloseReportPDF(data, filePath) {
         doc.registerFont('Reg',  FONT_REG);
 
         let y = CR_MT;
+        const col1X = CL, col2X = CL + CW / 2, colW = CW / 2 - AMT_PR;
 
-        // ── 輔助函式 ─────────────────────────────────────────────────
-        const solidLine = (y1, color = '#333333') => {
-            doc.moveTo(CL, y1).lineTo(CL + CW, y1)
-               .lineWidth(0.6).strokeColor(color).stroke();
+        // ── 輔助函式 ──────────────────────────────────────────────────
+        const solidLine = () => {
+            doc.moveTo(CL, y).lineTo(CL + CW, y).lineWidth(0.6).strokeColor('black').stroke();
         };
-        const sep = () => { solidLine(y); y += SH; };
+        const sep = () => { solidLine(); y += SH; };
 
-        // 左標籤 右值（右留 AMT_PR 空白）
+        // 左標籤 右值（同一行）
         const row = (label, value, labelSz = 10, valueSz = 11) => {
-            doc.font('Reg').fontSize(labelSz).fillColor('#111111')
+            doc.font('Reg').fontSize(labelSz).fillColor('black')
                .text(label, CL, y, { lineBreak: false });
             doc.font('Bold').fontSize(valueSz).fillColor('black')
                .text(value, CL, y, { width: CW - AMT_PR, align: 'right', lineBreak: false });
             y += RH;
         };
 
-        // 支出/收入並排兩個（金額右側留 AMT_PR 空白）
+        // 並排兩欄（支出/收入）
         const twoPerRow = (items, prefix) => {
             for (let i = 0; i < items.length; i += 2) {
                 const a = items[i], b = items[i + 1];
-                const x1 = CL, x2 = CL + HALF + 4;
-                doc.font('Reg').fontSize(10).fillColor('#111111')
-                   .text(a.note, x1, y, { lineBreak: false });
-                doc.font('Reg').fontSize(10).fillColor('black')
-                   .text(`${prefix}${fmtMoney(a.amount)}`, x1, y, { width: HALF - AMT_PR, align: 'right', lineBreak: false });
+                const x2 = CL + HALF + 4;
+                const labelW = HALF - AMT_PR - 32;
+                doc.font('Reg').fontSize(9).fillColor('black')
+                   .text(a.note, CL, y, { width: labelW, lineBreak: false });
+                doc.font('Reg').fontSize(9).fillColor('black')
+                   .text(`${prefix}${fmtMoney(a.amount)}`, CL, y, { width: HALF - AMT_PR, align: 'right', lineBreak: false });
                 if (b) {
-                    doc.font('Reg').fontSize(10).fillColor('#111111')
-                       .text(b.note, x2, y, { lineBreak: false });
-                    doc.font('Reg').fontSize(10).fillColor('black')
+                    doc.font('Reg').fontSize(9).fillColor('black')
+                       .text(b.note, x2, y, { width: labelW, lineBreak: false });
+                    doc.font('Reg').fontSize(9).fillColor('black')
                        .text(`${prefix}${fmtMoney(b.amount)}`, x2, y, { width: HALF - AMT_PR, align: 'right', lineBreak: false });
                 }
                 y += RH;
             }
         };
 
-        // 黑色標題列（lines[0]=主標，其餘為小字）
+        // 黑色標題列
         const blackBar = (lines) => {
             const barH = BH + (lines.length - 1) * SRH;
             doc.rect(CL, y, CW, barH).fill('black');
@@ -568,118 +577,141 @@ function buildCloseReportPDF(data, filePath) {
         // ── Section 1：關帳紀錄 ──────────────────────────────────────
         blackBar(['關帳紀錄', fmtDT(data.periodStart), `~ ${fmtDT(data.periodEnd)}`]);
 
-        // 營業日期（用 periodEnd = 關帳當日，餐廳不跨日）
         row('營業日期', fmtDate(data.periodEnd || data.periodStart));
         sep();
 
-        // 營業額（不含冷凍包）
-        doc.font('Reg').fontSize(10).fillColor('#111111')
+        doc.font('Reg').fontSize(10).fillColor('black')
            .text('營業額', CL, y, { lineBreak: false });
         doc.font('Bold').fontSize(14).fillColor('black')
            .text(fmtMoney(data.sales), CL, y - 2, { width: CW - AMT_PR, align: 'right', lineBreak: false });
         y += RH; sep();
 
-        // 自訂分組（冷凍包、年菜等，依序列印，各自一列）
         activeCustomGroups.forEach(group => {
-            doc.font('Reg').fontSize(10).fillColor('#111111')
+            doc.font('Reg').fontSize(10).fillColor('black')
                .text(group.name, CL, y, { lineBreak: false });
             doc.font('Bold').fontSize(14).fillColor('black')
                .text(fmtMoney(group.amount), CL, y - 2, { width: CW - AMT_PR, align: 'right', lineBreak: false });
             y += RH; sep();
         });
 
-        // 臨時支出 breakdown（每列並排兩項）
         if (expenses.length > 0) {
-            doc.font('Reg').fontSize(9).fillColor('#333333')
+            doc.font('Reg').fontSize(9).fillColor('black')
                .text('臨時支出', CL, y, { lineBreak: false });
             y += SRH;
             twoPerRow(expenses, '-');
             sep();
         }
-
-        // 臨時收入 breakdown（每列並排兩項）
         if (incomes.length > 0) {
-            doc.font('Reg').fontSize(9).fillColor('#333333')
+            doc.font('Reg').fontSize(9).fillColor('black')
                .text('臨時收入', CL, y, { lineBreak: false });
             y += SRH;
             twoPerRow(incomes, '+');
             sep();
         }
 
-        // 短溢金額（有差異才印）
         if (data.diff && data.diff !== 0) {
             const sign = data.diff > 0 ? '+' : '';
             const diffLabel = data.diff > 0 ? '溢額' : '短額';
-            const diffColor = data.diff > 0 ? '#16a34a' : '#dc2626';
-            // 第一列：標籤 左 / 金額 右
-            doc.font('Reg').fontSize(10).fillColor('#111111')
+            doc.font('Reg').fontSize(10).fillColor('black')
                .text(diffLabel, CL, y, { lineBreak: false });
-            doc.font('Bold').fontSize(11).fillColor(diffColor)
-               .text(`${sign}${fmtMoney(data.diff)}`, CL, y,
-                     { width: CW - AMT_PR, align: 'right', lineBreak: false });
+            doc.font('Bold').fontSize(11).fillColor('black')
+               .text(`${sign}${fmtMoney(data.diff)}`, CL, y, { width: CW - AMT_PR, align: 'right', lineBreak: false });
             y += RH;
-            // 第二列：原因（若有），允許換行，高度由 diffNoteH 決定
             if (data.discrepancyNote) {
-                doc.font('Reg').fontSize(9).fillColor('#555555')
-                   .text(data.discrepancyNote, CL + 4, y,
-                         { width: CW - 8, lineBreak: true });
+                doc.font('Reg').fontSize(9).fillColor('black')
+                   .text(data.discrepancyNote, CL + 4, y, { width: CW - 8, lineBreak: true });
                 y += diffNoteH;
             }
             sep();
         }
 
-        // ── Section 2：發票/收據 ─────────────────────────────────────
+        // ── Section 2：發票/收據 ──────────────────────────────────────
         blackBar(['發票/收據']);
 
-        // 發票張數
-        doc.font('Reg').fontSize(10).fillColor('#111111')
+        // 發票張數（左標籤 右大數字）
+        doc.font('Reg').fontSize(10).fillColor('black')
            .text('發票張數', CL, y, { lineBreak: false });
         doc.font('Bold').fontSize(18).fillColor('black')
-           .text(String(activeCount), CL, y - 4, { width: CW - AMT_PR, align: 'right', lineBreak: false });
+           .text(String(activeCount), CL, y - 3, { width: CW - AMT_PR, align: 'right', lineBreak: false });
         y += RH; sep();
 
-        // 發票號碼區間（標籤一列，號碼獨立一列）
+        // 發票號碼（標籤 + 號碼同一行）
         if (activeCount > 0 && invoiceRange) {
-            doc.font('Reg').fontSize(10).fillColor('#111111')
-               .text('發票號碼', CL, y, { lineBreak: false });
-            y += RH;
-            doc.font('Bold').fontSize(10).fillColor('black')
+            doc.font('Reg').fontSize(9).fillColor('black')
+               .text('發票號碼', CL, y, { width: 48, lineBreak: false });
+            doc.font('Bold').fontSize(9).fillColor('black')
                .text(invoiceRange, CL, y, { width: CW - AMT_PR, align: 'right', lineBreak: false });
             y += RH; sep();
         }
 
-        // 本期作廢（若有才印）
+        // 作廢發票（有才印）
         if (voidedCount > 0) {
-            doc.font('Reg').fontSize(9).fillColor('#111111')
-               .text(`本期發票作廢  ${voidedCount}張`, CL, y, { lineBreak: false });
+            doc.font('Reg').fontSize(10).fillColor('black')
+               .text(`發票作廢 ${voidedCount}張`, CL, y, { width: CW / 2, lineBreak: false });
             doc.font('Bold').fontSize(10).fillColor('black')
                .text(fmtMoney(voidedAmount), CL, y, { width: CW - AMT_PR, align: 'right', lineBreak: false });
             y += RH; sep();
-            if (voidedNums.length > 0) {
-                doc.font('Reg').fontSize(9).fillColor('#111111')
-                   .text('作廢號碼', CL, y, { lineBreak: false });
-                y += SRH;
-                for (const num of voidedNums) {
+            // 每張號碼一列，標籤只在第一列顯示
+            for (let i = 0; i < Math.max(1, voidedNums.length); i++) {
+                doc.font('Reg').fontSize(9).fillColor('black')
+                   .text(i === 0 ? '作廢號碼' : '', CL, y, { width: 48, lineBreak: false });
+                if (voidedNums[i]) {
                     doc.font('Bold').fontSize(9).fillColor('black')
-                       .text(num, CL, y, { width: CW - AMT_PR, align: 'right', lineBreak: false });
-                    y += SRH;
+                       .text(voidedNums[i], CL, y, { width: CW - AMT_PR, align: 'right', lineBreak: false });
                 }
-                sep();
+                y += RH;
             }
+            sep();
         }
 
-        // 今日匯出 | 留存現金（兩欄，右側留 AMT_PR）
-        const col1X = CL, col2X = CL + CW / 2, colW = CW / 2 - AMT_PR;
+        // ── Section 3：現金取出 / 預留零用金 ─────────────────────────
+        blackBar(['現金取出 / 預留零用金']);
         doc.font('Bold').fontSize(15).fillColor('black')
            .text(fmtMoney(data.withdrawalAmount || 0), col1X, y, { width: colW, align: 'right', lineBreak: false });
         doc.font('Bold').fontSize(15).fillColor('black')
-           .text(fmtMoney(data.reserveAmount || 0),    col2X, y, { width: colW, align: 'right', lineBreak: false });
+           .text(fmtMoney(data.reserveAmount || 0), col2X, y, { width: colW, align: 'right', lineBreak: false });
         y += 20;
-        doc.font('Reg').fontSize(8).fillColor('#333333')
-           .text('今日匯出金額', col1X, y, { width: colW, align: 'right', lineBreak: false });
-        doc.font('Reg').fontSize(8).fillColor('#333333')
-           .text('留存現金', col2X, y, { width: colW, align: 'right', lineBreak: false });
-        y += 14;
+        doc.font('Reg').fontSize(8).fillColor('black')
+           .text('期間取出金額', col1X, y, { width: colW, align: 'right', lineBreak: false });
+        doc.font('Reg').fontSize(8).fillColor('black')
+           .text('預留零用金', col2X, y, { width: colW, align: 'right', lineBreak: false });
+        y += 18; sep();
+
+        // ── Section 4：註銷單品明細（有棄單才印）────────────────────
+        if (cancelledItems.length > 0) {
+            blackBar(['註銷單品明細']);
+            let totalQty = 0, totalAmt = 0;
+            for (const ci of cancelledItems) {
+                const qty   = ci.quantity || 1;
+                const price = (ci.price || 0) * qty;
+                totalQty += qty;
+                totalAmt += price;
+                const textY = y + Math.floor((IH - 10) / 2);
+                const bY    = y + Math.floor((IH - BOX_H) / 2);
+                // 品名（廚房短名）
+                doc.font('Reg').fontSize(10).fillColor('black')
+                   .text(ci.printName || ci.name, CL + 2, textY, { width: nameW, lineBreak: false });
+                // 數量框
+                doc.rect(boxX, bY, BOX_W, BOX_H).lineWidth(0.8).strokeColor('black').stroke();
+                doc.font('Bold').fontSize(10).fillColor('black')
+                   .text(String(qty), boxX, bY + Math.floor((BOX_H - 10) / 2), { width: BOX_W, align: 'center', lineBreak: false });
+                // 金額（右）
+                doc.font('Bold').fontSize(10).fillColor('black')
+                   .text(fmtMoney(price), CL, textY, { width: CW - AMT_PR, align: 'right', lineBreak: false });
+                y += IH;
+            }
+            sep();
+            doc.font('Bold').fontSize(15).fillColor('black')
+               .text(String(totalQty), col1X, y, { width: colW, align: 'right', lineBreak: false });
+            doc.font('Bold').fontSize(15).fillColor('black')
+               .text(fmtMoney(totalAmt), col2X, y, { width: colW, align: 'right', lineBreak: false });
+            y += 20;
+            doc.font('Reg').fontSize(8).fillColor('black')
+               .text('註銷單品數量', col1X, y, { width: colW, align: 'right', lineBreak: false });
+            doc.font('Reg').fontSize(8).fillColor('black')
+               .text('註銷單品金額', col2X, y, { width: colW, align: 'right', lineBreak: false });
+            y += 18; sep();
+        }
 
         doc.end();
     });
@@ -1200,6 +1232,14 @@ app.get('/api/orders/active', async (req, res) => {
         .in('status', ['open','served','paid']).order('id');
     if (error) return res.status(500).json({ error: error.message });
     res.json((data||[]).map(orderToCamel));
+});
+app.get('/api/orders/abandoned', async (req, res) => {
+    const since = req.query.since ? new Date(parseInt(req.query.since)).toISOString() : null;
+    let q = supabase.from('orders').select('*').eq('status', 'abandoned').order('id');
+    if (since) q = q.gte('updated_at', since);
+    const { data, error } = await q;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json((data || []).map(orderToCamel));
 });
 app.get('/api/orders/max-id', async (req, res) => {
     const { data } = await supabase.from('orders').select('id').order('id', { ascending: false }).limit(1);

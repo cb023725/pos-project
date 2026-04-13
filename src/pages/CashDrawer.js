@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { getInvoices, getLastCloseTime, performDayClose, getCategorySettings, getQuickTags, saveQuickTags, DEFAULT_QUICK_TAGS, getSettingValue, saveSettingValue } from '../db';
+import { getInvoices, getLastCloseTime, performDayClose, getCategorySettings, getQuickTags, saveQuickTags, DEFAULT_QUICK_TAGS, getSettingValue, saveSettingValue, getAbandonedOrders } from '../db';
 
 const BACKEND_URL = '';
 const RESERVE_KEY      = 'pos_reserve_amount';
@@ -245,6 +245,7 @@ const CashDrawerPage = () => {
 
     // ── 發票 ──────────────────────────────────────────────────────────────────
     const [invoices, setInvoices] = useState([]);
+    const [abandonedOrders, setAbandonedOrders] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
 
     // ── 臨時收支 ──────────────────────────────────────────────────────────────
@@ -297,14 +298,17 @@ const CashDrawerPage = () => {
     const loadInvoices = async () => {
         setIsLoading(true);
         try {
-            const [invData, cats, tags, reserveRaw, txRaw] = await Promise.all([
+            const since = getLastCloseTime() || (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
+            const [invData, cats, tags, reserveRaw, txRaw, abandonedData] = await Promise.all([
                 getInvoices(),
                 getCategorySettings(),
                 getQuickTags(),
                 getSettingValue('reserve_amount', null),
                 getSettingValue('pending_transactions', null),
+                getAbandonedOrders(since),
             ]);
             setInvoices(invData);
+            setAbandonedOrders(abandonedData || []);
             setCatSettings(cats);
             setQuickTags(tags);
             if (reserveRaw !== null) setReserveAmount(parseInt(reserveRaw, 10));
@@ -318,6 +322,22 @@ const CashDrawerPage = () => {
     const periodInvoices = useMemo(() =>
         invoices.filter(inv => new Date(inv.paymentTime).getTime() >= periodStart),
         [invoices, periodStart]);
+
+    // ── 本期棄單 → 註銷單品 ───────────────────────────────────────────────────
+    const cancelledItems = useMemo(() => {
+        const map = new Map();
+        abandonedOrders.forEach(order => {
+            (order.items || []).filter(i => !i.isPaid).forEach(item => {
+                const key = `${item.id || item.name}:::${item.price}`;
+                if (map.has(key)) {
+                    map.get(key).quantity += (item.quantity || 1);
+                } else {
+                    map.set(key, { name: item.name, quantity: item.quantity || 1, price: item.price || 0 });
+                }
+            });
+        });
+        return Array.from(map.values());
+    }, [abandonedOrders]);
 
     const activeInvoices = useMemo(() => periodInvoices.filter(i => i.status === '已開立'), [periodInvoices]);
     const voidedInvoices = useMemo(() => periodInvoices.filter(i => i.status === '已作廢'), [periodInvoices]);
@@ -552,6 +572,7 @@ const CashDrawerPage = () => {
                     .map(t => ({ note: t.note, amount: t.amount, external: true })),
             ],
             incomes:  transactions.filter(t => t.type === 'income') .map(t => ({ note: t.note, amount: t.amount })),
+            cancelledItems,
         };
         localStorage.setItem(CLOSE_REPORT_KEY, JSON.stringify(closeData));
 
@@ -563,6 +584,7 @@ const CashDrawerPage = () => {
         localStorage.setItem(RESERVE_KEY, String(finalReserve));
         setDenominations({ 1000: 0, 500: 0, 100: 0, 50: 0, 10: 0, 5: 0, 1: 0 });
         localStorage.removeItem(DENOM_KEY);
+        setAbandonedOrders([]);
         setIsClosed(true);
 
         await sendPrintClose(closeData);
@@ -699,6 +721,25 @@ const CashDrawerPage = () => {
                                         </div>
                                     </div>
                                 ))}
+
+                                {/* 本期棄單（已出單但未結帳）*/}
+                                {cancelledItems.length > 0 && (
+                                    <div className="mt-4 pt-4 border-t border-dashed border-gray-200">
+                                        <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">
+                                            本期棄單 — 註銷單品（{cancelledItems.reduce((s, i) => s + i.quantity, 0)} 份 / ${fmt(cancelledItems.reduce((s, i) => s + i.price * i.quantity, 0))}）
+                                        </p>
+                                        {cancelledItems.map((ci, idx) => (
+                                            <div key={idx}
+                                                className="flex justify-between items-center p-3 bg-orange-50 rounded-xl mb-2">
+                                                <span className="text-sm font-bold text-gray-700">{ci.name}</span>
+                                                <div className="flex items-center gap-3">
+                                                    <span className="px-2 py-0.5 border border-gray-400 rounded text-xs font-black text-gray-600">{ci.quantity}</span>
+                                                    <span className="font-mono font-black text-orange-500">-${fmt(ci.price * ci.quantity)}</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
 
                                 {/* 本期作廢發票 */}
                                 {voidedInvoices.length > 0 && (

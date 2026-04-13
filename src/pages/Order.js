@@ -594,6 +594,44 @@ const ClearTableModal = ({ isOpen, tableNumber, onConfirm, onCancel }) => {
     );
 };
 
+const ClearUnpaidModal = ({ isOpen, itemCount, onConfirm, onCancel }) => {
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+                <div className="flex flex-col items-center pt-8 pb-5 px-6">
+                    <div className="w-20 h-20 rounded-full bg-red-50 border-[3px] border-red-400 flex items-center justify-center mb-5">
+                        <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="3 6 5 6 21 6"/>
+                            <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
+                            <path d="M10 11v6"/><path d="M14 11v6"/>
+                            <path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                        </svg>
+                    </div>
+                    <h3 className="text-2xl font-black text-gray-800 mb-3">清除所有餐點</h3>
+                    <p className="text-base text-gray-600 text-center leading-relaxed font-bold">
+                        確定要刪除目前所有未出單的餐點嗎？
+                    </p>
+                    <div className="mt-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3 w-full text-center">
+                        <span className="text-sm text-red-500 font-bold">
+                            共 {itemCount} 項餐點將被清除，此操作無法復原
+                        </span>
+                    </div>
+                </div>
+                <div className="border-t border-gray-100" />
+                <div className="flex divide-x divide-gray-100">
+                    <button onClick={onCancel} className="flex-1 py-5 text-gray-400 font-black text-xl hover:bg-gray-50 transition-colors">
+                        取消
+                    </button>
+                    <button onClick={onConfirm} className="flex-1 py-5 font-black text-xl text-red-500 hover:bg-red-50 transition-colors">
+                        全部刪除
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const AbandonOrderModal = ({ isOpen, tableNumber, onConfirm, onCancel }) => {
     const navigate = useNavigate();
     const [consumeChoice, setConsumeChoice] = useState(null);
@@ -979,6 +1017,7 @@ const OrderPage = () => {
     const [checkoutResult, setCheckoutResult] = useState(null); // { total, isPartial, navigateTo }
     const [showAbandonModal, setShowAbandonModal] = useState(false);
     const [showClearModal,  setShowClearModal]  = useState(false);
+    const [showClearUnpaidModal, setShowClearUnpaidModal] = useState(false);
     const [partialConfirmItems, setPartialConfirmItems] = useState(null); // 分開結帳確認 modal
     const [isPartialCheckoutMode, setIsPartialCheckoutMode] = useState(false);
     const [selectedItemsForCheckout, setSelectedItemsForCheckout] = useState([]); // 部分結帳時選中的項目 internalId
@@ -1990,10 +2029,27 @@ const handleTableChange = async (event) => {
         }
     }, [isLoading, currentOrderId, currentOrder, orderStatus, dispatch]);
 
+    const handleClearUnpaidItems = useCallback(() => {
+        if (unpaidItems.length === 0) return;
+        setShowClearUnpaidModal(true);
+    }, [unpaidItems]);
+
+    const handleConfirmClearUnpaid = useCallback(() => {
+        setShowClearUnpaidModal(false);
+        const remainingItems = currentOrder.filter(i => i.isPaid);
+        dispatch({ type: ACTION_TYPE.SET_ORDER_AND_RICE, payload: { newOrder: remainingItems } });
+        if (remainingItems.length === 0) {
+            setSendTime(null);
+            setFinishTime(null);
+            setOrderStatus('new');
+        }
+        setIsDirty(true);
+    }, [currentOrder, dispatch, setSendTime, setFinishTime, setOrderStatus, setIsDirty]);
+
     return (
-        <div 
-            className="flex w-full overflow-hidden font-sans" 
-            style={{ height: 'calc(var(--vh, 1vh) * 100)' }} 
+        <div
+            className="flex w-full overflow-hidden font-sans"
+            style={{ height: 'calc(var(--vh, 1vh) * 100)' }}
         >
             
             <div className="flex flex-grow p-2 bg-gray-50 h-full">
@@ -2152,6 +2208,17 @@ const handleTableChange = async (event) => {
                                                     {isPartialCheckoutMode && <span className="text-xs font-normal text-gray-500">(點擊選取結帳)</span>}
                                                 </div>
                                                 <div className="flex items-center gap-2">
+                                                    {!currentOrder.some(i => i.isSent) && (
+                                                        <button
+                                                            onClick={handleClearUnpaidItems}
+                                                            className="text-[11px] font-bold text-red-400 hover:text-red-600 border border-red-200 hover:border-red-400 rounded px-1.5 py-0.5 flex items-center gap-0.5"
+                                                            title="全部刪除"
+                                                        >
+                                                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                                                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                                                            </svg>
+                                                        </button>
+                                                    )}
                                                     <button
                                                         onClick={() => setIsOrderMerged(v => !v)}
                                                         className="text-[11px] font-bold text-gray-400 hover:text-gray-700 border border-gray-200 rounded px-1.5 py-0.5"
@@ -2480,6 +2547,13 @@ const handleTableChange = async (event) => {
                 tableNumber={tableNumber}
                 onConfirm={handleConfirmAbandon}
                 onCancel={() => setShowAbandonModal(false)}
+            />
+
+            <ClearUnpaidModal
+                isOpen={showClearUnpaidModal}
+                itemCount={unpaidItems.length}
+                onConfirm={handleConfirmClearUnpaid}
+                onCancel={() => setShowClearUnpaidModal(false)}
             />
 
             {/* 停售確認 Modal */}
