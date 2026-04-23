@@ -7,11 +7,41 @@ import {
     updateOrderStatus,
     resetTableStatus,
     getTableStatuses,
+    occupyTableWithoutOrder,
+    moveOrderToTable,
 } from '../db';
 
 import TableCard from '../components/TableCard';
 
 const TABLE_OPTIONS = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8'];
+
+const PaidClearModal = ({ target, onConfirm, onCancel }) => {
+    if (!target) return null;
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+                <div className="flex flex-col items-center pt-8 pb-5 px-6">
+                    <div className="w-20 h-20 rounded-full bg-[#5A7D85]/10 border-[3px] border-[#5A7D85] flex items-center justify-center mb-5">
+                        <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#5A7D85" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                            <polyline points="16 17 21 12 16 7"/>
+                            <line x1="21" y1="12" x2="9" y2="12"/>
+                        </svg>
+                    </div>
+                    <h3 className="text-2xl font-black text-gray-800 mb-2">清桌確認</h3>
+                    <p className="text-base text-gray-500 text-center leading-relaxed font-medium">
+                        <span className="font-black text-gray-700">{target.label}</span> 訂單已全部結帳，<br />確定結案並清桌嗎？
+                    </p>
+                </div>
+                <div className="border-t border-gray-100" />
+                <div className="flex divide-x divide-gray-100">
+                    <button onClick={onCancel} className="flex-1 py-5 text-gray-400 font-black text-xl hover:bg-gray-50 transition-colors">取消</button>
+                    <button onClick={onConfirm} className="flex-1 py-5 text-[#5A7D85] font-black text-xl hover:bg-[#5A7D85]/5 transition-colors">確認清桌</button>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 const ClearTableModal = ({ target, onConfirm, onCancel }) => {
     if (!target) return null;
@@ -103,14 +133,153 @@ const AbandonOrderModal = ({ target, onConfirm, onCancel }) => {
     );
 };
 
+// 同桌合併訂單 Modal
+const SameTableMergeModal = ({ sourceOrder, allOrders, onMerge, onCancel }) => {
+    if (!sourceOrder) return null;
+    const fmtNo = (o) => o.dailyOrderNo ? String(o.dailyOrderNo).padStart(3, '0') : (o.orderId ? String(o.orderId).slice(-3).padStart(3, '0') : '???');
+    const others = allOrders.filter(o => o.orderId && o.orderId !== sourceOrder.orderId);
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xs overflow-hidden">
+                <div className="pt-6 pb-2 px-6">
+                    <h3 className="text-xl font-black text-gray-800 mb-1 text-center">合併訂單</h3>
+                    <p className="text-sm text-gray-500 text-center mb-4">
+                        將 <span className="font-black text-gray-700">#{fmtNo(sourceOrder)}</span> 的品項合入：
+                    </p>
+                    <div className="space-y-2">
+                        {others.map(o => (
+                            <button key={o.orderId} onClick={() => onMerge(o)}
+                                className="w-full flex items-center justify-between px-4 py-3 rounded-xl border-2 border-green-200 bg-green-50 text-green-700 hover:bg-green-100 transition-all active:scale-95">
+                                <span className="font-black text-base">#{fmtNo(o)}</span>
+                                <span className="text-xs font-bold opacity-70">{(o.items || []).length} 項品項</span>
+                            </button>
+                        ))}
+                        {others.length === 0 && (
+                            <p className="text-center text-gray-400 text-sm py-2">無其他可合併的訂單</p>
+                        )}
+                    </div>
+                </div>
+                <div className="border-t border-gray-100 mt-4">
+                    <button onClick={onCancel} className="w-full py-4 text-gray-400 font-black text-lg hover:bg-gray-50 transition-colors">取消</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// 換桌目標桌選擇 Modal
+const TablePickerModal = ({ sourceTableId, tableStatuses, onSelect, onCancel }) => {
+    if (!sourceTableId) return null;
+    const allTables = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8'];
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xs overflow-hidden">
+                <div className="pt-6 pb-2 px-6">
+                    <h3 className="text-xl font-black text-gray-800 mb-1 text-center">選擇目標桌位</h3>
+                    <p className="text-sm text-gray-500 text-center mb-4">將 <span className="font-black text-gray-700">{sourceTableId}</span> 的訂單移至：</p>
+                    <div className="grid grid-cols-4 gap-2">
+                        {allTables.filter(t => t !== sourceTableId).map(t => {
+                            const td = tableStatuses[t] || { orders: [] };
+                            const occupied = td.orders.some(o => ['open','served','paid'].includes(o.status));
+                            return (
+                                <button key={t} onClick={() => onSelect(t)}
+                                    className={`py-3 rounded-xl font-black text-sm transition-all active:scale-95 ${occupied ? 'bg-amber-50 border-2 border-amber-300 text-amber-700 hover:bg-amber-100' : 'bg-blue-50 border-2 border-blue-200 text-blue-700 hover:bg-blue-100'}`}>
+                                    {t}
+                                    {occupied && <div className="text-[9px] font-bold opacity-70 leading-none mt-0.5">有訂單</div>}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+                <div className="border-t border-gray-100 mt-4">
+                    <button onClick={onCancel} className="w-full py-4 text-gray-400 font-black text-lg hover:bg-gray-50 transition-colors">取消</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// 換桌確認 Modal（長按拖曳放開後永遠跳出）
+const MoveConfirmModal = ({ conflictData, onConfirm, onIndependent, onMerge, onCancel }) => {
+    if (!conflictData) return null;
+    const { fromTable, toTable, toOrders, movedOrder } = conflictData;
+    const isOccupied = toOrders && toOrders.length > 0;
+    const hasSourceItems = movedOrder?.items?.length > 0;
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+                <div className="flex flex-col items-center pt-7 pb-4 px-6">
+                    <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${isOccupied ? 'bg-amber-50 border-[3px] border-amber-400' : 'bg-blue-50 border-[3px] border-blue-400'}`}>
+                        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke={isOccupied ? '#f59e0b' : '#3b82f6'} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M5 9l4-4 4 4"/><path d="M9 5v14"/>
+                            <path d="M19 15l-4 4-4-4"/><path d="M15 19V5"/>
+                        </svg>
+                    </div>
+                    <h3 className="text-xl font-black text-gray-800 mb-1">換桌確認</h3>
+                    <div className="flex items-center gap-3 my-2">
+                        <span className="text-2xl font-black text-gray-700 bg-gray-100 px-3 py-1 rounded-xl">{fromTable}</span>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                        <span className={`text-2xl font-black px-3 py-1 rounded-xl ${isOccupied ? 'text-amber-700 bg-amber-50' : 'text-blue-700 bg-blue-50'}`}>{toTable}</span>
+                    </div>
+                    {isOccupied ? (
+                        <p className="text-sm text-amber-600 font-bold text-center mt-1 bg-amber-50 rounded-xl px-4 py-2 w-full">
+                            桌 {toTable} 已有訂單，請選擇處理方式
+                        </p>
+                    ) : (
+                        <p className="text-sm text-gray-500 text-center mt-1">確認將訂單從 <span className="font-black text-gray-700">{fromTable}</span> 移至 <span className="font-black text-gray-700">{toTable}</span>？</p>
+                    )}
+                </div>
+
+                {isOccupied ? (
+                    <div className="grid grid-cols-2 gap-3 px-6 pb-6">
+                        <button onClick={onIndependent}
+                            className="flex flex-col items-center py-4 px-2 rounded-xl border-2 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 transition-all active:scale-95">
+                            <svg className="mb-1" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <rect x="2" y="3" width="9" height="18" rx="2"/><rect x="13" y="3" width="9" height="18" rx="2"/>
+                            </svg>
+                            <div className="font-black text-sm">各自獨立</div>
+                            <div className="text-[10px] font-bold opacity-70 mt-0.5 text-center leading-tight">各自計算<br/>各自結帳</div>
+                        </button>
+                        {hasSourceItems && (
+                            <button onClick={() => onMerge(toOrders[0])}
+                                className="flex flex-col items-center py-4 px-2 rounded-xl border-2 border-green-200 bg-green-50 text-green-700 hover:bg-green-100 transition-all active:scale-95">
+                                <svg className="mb-1" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18"/>
+                                </svg>
+                                <div className="font-black text-sm">合併訂單</div>
+                                <div className="text-[10px] font-bold opacity-70 mt-0.5 text-center leading-tight">品項合入<br/>{toTable} 訂單</div>
+                            </button>
+                        )}
+                    </div>
+                ) : (
+                    <div className="px-6 pb-6">
+                        <button onClick={onConfirm}
+                            className="w-full py-4 rounded-xl font-black text-lg bg-blue-600 text-white hover:bg-blue-700 active:scale-95 transition-all">
+                            確認換桌
+                        </button>
+                    </div>
+                )}
+
+                <div className="border-t border-gray-100">
+                    <button onClick={onCancel} className="w-full py-4 text-gray-400 font-black text-lg hover:bg-gray-50 transition-colors">取消</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const TableManagementPage = () => {
     const navigate = useNavigate();
     const location = useLocation();
     const [tableStatuses, setTableStatuses] = useState({});
     const [isLoading, setIsLoading] = useState(true);
-    const [abandonTarget, setAbandonTarget] = useState(null);    // { tableNumber, orderId, label }
-    const [clearTarget, setClearTarget]     = useState(null);    // { tableNumber, orderId, label }
+    const [abandonTarget, setAbandonTarget]     = useState(null);    // { tableNumber, orderId, label }
+    const [clearTarget, setClearTarget]         = useState(null);    // { tableNumber, orderId, label }
+    const [paidClearTarget, setPaidClearTarget] = useState(null);    // { tableNumber, orderId, label }
     const [hasTakeoutOrders, setHasTakeoutOrders] = useState(false);
+    const [conflictData, setConflictData] = useState(null);      // { movedOrder, fromTable, toTable, toOrders }
+    const [moveSource, setMoveSource] = useState(null);           // { tableId, order }
+    const [mergeSource, setMergeSource] = useState(null);         // { tableId, order, allOrders }
 
     const tableStatusesRef = useRef(tableStatuses);
 
@@ -201,41 +370,46 @@ const TableManagementPage = () => {
         return () => clearInterval(interval);
     }, [loadTableStatuses]);
 
-    /**
-     * 【修正處】處理拖曳換桌邏輯
-     * 支援 open/served/paid 狀態的完整訂單遷移
-     */
-    const handleMoveOrder = useCallback(async (fromTableId, toTableId, order) => {
-        // 1. 基本防錯與「純佔桌(無單)」處理
-        if (fromTableId === toTableId) return;
+    const handleMoveRequest = useCallback((tableId, order) => {
+        setMoveSource({ tableId, order });
+    }, []);
 
+    const handleMergeRequest = useCallback((tableId, order, allOrders) => {
+        setMergeSource({ tableId, order, allOrders });
+    }, []);
+
+    const handlePickTargetTable = useCallback((targetTableId) => {
+        if (!moveSource) return;
+        const toTableData = tableStatusesRef.current[targetTableId] || { orders: [] };
+        const toOrders = toTableData.orders.filter(o => ['open', 'served', 'paid'].includes(o.status));
+        setConflictData({ movedOrder: moveSource.order, fromTable: moveSource.tableId, toTable: targetTableId, toOrders });
+        setMoveSource(null);
+    }, [moveSource]);
+
+    /**
+     * 換桌：執行實際的換桌 API 呼叫
+     */
+    const executeMoveOrder = useCallback(async (order, fromTable, toTable, mergeWithOrder) => {
+        setConflictData(null);
         setIsLoading(true);
         try {
-            if (!order.orderId) {
-                // 如果是「純佔桌」換桌 (無實體訂單 ID)
-                await resetTableStatus(fromTableId); // 原桌清空
-                // 這裡假設 resetTableStatus 或 updateOrderStatus 邏輯能直接建立新佔桌
-                // 如果 db.js 有專門佔桌 API 請替換，此處以更新訂單邏輯兼容
-                await updateOrderStatus({
-                    newTable: toTableId,
-                    newStatus: 'open'
+            if (order.orderId) {
+                await moveOrderToTable(order.orderId, {
+                    newTable: toTable,
+                    fromTable,
+                    mergeWithOrderId: mergeWithOrder?.orderId || null,
                 });
             } else {
-                // 2. 如果是「實體訂單」換桌 (served/paid/open 有單狀態)
-                // 更新該訂單的桌號，並同步通知後端處理桌位狀態紀錄的搬移
-                await updateOrderStatus({ 
-                    orderId: order.orderId, 
-                    newTable: toTableId,
-                    newStatus: order.status,
-                    // 確保搬移後，原桌位狀態在資料庫中被重置，新桌位被標記
-                    fromTable: fromTableId 
-                });
+                // 純佔桌（無實體訂單）：清空舊桌，佔用新桌
+                localStorage.removeItem(`table_open_${fromTable}`);
+                await resetTableStatus(fromTable);
+                const newTime = Date.now();
+                localStorage.setItem(`table_open_${toTable}`, String(newTime));
+                await occupyTableWithoutOrder(toTable, newTime);
             }
-            
-            // 重新讀取所有狀態
             await loadTableStatuses(true);
         } catch (error) {
-            console.error("換桌失敗:", error);
+            console.error('換桌失敗:', error);
         } finally {
             setIsLoading(false);
         }
@@ -256,16 +430,18 @@ const TableManagementPage = () => {
                     customerCount: currentOrder?.customerCount || 1,
                     sendTime: currentOrder?.sendTime || null,
                     dailyOrderNo: currentOrder?.dailyOrderNo || null,
+                    forceNewOrder: !currentOrder?.orderId,
                 }
             });
             return;
         }
 
-        navigate('/order', { 
-            state: { 
+        navigate('/order', {
+            state: {
                 initialTableNumber: tableId,
-                openTimestamp: Date.now() 
-            } 
+                openTimestamp: Date.now(),
+                forceNewOrder: true,
+            }
         });
     }, [navigate]);
     
@@ -279,21 +455,34 @@ const TableManagementPage = () => {
             const itemUniqueId = item.internalId || item.id;
             return (itemUniqueId === itemId) ? { ...item, isServed: !currentIsServed } : item;
         });
-        
-        setIsLoading(true);
+
+        // Optimistic update：立即更新本地 state，不等待 API
+        setTableStatuses(prev => {
+            const prevTable = prev[tableId];
+            if (!prevTable) return prev;
+            return {
+                ...prev,
+                [tableId]: {
+                    ...prevTable,
+                    orders: prevTable.orders.map(o =>
+                        o.orderId === orderId ? { ...o, items: newItems } : o
+                    ),
+                },
+            };
+        });
+
         try {
-             await updateOrderStatus({ 
-                orderId: orderId, 
-                newStatus: order.status, 
-                newItems: newItems,   
-             });
-             await loadTableStatuses(true); 
+            await updateOrderStatus({
+                orderId: orderId,
+                newStatus: order.status,
+                newItems: newItems,
+            });
         } catch (error) {
             console.error("更新失敗:", error);
-        } finally {
-            setIsLoading(false);
+            // 失敗時 reload 還原正確狀態
+            await loadTableStatuses(true);
         }
-    }, [loadTableStatuses]); 
+    }, [loadTableStatuses]);
 
     const handleResetTable = useCallback(async (tableNumber, orderId) => {
         const currentTableData = tableStatusesRef.current[tableNumber];
@@ -303,38 +492,52 @@ const TableManagementPage = () => {
 
         const currentStatus  = targetOrder?.status;
         const isOnlyOccupied = currentStatus === 'open' && !orderId;
-        const isEmptyOrder   = currentStatus === 'open' && !!orderId && !(targetOrder?.items?.length);
-        const isFullyPaid    = currentStatus === 'paid';
-        const isServed       = currentStatus === 'served';
 
-        if (isServed) {
+        // 計算 effectiveStatus：paid 但仍有未結帳品項（合併後）→ 視為 served
+        const orderItems = targetOrder?.items || [];
+        const unpaidAmount = orderItems.reduce((acc, item) => !item.isPaid ? acc + ((item.price || 0) * (item.quantity || 0)) : acc, 0);
+        const hasUnpaid = unpaidAmount > 0;
+        const effectiveStatus = (currentStatus === 'paid' && hasUnpaid) ? 'served' : currentStatus;
+
+        // 有尚未結帳品項（served 狀態，含合併後 paid+未結帳）→ 棄單流程
+        if (effectiveStatus === 'served') {
             setAbandonTarget({ tableNumber, orderId, label: tableNumber });
             return;
         }
 
-        if (isOnlyOccupied || isEmptyOrder) {
-            // 純佔桌 或 有 orderId 但未點餐（只改人數）→ 清桌確認 modal
-            setClearTarget({ tableNumber, orderId: isEmptyOrder ? orderId : null, label: tableNumber });
+        // 純佔桌（無訂單）→ 清桌確認 modal
+        if (isOnlyOccupied) {
+            setClearTarget({ tableNumber, orderId: null, label: tableNumber });
             return;
         }
 
-        if (isFullyPaid) {
-            if (window.confirm(`確定要將 ${tableNumber} 該筆訂單結案並清桌嗎？`)) {
-                setIsLoading(true);
-                try {
-                    await resetTableStatus(tableNumber, orderId);
-                    await loadTableStatuses(true);
-                } catch (error) {
-                    console.error("清桌操作失敗:", error);
-                } finally {
-                    setIsLoading(false);
-                }
-            }
+        // open 狀態（點餐中或只有佔桌有 orderId）→ 清桌確認 modal（品項尚未送出，不需棄單流程）
+        if (effectiveStatus === 'open') {
+            setClearTarget({ tableNumber, orderId: orderId || null, label: tableNumber });
             return;
         }
 
-        alert(`桌位 ${tableNumber} 目前狀態為點餐中，無法直接清桌。`);
+        // 全部結帳完成 → 清桌 modal
+        if (effectiveStatus === 'paid') {
+            setPaidClearTarget({ tableNumber, orderId, label: tableNumber });
+            return;
+        }
     }, [loadTableStatuses]);
+
+    const handleConfirmPaidClear = async () => {
+        if (!paidClearTarget) return;
+        const { tableNumber, orderId } = paidClearTarget;
+        setPaidClearTarget(null);
+        setIsLoading(true);
+        try {
+            await resetTableStatus(tableNumber, orderId);
+            await loadTableStatuses(true);
+        } catch (error) {
+            console.error("清桌操作失敗:", error);
+        } finally {
+            setIsLoading(false);
+        }
+    };
 
     const handleConfirmClear = async () => {
         if (!clearTarget) return;
@@ -378,14 +581,15 @@ const TableManagementPage = () => {
                 <>
                     <div className="grid grid-cols-5 gap-2 min-h-0">
                         {['A1', 'A2', 'A3', 'A4', 'A5'].map(tableId => (
-                            <div key={tableId} className="h-full min-h-0 overflow-hidden">
+                            <div key={tableId} data-table-id={tableId} className="h-full min-h-0 overflow-hidden">
                                 <TableCard
                                     tableData={tableStatuses[tableId] || { id: tableId, orders: [] }}
                                     handleTableClick={handleTableClick}
                                     handleToggleItemSentOnTable={handleToggleItemSentOnTable}
-                                    handleResetTable={handleResetTable} 
-                                    handleMoveOrder={handleMoveOrder}
-                                    isLoading={isLoading} 
+                                    handleResetTable={handleResetTable}
+                                    onMoveRequest={handleMoveRequest}
+                                    onMergeRequest={handleMergeRequest}
+                                    isLoading={isLoading}
                                 />
                             </div>
                         ))}
@@ -415,13 +619,14 @@ const TableManagementPage = () => {
                         </div>
                         <div className="col-span-3 grid grid-cols-3 gap-2 h-full min-h-0">
                             {['A6', 'A7', 'A8'].map(tableId => (
-                                <div key={tableId} className="h-full min-h-0 overflow-hidden">
+                                <div key={tableId} data-table-id={tableId} className="h-full min-h-0 overflow-hidden">
                                     <TableCard
                                         tableData={tableStatuses[tableId] || { id: tableId, orders: [] }}
                                         handleTableClick={handleTableClick}
                                         handleToggleItemSentOnTable={handleToggleItemSentOnTable}
                                         handleResetTable={handleResetTable}
-                                        handleMoveOrder={handleMoveOrder}
+                                        onMoveRequest={handleMoveRequest}
+                                        onMergeRequest={handleMergeRequest}
                                         isLoading={isLoading}
                                     />
                                 </div>
@@ -432,6 +637,11 @@ const TableManagementPage = () => {
                 </>
             )}
 
+            <PaidClearModal
+                target={paidClearTarget}
+                onConfirm={handleConfirmPaidClear}
+                onCancel={() => setPaidClearTarget(null)}
+            />
             <ClearTableModal
                 target={clearTarget}
                 onConfirm={handleConfirmClear}
@@ -441,6 +651,29 @@ const TableManagementPage = () => {
                 target={abandonTarget}
                 onConfirm={handleConfirmAbandon}
                 onCancel={() => setAbandonTarget(null)}
+            />
+            <SameTableMergeModal
+                sourceOrder={mergeSource?.order || null}
+                allOrders={mergeSource?.allOrders || []}
+                onMerge={(targetOrder) => {
+                    const src = mergeSource;
+                    setMergeSource(null);
+                    executeMoveOrder(src.order, src.tableId, src.tableId, targetOrder);
+                }}
+                onCancel={() => setMergeSource(null)}
+            />
+            <TablePickerModal
+                sourceTableId={moveSource?.tableId || null}
+                tableStatuses={tableStatuses}
+                onSelect={handlePickTargetTable}
+                onCancel={() => setMoveSource(null)}
+            />
+            <MoveConfirmModal
+                conflictData={conflictData}
+                onConfirm={() => executeMoveOrder(conflictData.movedOrder, conflictData.fromTable, conflictData.toTable, null)}
+                onIndependent={() => executeMoveOrder(conflictData.movedOrder, conflictData.fromTable, conflictData.toTable, null)}
+                onMerge={(destOrder) => executeMoveOrder(conflictData.movedOrder, conflictData.fromTable, conflictData.toTable, destOrder)}
+                onCancel={() => setConflictData(null)}
             />
         </div>
     );

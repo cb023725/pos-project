@@ -12,6 +12,7 @@ import {
     occupyTableWithoutOrder,
     resetTableStatus,
     getTableStatuses,
+    moveOrderToTable,
     searchCustomer,
     autoSaveCustomer,
     updateMenuItem,
@@ -963,6 +964,7 @@ const OrderPage = () => {
     const location = useLocation();
     const initialTableNumber = location.state?.initialTableNumber || '';
     const initialOrderId = location.state?.orderId || null;
+    const forceNewOrder = location.state?.forceNewOrder || false;
     const initialOpenTime = location.state?.openTimestamp || Date.now();
     const isTakeout = location.state?.isTakeout || false;
 
@@ -1015,6 +1017,7 @@ const OrderPage = () => {
 
     const [isCheckoutOptionModalOpen, setIsCheckoutOptionModalOpen] = useState(false);
     const [checkoutResult, setCheckoutResult] = useState(null); // { total, isPartial, navigateTo }
+    const [tableChangeConflict, setTableChangeConflict] = useState(null); // { pendingTable, targetOrders }
     const [showAbandonModal, setShowAbandonModal] = useState(false);
     const [showClearModal,  setShowClearModal]  = useState(false);
     const [showClearUnpaidModal, setShowClearUnpaidModal] = useState(false);
@@ -1223,7 +1226,7 @@ const OrderPage = () => {
             const allActive = await getActiveOrders();
             const openOrder = initialOrderId
                 ? allActive.find(o => o.id === initialOrderId)
-                : (isTakeout ? null : allActive.find(o => o.table === tableId));
+                : (isTakeout || forceNewOrder ? null : allActive.find(o => o.table === tableId));
             if (openOrder) {
                 const loadedItems = openOrder.items.map(item => ({
                     ...item,
@@ -1878,91 +1881,80 @@ const handleChangeItemQuantity = (internalId, diff) => {
             payload: { internalId, newQty, setFinishTime, setSendTime, setOrderStatus, currentOrderStatus: orderStatus, setIsDirty }
         });
     };
-    // --- 輔助邏輯 (保持不變) ---
-const handleTableChange = async (event) => {
-    const newTable = event.target.value;
-    
-    // 1. 基本檢查：如果選到目前的桌號，或是空值，則不處理
-    if (newTable === tableNumber || !newTable) return;
-
-    const oldTable = tableNumber;
-
-    try {
+    // --- 換桌邏輯 ---
+    const executeTableMove = useCallback(async (newTable, mergeWithTargetOrder) => {
+        const fromTable = tableNumber;
         setIsLoading(true);
+        try {
+            if (currentOrderId) {
+                // 先確保目前訂單狀態已存入 DB（items、status 等）
+                if (currentOrder.length > 0) {
+                    await updateOrderStatus({
+                        orderId: currentOrderId,
+                        newStatus: ['new', 'open'].includes(orderStatus) ? 'open' : orderStatus,
+                        newItems: currentOrder.map(({ id, name, price, quantity, isSent, isServed, isPaid, category, internalId, sortOrder, remarks }) =>
+                            ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, category, internalId, sortOrder, remarks: remarks || [] })),
+                        customerCount, sendTime, finishTime,
+                        customerName, customerPhone, needsUtensils, pickupTime,
+                    });
+                }
+                await moveOrderToTable(currentOrderId, {
+                    newTable,
+                    fromTable,
+                    mergeWithOrderId: mergeWithTargetOrder?.id || null,
+                });
+                if (mergeWithTargetOrder) {
+                    // 目前訂單已被合併（棄單），返回桌位管理
+                    setTableChangeConflict(null);
+                    navigate('/');
+                    return;
+                }
+            } else {
+                // 純佔桌（無實體訂單）
+                if (fromTable && fromTable !== '外帶') {
+                    localStorage.removeItem(`table_open_${fromTable}`);
+                    await resetTableStatus(fromTable);
+                }
+                const newTime = Date.now();
+                localStorage.setItem(`table_open_${newTable}`, String(newTime));
+                await occupyTableWithoutOrder(newTable, newTime);
+            }
+            setTableNumber(newTable);
+            setOriginalTableId(newTable);
+            setIsDirty(false);
+            setTableChangeConflict(null);
+        } catch (e) {
+            console.error('換桌失敗:', e);
+            alert(`換桌操作失敗: ${e.message}`);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [tableNumber, currentOrderId, currentOrder, orderStatus, customerCount, sendTime, finishTime, customerName, customerPhone, needsUtensils, pickupTime, navigate]);
 
-        // 2. 獲取最新資料庫桌況，檢查目標桌是否已被佔用
-        const dbTableRecords = await getTableStatuses();
-        const targetRecord = dbTableRecords.find(r => r.tableNumber === newTable);
-        
-        // 只要不是 idle，都視為需要確認的狀態 (包含 open, served, paid)
-        const isTargetOccupied = targetRecord && targetRecord.status !== 'idle';
+    const handleTableChange = async (event) => {
+        const newTable = event.target.value;
+        if (newTable === tableNumber || !newTable) return;
 
-        if (isTargetOccupied) {
-            const confirmOverwrite = window.confirm(
-                `⚠️ 注意：${newTable} 目前狀態為 [${targetRecord.status}]。\n確定要將 ${oldTable} 的內容移過去並覆蓋嗎？`
-            );
-            
-            if (!confirmOverwrite) {
-                // 使用者取消：將下拉選單還原回舊桌號，並結束函式
-                event.target.value = oldTable;
+        setIsLoading(true);
+        try {
+            const activeOrders = await getActiveOrders();
+            const targetOrders = activeOrders.filter(o => o.table === newTable && ['open', 'served', 'paid'].includes(o.status));
+
+            if (targetOrders.length > 0) {
+                // 目標桌已有訂單 → 顯示衝突處理 Modal
+                setTableChangeConflict({ pendingTable: newTable, targetOrders });
                 setIsLoading(false);
                 return;
             }
+
+            // 目標桌空閒 → 直接換桌
+            await executeTableMove(newTable, null);
+        } catch (e) {
+            console.error('換桌失敗:', e);
+            alert(`換桌操作失敗: ${e.message}`);
+            setIsLoading(false);
         }
-
-        // 3. 準備轉移與寫入新桌
-        let savedId = null;
-        const statusToSave = orderStatus || 'served';
-
-        if (currentOrder && currentOrder.length > 0) {
-            // 情境 A：已有餐點內容 (Served / Paid / Submitted)
-            // 💡 關鍵：傳入目前的 currentOrderId 確保是同一筆訂單轉移，而非建立新單
-            savedId = await saveOrderBeforeNavigate(
-                newTable, 
-                currentOrder, 
-                currentOrderId, 
-                customerCount, 
-                subTotal, 
-                statusToSave, 
-                sendTime, 
-                finishTime
-            );
-            
-            if (!savedId) throw new Error("寫入新桌位失敗，請檢查網路連線");
-
-        } else {
-            // 情境 B：純佔桌 (Open 狀態，尚無點餐內容)
-            const occupySuccess = await occupyTableWithoutOrder(newTable, openTimestamp);
-            if (!occupySuccess) throw new Error("佔用新桌失敗");
-            savedId = "occupy_success"; 
-        }
-
-        // 4. 🚀 重要安全邏輯：確認新桌寫入成功後，才清除舊桌位狀態
-        if (savedId && oldTable && oldTable !== '外帶') {
-            await resetTableStatus(oldTable);
-        }
-
-        // 5. 更新前端 UI 狀態
-        setTableNumber(newTable);          // 更新畫面上顯示的桌號
-        setOriginalTableId(newTable);      // 更新存檔基準桌號
-        setIsDirty(false);                 // 重置「未存檔」標記
-        
-        // 如果是從 Open 狀態轉移且無餐點，確保狀態同步為 open
-        if (!currentOrder || currentOrder.length === 0) {
-            setOrderStatus('open');
-        }
-
-        console.log(`✅ 換桌成功：從 ${oldTable} 轉至 ${newTable}`);
-
-    } catch (e) {
-        console.error("切換桌號失敗:", e);
-        alert(`換桌操作失敗: ${e.message}`);
-        // 發生錯誤時，將下拉選單還原
-        event.target.value = oldTable; 
-    } finally {
-        setIsLoading(false);
-    }
-};
+    };
 
     const handleChangeCustomerCount = (diff) => {
         const newCount = Math.max(isTakeout ? 0 : 1, customerCount + diff);
@@ -2617,6 +2609,56 @@ const handleTableChange = async (event) => {
                 onToggle={handleRemarkToggle}
                 onCancel={handleRemarkCancel}
             />
+
+            {/* 換桌衝突處理 Modal */}
+            {tableChangeConflict && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+                        <div className="flex flex-col items-center pt-7 pb-4 px-6">
+                            <div className="w-16 h-16 rounded-full bg-amber-50 border-[3px] border-amber-400 flex items-center justify-center mb-4">
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                                    <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                                </svg>
+                            </div>
+                            <h3 className="text-xl font-black text-gray-800 mb-1">桌 {tableChangeConflict.pendingTable} 已有訂單</h3>
+                            <p className="text-sm text-gray-500 text-center leading-relaxed">
+                                將 <span className="font-black text-gray-700">{tableNumber}</span> 移至 <span className="font-black text-gray-700">{tableChangeConflict.pendingTable}</span>，請選擇處理方式：
+                            </p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 px-6 pb-6">
+                            <button
+                                onClick={() => { const t = tableChangeConflict.pendingTable; setTableChangeConflict(null); executeTableMove(t, null); }}
+                                className="flex flex-col items-center py-4 px-2 rounded-xl border-2 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 transition-all active:scale-95"
+                            >
+                                <svg className="mb-1" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect x="2" y="3" width="9" height="18" rx="2"/><rect x="13" y="3" width="9" height="18" rx="2"/>
+                                </svg>
+                                <div className="font-black text-sm">各自獨立</div>
+                                <div className="text-[10px] font-bold opacity-70 mt-0.5 text-center leading-tight">各自計算<br/>各自結帳</div>
+                            </button>
+                            {currentOrderId && currentOrder.length > 0 && (
+                                <button
+                                    onClick={() => { const conflict = tableChangeConflict; setTableChangeConflict(null); executeTableMove(conflict.pendingTable, conflict.targetOrders[0]); }}
+                                    className="flex flex-col items-center py-4 px-2 rounded-xl border-2 border-green-200 bg-green-50 text-green-700 hover:bg-green-100 transition-all active:scale-95"
+                                >
+                                    <svg className="mb-1" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18"/>
+                                    </svg>
+                                    <div className="font-black text-sm">合併訂單</div>
+                                    <div className="text-[10px] font-bold opacity-70 mt-0.5 text-center leading-tight">品項合入<br/>{tableChangeConflict.pendingTable} 訂單</div>
+                                </button>
+                            )}
+                        </div>
+                        <div className="border-t border-gray-100">
+                            <button
+                                onClick={() => setTableChangeConflict(null)}
+                                className="w-full py-4 text-gray-400 font-black text-lg hover:bg-gray-50 transition-colors"
+                            >取消</button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Loading 覆蓋層 */}
             {isLoading && <div className="fixed inset-0 bg-black/20 z-[60] flex items-center justify-center"><div className="bg-white p-4 rounded-lg animate-pulse font-bold">處理中...</div></div>}

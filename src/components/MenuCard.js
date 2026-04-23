@@ -97,10 +97,10 @@ const MenuCard = React.memo(({ item, onAddItem, onLongPress }) => {
             </div>
 
             {/* 底部資訊 */}
-            <div className="p-1.5 flex flex-col h-25 justify-center">
+            <div className="p-1 flex flex-col h-25 justify-center">
                 <div className="relative w-full mb-1">
                     {item.category === '主餐' && item.sortOrder && (
-                        <div className="absolute left-0 top-0.5 flex items-center justify-center w-6 h-6 bg-black rounded-md z-10">
+                        <div className="absolute left-0 top-0.5 flex items-center justify-center w-5 h-5 bg-black rounded-md z-10">
                             <span className="text-white font-bold text-[12px] leading-none">{Number(item.sortOrder)}</span>
                         </div>
                     )}

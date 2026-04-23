@@ -1222,6 +1222,67 @@ app.post('/api/tables/:tableNumber/occupy', async (req, res) => {
     res.json({ ok: true });
 });
 
+// 換桌：移動訂單到新桌位（或合併）
+app.post('/api/orders/:id/move-table', async (req, res) => {
+    const orderId = parseInt(req.params.id);
+    const { newTable, fromTable, mergeWithOrderId } = req.body;
+    const now = new Date().toISOString();
+    const STATUS_PRIO = { served: 0, open: 1, paid: 2 };
+
+    try {
+        if (mergeWithOrderId) {
+            // 合併模式：將來源訂單的品項合入目標訂單，來源訂單標記為棄單（佔號）
+            const [{ data: srcOrder, error: srcErr }, { data: dstOrder, error: dstErr }] = await Promise.all([
+                supabase.from('orders').select('*').eq('id', orderId).single(),
+                supabase.from('orders').select('*').eq('id', mergeWithOrderId).single(),
+            ]);
+            if (srcErr || !srcOrder) return res.status(404).json({ error: '找不到來源訂單' });
+            if (dstErr || !dstOrder) return res.status(404).json({ error: '找不到目標訂單' });
+
+            const mergedItems = [...(dstOrder.items || []), ...(srcOrder.items || [])];
+            const newTotal = mergedItems.reduce((s, i) => s + (i.price || 0) * (i.quantity || 1), 0);
+            const mergedCount = (dstOrder.customer_count || 0) + (srcOrder.customer_count || 0);
+
+            await supabase.from('orders').update({
+                items: mergedItems, total: newTotal, sub_total: newTotal,
+                customer_count: mergedCount, updated_at: now,
+            }).eq('id', mergeWithOrderId);
+
+            await supabase.from('orders').update({ status: 'abandoned', updated_at: now }).eq('id', orderId);
+        } else {
+            // 獨立模式：只更新桌號
+            await supabase.from('orders').update({ table_number: newTable, updated_at: now }).eq('id', orderId);
+        }
+
+        // 重算來源桌位狀態
+        if (fromTable && fromTable !== '外帶') {
+            const { data: remaining } = await supabase.from('orders')
+                .select('id, status').eq('table_number', fromTable).in('status', ['open', 'served', 'paid']);
+            if (!remaining || remaining.length === 0) {
+                await supabase.from('tables').upsert({ table_number: fromTable, status: 'idle', order_id: null, updated_at: now });
+            } else {
+                const best = remaining.slice().sort((a, b) => (STATUS_PRIO[a.status] ?? 3) - (STATUS_PRIO[b.status] ?? 3))[0];
+                await supabase.from('tables').upsert({ table_number: fromTable, status: best.status, order_id: best.id, updated_at: now });
+            }
+        }
+
+        // 更新目標桌位狀態（獨立模式）
+        if (!mergeWithOrderId && newTable && newTable !== '外帶') {
+            const { data: ordRow } = await supabase.from('orders').select('status').eq('id', orderId).single();
+            const { data: existingAtNew } = await supabase.from('orders')
+                .select('id, status').eq('table_number', newTable).in('status', ['open', 'served', 'paid']);
+            const allAtNew = [...(existingAtNew || []), { id: orderId, status: ordRow?.status || 'open' }];
+            const best = allAtNew.sort((a, b) => (STATUS_PRIO[a.status] ?? 3) - (STATUS_PRIO[b.status] ?? 3))[0];
+            await supabase.from('tables').upsert({ table_number: newTable, status: best.status, order_id: best.id, updated_at: now });
+        }
+
+        res.json({ ok: true });
+    } catch (e) {
+        console.error('move-table error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // ============================================================
 // 訂單
 // ============================================================

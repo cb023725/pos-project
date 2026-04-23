@@ -376,6 +376,10 @@ const InventoryPage = () => {
     const [isLogLoading, setIsLogLoading] = useState(false);
     const [selectedItem, setSelectedItem] = useState(null);
     const [allMenuItems, setAllMenuItems] = useState([]);
+    const [batchMode, setBatchMode] = useState(false);
+    const [batchOpType, setBatchOpType] = useState('replenish');
+    const [batchValues, setBatchValues] = useState({});
+    const [batchSaving, setBatchSaving] = useState(false);
 
     const load = useCallback(async () => {
         setIsLoading(true);
@@ -513,6 +517,51 @@ const InventoryPage = () => {
         finally { setIsLogLoading(false); }
     };
 
+    const handleToggleBatchMode = () => {
+        setBatchMode(prev => !prev);
+        setBatchValues({});
+        setBatchOpType('replenish');
+    };
+
+    const handleBatchSave = async () => {
+        const toSave = Object.entries(batchValues)
+            .filter(([, val]) => val !== '' && Number(val) !== 0 && !isNaN(Number(val)))
+            .map(([id, val]) => {
+                const item = inventory.find(i => i.id === id);
+                if (!item) return null;
+                const inputValue = Number(val);
+                let newStock;
+                if (batchOpType === 'replenish') newStock = item.stock + inputValue;
+                else if (batchOpType === 'consume') newStock = item.stock - inputValue;
+                else newStock = inputValue;
+                return { id, newStock, item };
+            })
+            .filter(Boolean);
+
+        if (toSave.length === 0) { alert('請輸入至少一項數量'); return; }
+        setBatchSaving(true);
+        try {
+            const noteMap = { replenish: '補貨', consume: '消耗', inventory: '盤點' };
+            for (const { id, newStock, item } of toSave) {
+                const delta = newStock - item.stock;
+                await updateMenuItem(id, { stock: newStock });
+                if (delta !== 0) {
+                    await addInventoryLog(id, item.name, delta, noteMap[batchOpType]);
+                }
+            }
+            setInventory(prev => prev.map(i => {
+                const saved = toSave.find(s => s.id === i.id);
+                return saved ? { ...i, stock: saved.newStock } : i;
+            }));
+            setBatchValues({});
+            setBatchMode(false);
+        } catch (e) {
+            alert('批次儲存失敗：' + e.message);
+        } finally {
+            setBatchSaving(false);
+        }
+    };
+
     const handleDeleteItem = async (id, name) => {
         if (!window.confirm(`確定刪除「${name}」？此操作無法復原。`)) return;
         try {
@@ -557,13 +606,22 @@ const InventoryPage = () => {
             {/* 標題 */}
             <div className="flex justify-between items-center mb-6 border-b pb-3 flex-shrink-0">
                 <h2 className="text-3xl font-black text-gray-800">庫存管理</h2>
-                <button
-                    onClick={() => setIsAddModalOpen(true)}
-                    className="flex items-center gap-2 px-4 py-2.5 bg-blue-500 hover:bg-blue-600 text-white rounded-xl font-bold text-sm shadow-sm transition-colors"
-                >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
-                    新增品項
-                </button>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={handleToggleBatchMode}
+                        className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm shadow-sm transition-colors ${batchMode ? 'bg-orange-500 hover:bg-orange-600 text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h7" /></svg>
+                        {batchMode ? '取消批次' : '批次調整'}
+                    </button>
+                    <button
+                        onClick={() => setIsAddModalOpen(true)}
+                        className="flex items-center gap-2 px-4 py-2.5 bg-blue-500 hover:bg-blue-600 text-white rounded-xl font-bold text-sm shadow-sm transition-colors"
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
+                        新增品項
+                    </button>
+                </div>
             </div>
 
             {inventory.length === 0 ? (
@@ -591,6 +649,28 @@ const InventoryPage = () => {
                         ))}
                     </div>
 
+                    {/* 批次操作列 */}
+                    {batchMode && (
+                        <div className="flex items-center gap-3 mb-4 p-3 bg-orange-50 border border-orange-200 rounded-xl flex-shrink-0">
+                            <span className="text-sm font-bold text-orange-700 whitespace-nowrap">操作類型：</span>
+                            <div className="flex bg-white border border-orange-200 rounded-lg overflow-hidden">
+                                {[['replenish','補貨','text-emerald-700'],['consume','消耗','text-orange-700'],['inventory','盤點','text-blue-700']].map(([op, label, color]) => (
+                                    <button key={op} onClick={() => setBatchOpType(op)}
+                                        className={`px-4 py-1.5 text-sm font-bold transition-colors ${batchOpType === op ? (op === 'replenish' ? 'bg-emerald-500 text-white' : op === 'consume' ? 'bg-orange-500 text-white' : 'bg-blue-500 text-white') : `bg-white ${color} hover:bg-gray-50`}`}>
+                                        {label}
+                                    </button>
+                                ))}
+                            </div>
+                            <span className="text-xs text-orange-600 flex-1">
+                                {batchOpType === 'replenish' ? '輸入要增加的數量' : batchOpType === 'consume' ? '輸入要扣除的數量' : '輸入盤點後的實際數量'}
+                            </span>
+                            <button onClick={handleBatchSave} disabled={batchSaving}
+                                className="px-5 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white rounded-lg font-bold text-sm shadow-sm transition-colors">
+                                {batchSaving ? '儲存中...' : `確認儲存 (${Object.values(batchValues).filter(v => v !== '' && Number(v) !== 0).length} 項)`}
+                            </button>
+                        </div>
+                    )}
+
                     {/* 庫存列表（直接在最外層容器） */}
                     <table className="min-w-full divide-y divide-gray-200 bg-white rounded-xl shadow overflow-hidden">
                         <thead className="bg-gray-50">
@@ -600,6 +680,7 @@ const InventoryPage = () => {
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-2/12">類別</th>
                                 <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-2/12">當前庫存 (份)</th>
                                 <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-2/12">狀態</th>
+                                {batchMode && <th className="px-4 py-3 text-center text-xs font-medium text-orange-500 uppercase tracking-wider w-32">調整數量</th>}
                                 <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
                                 <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">紀錄</th>
                                 <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">設定</th>
@@ -612,7 +693,7 @@ const InventoryPage = () => {
                                 return (
                                     <React.Fragment key={category}>
                                         <tr className="bg-gray-100">
-                                            <td colSpan="9" className="px-6 py-3 text-sm font-black text-gray-800 border-l-4 border-blue-600">{category}</td>
+                                            <td colSpan={batchMode ? 10 : 9} className="px-6 py-3 text-sm font-black text-gray-800 border-l-4 border-blue-600">{category}</td>
                                         </tr>
                                         {sortedItems.map((item, idx) => {
                                             const { display, badge } = getStockStatus(item);
@@ -639,6 +720,18 @@ const InventoryPage = () => {
                                                     <td className="px-6 py-4 whitespace-nowrap text-center">
                                                         <span className={`px-3 py-1 text-xs font-bold rounded-full text-white ${badge}`}>{display}</span>
                                                     </td>
+                                                    {batchMode && (
+                                                        <td className="px-4 py-3 text-center">
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                value={batchValues[item.id] ?? ''}
+                                                                onChange={e => setBatchValues(prev => ({ ...prev, [item.id]: e.target.value }))}
+                                                                placeholder="0"
+                                                                className="w-24 text-center border-2 border-orange-300 rounded-lg p-1.5 text-sm font-bold focus:border-orange-500 focus:outline-none"
+                                                            />
+                                                        </td>
+                                                    )}
                                                     <td className="px-6 py-4 whitespace-nowrap text-center">
                                                         <button onClick={() => { setSelectedItem(item); setIsOperationModalOpen(true); }}
                                                             className="text-emerald-600 hover:text-white hover:bg-emerald-600 transition-colors p-2 rounded-lg active:scale-95"

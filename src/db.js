@@ -263,6 +263,9 @@ export async function occupyTableWithoutOrder(tableNumber, timestamp) {
     await api('POST', `/api/tables/${tableNumber}/occupy`, { timestamp });
     return true;
 }
+export async function moveOrderToTable(orderId, { newTable, fromTable, mergeWithOrderId = null }) {
+    return api('POST', `/api/orders/${orderId}/move-table`, { newTable, fromTable, mergeWithOrderId });
+}
 export async function resetTableStatus(tableNumber, orderId, consumeInventory = false) {
     if (!tableNumber) return false;
     const body = {};
