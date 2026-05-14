@@ -168,7 +168,7 @@ const TableCard = ({
                             </div>
                         </div>
                         {status !== 'idle' && (
-                            <div className="flex flex-col text-[10px] font-mono leading-tight border-l border-white/30 pl-2 text-right">
+                            <div className="flex flex-col text-[8px] font-mono leading-tight border-l border-white/30 pl-1 text-right whitespace-nowrap">
                                 <span className={isOverTime ? 'text-amber-200 animate-pulse' : ''}>{elapsed.display}</span>
                                 <span>{currentOrder?.sendTime ? service.display : '-- min'}</span>
                             </div>

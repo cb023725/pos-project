@@ -358,7 +358,7 @@ function buildReceiptPDF(data, filePath, groups) {
                     const d = new Date(ptMs);
                     return `取餐 ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
                 })() : '';
-                const utStr = data.needsUtensils ? '需要餐具' : '';
+                const utStr = data.needsUtensils ? '需要餐具' : '不需餐具';
                 doc.font('Reg').fontSize(11).fillColor('black')
                    .text(ptStr, MARGIN_SIDE, y, { width: half, lineBreak: false });
                 doc.font('Reg').fontSize(11).fillColor('black')
@@ -377,9 +377,15 @@ function buildReceiptPDF(data, filePath, groups) {
             y += 5;
             doc.font('Reg').fontSize(10).fillColor('#333333')
                .text('合計', MARGIN_SIDE, y, { lineBreak: false });
-            doc.font('Bold').fontSize(14).fillColor('black')
-               .text(`$${Math.round(data.total).toLocaleString('en-US')}`,
-                     MARGIN_SIDE, y, { width: CONT_W, align: 'right', lineBreak: false });
+            if (data.alreadyPaid) {
+                doc.font('Bold').fontSize(12).fillColor('black')
+                   .text('本單已結帳',
+                         MARGIN_SIDE, y, { width: CONT_W, align: 'right', lineBreak: false });
+            } else {
+                doc.font('Bold').fontSize(14).fillColor('black')
+                   .text(`$${Math.round(data.total).toLocaleString('en-US')}`,
+                         MARGIN_SIDE, y, { width: CONT_W, align: 'right', lineBreak: false });
+            }
             y += 16;
         }
 
@@ -395,7 +401,7 @@ function buildReceiptPDF(data, filePath, groups) {
     });
 }
 
-// lp 列印並刪除暫存檔（copies = 份數，預設 1，多份以多次 lp 送出以確保切割）
+// lp 列印並刪除暫存檔（copies = 份數，預設 1，多份同時送出以確保切割且無等待延遲）
 function printOnce(filePath, pageH) {
     return new Promise((resolve, reject) => {
         const media = `Custom.${PAGE_W}x${Math.ceil(pageH)}`;
@@ -414,9 +420,8 @@ function printOnce(filePath, pageH) {
 
 async function printPDF(filePath, pageH, copies = 1) {
     try {
-        for (let i = 0; i < copies; i++) {
-            await printOnce(filePath, pageH);
-        }
+        // 多份同時送出（parallel），避免循序等待造成延遲
+        await Promise.all(Array.from({ length: copies }, () => printOnce(filePath, pageH)));
     } finally {
         fs.unlink(filePath, () => {});
     }
@@ -1649,7 +1654,7 @@ app.post('/api/customers', async (req, res) => {
             return res.json(data);
         }
     }
-    const { data, error } = await supabase.from('customers').insert({ names: names||[], phones: phones||[], notes: notes||'', created_at: new Date().toISOString() }).select().single();
+    const { data, error } = await supabase.from('customers').insert({ names: names||[], phones: phones||[], notes: notes||'' }).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
 });

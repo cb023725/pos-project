@@ -756,19 +756,37 @@ const TakeoutCustomerInfo = ({ customerName, setCustomerName, customerPhone, set
         setPickupTime(prev => (prev || Date.now() + 20 * 60000) + mins * 60000);
     };
 
+    const appendSuffix = (suffix) => {
+        const stripped = customerName.replace(/(先生|小姐)$/, '');
+        const newName = stripped + suffix;
+        setCustomerName(newName);
+    };
+
     return (
         <div className="bg-white border-b border-gray-200 px-3 py-2 flex flex-col gap-2">
             {/* 姓名 + 電話 row */}
             <div className="flex gap-2 relative">
                 <div className="flex flex-col flex-1 min-w-0">
                     <span className="text-[10px] font-bold text-gray-500 mb-0.5">姓名</span>
-                    <input
-                        type="text"
-                        value={customerName}
-                        onChange={e => handleNameChange(e.target.value)}
-                        placeholder="顧客姓名"
-                        className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-bold outline-none focus:border-orange-400 w-full"
-                    />
+                    <div className="flex gap-1">
+                        <input
+                            type="text"
+                            value={customerName}
+                            onChange={e => handleNameChange(e.target.value)}
+                            placeholder="顧客姓名"
+                            className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-bold outline-none focus:border-orange-400 flex-1 min-w-0"
+                        />
+                        <button
+                            type="button"
+                            onClick={() => appendSuffix('先生')}
+                            className={`px-2 py-1.5 rounded-lg text-xs font-bold border transition-colors flex-shrink-0 ${customerName.endsWith('先生') ? 'bg-blue-500 text-white border-blue-500' : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400 hover:text-blue-500'}`}
+                        >先生</button>
+                        <button
+                            type="button"
+                            onClick={() => appendSuffix('小姐')}
+                            className={`px-2 py-1.5 rounded-lg text-xs font-bold border transition-colors flex-shrink-0 ${customerName.endsWith('小姐') ? 'bg-pink-500 text-white border-pink-500' : 'bg-white text-gray-600 border-gray-300 hover:border-pink-400 hover:text-pink-500'}`}
+                        >小姐</button>
+                    </div>
                 </div>
                 <div className="flex flex-col flex-1 min-w-0">
                     <span className="text-[10px] font-bold text-gray-500 mb-0.5">電話</span>
@@ -798,18 +816,29 @@ const TakeoutCustomerInfo = ({ customerName, setCustomerName, customerPhone, set
 
             {/* 餐具 + 取餐時間 row */}
             <div className="flex items-end gap-2">
-                {/* 餐具 toggle */}
+                {/* 餐具 兩按鈕 */}
                 <div className="flex flex-col flex-1 min-w-0">
                     <span className="text-[10px] font-bold text-gray-500 mb-0.5">餐具</span>
-                    <button
-                        type="button"
-                        onClick={() => setNeedsUtensils(v => !v)}
-                        className={`flex items-center justify-center gap-1.5 px-2.5 h-9 rounded-lg border-2 font-bold text-sm transition-colors w-full
-                            ${needsUtensils ? 'bg-orange-500 border-orange-500 text-white' : 'bg-white border-gray-300 text-gray-500'}`}
-                    >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 002-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 00-5 5v6c0 1.1.9 2 2 2h3zm0 0v7"/></svg>
-                        <span>{needsUtensils ? '需要餐具' : '不需餐具'}</span>
-                    </button>
+                    <div className="flex gap-1 h-9">
+                        <button
+                            type="button"
+                            onClick={() => setNeedsUtensils(true)}
+                            className={`flex-1 flex items-center justify-center gap-1 rounded-lg border-2 font-bold text-xs transition-colors
+                                ${needsUtensils ? 'bg-orange-500 border-orange-500 text-white' : 'bg-white border-gray-300 text-gray-500 hover:border-orange-400 hover:text-orange-500'}`}
+                        >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 002-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 00-5 5v6c0 1.1.9 2 2 2h3zm0 0v7"/></svg>
+                            需要餐具
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setNeedsUtensils(false)}
+                            className={`flex-1 flex items-center justify-center gap-1 rounded-lg border-2 font-bold text-xs transition-colors
+                                ${!needsUtensils ? 'bg-gray-500 border-gray-500 text-white' : 'bg-white border-gray-300 text-gray-400 hover:border-gray-400'}`}
+                        >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                            不需餐具
+                        </button>
+                    </div>
                 </div>
 
                 {/* 取餐時間 */}
@@ -1278,7 +1307,9 @@ const OrderPage = () => {
 
     useEffect(() => {
         // 根據桌號載入或清空訂單
-        if (tableNumber && menuItems.length > 0) {
+        // ⚡ 不再等待 menuItems 載入（loadOpenOrder 不依賴菜單資料），
+        //    與 loadMenuData 並行執行，消除瀑布式延遲
+        if (tableNumber) {
             loadOpenOrder(tableNumber);
         }
         if (!tableNumber) {
@@ -1290,7 +1321,7 @@ const OrderPage = () => {
             setSendTime(null);
             setFinishTime(null);
         }
-    }, [tableNumber, menuItems, loadOpenOrder]);
+    }, [tableNumber, loadOpenOrder]);
 
     const categories = useMemo(() => {
         if (categorySettings.length === 0) return CATEGORY_ORDER;
@@ -1410,7 +1441,7 @@ const OrderPage = () => {
                         sendTime,
                         finishTime,
                     });
-                } else if (currentOrder.length > 0 || (hasCountChanged && !isTakeout)) {
+                } else if (currentOrder.length > 0 || hasCountChanged) {
                     // 有品項 OR 內用只改人數 → 建立新訂單（daily_order_no 恆為 null）
                     const result = await createNewOrder({
                         table: tableNumber || '外帶',
@@ -1455,7 +1486,7 @@ const OrderPage = () => {
         setShowClearModal(false);
         setIsLoading(true);
         try {
-            await resetTableStatus(tableNumber);
+            await resetTableStatus(tableNumber, currentOrderId);
             navigate(isTakeout ? '/takeout' : '/tables');
         } catch (e) { alert("操作失敗"); } finally { setIsLoading(false); }
     };
@@ -1477,15 +1508,6 @@ const handleConfirmOrder = async () => {
 
         setIsLoading(true);
         try {
-            // 首次送單：若訂單尚未分配 dailyOrderNo（佔桌時 skipDailyOrderNo=true），此時補派
-            if (!dailyOrderNo && currentOrderId) {
-                const assigned = await assignOrderNo(currentOrderId);
-                if (assigned) {
-                    setDailyOrderNo(assigned);
-                    pendingDailyOrderNoRef.current = assigned;
-                }
-            }
-
             const now = Date.now();
             const targetStatus = (orderStatus === 'paid' || orderStatus === 'new' || orderStatus === 'open') ? 'served' : orderStatus;
             const newSendTime = sendTime || now;
@@ -1503,11 +1525,18 @@ const handleConfirmOrder = async () => {
                 idSet.has(i.internalId) ? { ...i, isSent: true } : i
             );
 
-            // 儲存訂單（含 isSent:true）
-            const orderId = await saveOrderBeforeNavigate(
-                tableNumber, orderWithSent, currentOrderId,
-                customerCount, subTotal, targetStatus, newSendTime, newFinishTime
-            );
+            // 首次送單：assignOrderNo（若已有 currentOrderId 且無 dailyOrderNo）與 saveOrderBeforeNavigate 同時執行
+            const [, orderId] = await Promise.all([
+                (!dailyOrderNo && currentOrderId)
+                    ? assignOrderNo(currentOrderId).then(assigned => {
+                          if (assigned) { setDailyOrderNo(assigned); pendingDailyOrderNoRef.current = assigned; }
+                      })
+                    : Promise.resolve(),
+                saveOrderBeforeNavigate(
+                    tableNumber, orderWithSent, currentOrderId,
+                    customerCount, subTotal, targetStatus, newSendTime, newFinishTime
+                ),
+            ]);
 
             // 補派 dailyOrderNo（currentOrderId=null 時 pre-check 未執行，此處補上）
             if (orderId && !pendingDailyOrderNoRef.current) {
@@ -1519,12 +1548,6 @@ const handleConfirmOrder = async () => {
             }
 
             if (orderId) {
-                // 外帶：自動儲存顧客資料
-                if (isTakeout && (customerPhone || customerName)) {
-                    const cid = await autoSaveCustomer(customerName, customerPhone);
-                    if (cid) await updateOrderStatus({ orderId: currentOrderId || orderId, newStatus: targetStatus, customerId: cid });
-                }
-
                 setOrderStatus(targetStatus);
                 setSendTime(newSendTime);
                 setFinishTime(newFinishTime);
@@ -1565,6 +1588,13 @@ const handleConfirmOrder = async () => {
                             needsUtensils: needsUtensils,
                         }),
                     }).catch(e => console.warn('列印失敗：', e));
+                }
+
+                // 外帶：自動儲存顧客資料（不阻塞列印，fire-and-forget）
+                if (isTakeout && (customerPhone || customerName)) {
+                    autoSaveCustomer(customerName, customerPhone).then(cid => {
+                        if (cid) updateOrderStatus({ orderId: currentOrderId || orderId, newStatus: targetStatus, customerId: cid });
+                    }).catch(e => console.warn('顧客資料儲存失敗：', e));
                 }
                 // 停留在原頁面（不 navigate）
             }
@@ -1666,24 +1696,23 @@ const handleConfirmOrder = async () => {
                 throw new Error("DB 訂單主狀態更新失敗。");
             }
 
-            // 補派 dailyOrderNo（直接結帳但未曾送廚房單時）
-            if (!pendingDailyOrderNoRef.current && !dailyOrderNo) {
-                const assigned = await assignOrderNo(currentOrderId || orderId);
-                if (assigned) {
-                    setDailyOrderNo(assigned);
-                    pendingDailyOrderNoRef.current = assigned;
-                }
-            }
+            // 補派 dailyOrderNo（直接結帳但未曾送廚房單時）與結帳記錄同時執行
+            const [, completeSuccess] = await Promise.all([
+                (!pendingDailyOrderNoRef.current && !dailyOrderNo)
+                    ? assignOrderNo(currentOrderId || orderId).then(assigned => {
+                          if (assigned) { setDailyOrderNo(assigned); pendingDailyOrderNoRef.current = assigned; }
+                      })
+                    : Promise.resolve(),
+                // 3. 【DB 結帳記錄/庫存扣減】建立結帳記錄
+                completeOrderAndReport({
+                    orderId: currentOrderId || orderId,
+                    itemsToCheckout: itemsToCheckout,
+                    tableNumber: tableNumber,
+                    isFullyPaid: isFullyPaid,
+                    sendTime: newSendTime,
+                }),
+            ]);
 
-            // 3. 【DB 結帳記錄/庫存扣減】建立結帳記錄
-            const completeSuccess = await completeOrderAndReport({
-                orderId: currentOrderId || orderId,
-                itemsToCheckout: itemsToCheckout,
-                tableNumber: tableNumber,
-                isFullyPaid: isFullyPaid,
-                sendTime: newSendTime,
-            });
-            
             if (!completeSuccess) {
                 throw new Error("DB 結帳記錄/庫存扣減失敗。請檢查 DB 連線。");
             }
@@ -1735,6 +1764,7 @@ const handleConfirmOrder = async () => {
                         table: tableNumber || '外帶',
                         orderNo: effectiveOrderNo,
                         total: checkoutTotal,
+                        alreadyPaid: true,
                         items: unsentItems.map(toLine),
                         ...takeoutExtra,
                     }),
@@ -1941,7 +1971,20 @@ const handleChangeItemQuantity = (internalId, diff) => {
             const targetOrders = activeOrders.filter(o => o.table === newTable && ['open', 'served', 'paid'].includes(o.status));
 
             if (targetOrders.length > 0) {
-                // 目標桌已有訂單 → 顯示衝突處理 Modal
+                if (!currentOrderId) {
+                    // 目前桌尚無已儲存的訂單（純佔桌或未確認點餐）
+                    // → 無需衝突處理，直接釋放舊桌並切換（B 已有訂單，不重新佔桌）
+                    if (tableNumber && tableNumber !== '外帶') {
+                        localStorage.removeItem(`table_open_${tableNumber}`);
+                        await resetTableStatus(tableNumber);
+                    }
+                    setTableNumber(newTable);
+                    setOriginalTableId(newTable);
+                    setIsDirty(false);
+                    setIsLoading(false);
+                    return;
+                }
+                // 目前桌有實際訂單 → 顯示衝突處理 Modal
                 setTableChangeConflict({ pendingTable: newTable, targetOrders });
                 setIsLoading(false);
                 return;

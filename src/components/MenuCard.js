@@ -112,7 +112,7 @@ const MenuCard = React.memo(({ item, onAddItem, onLongPress }) => {
                     </p>
                 </div>
                 <div className="flex justify-between items-center">
-                    <span className="text-base font-extrabold text-blue-600">NT$ {formatCurrency(item.price)}</span>
+                    <span className="text-xl font-extrabold text-blue-600">NT$ {formatCurrency(item.price)}</span>
                 </div>
             </div>
         </button>
