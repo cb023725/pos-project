@@ -41,6 +41,8 @@ const TakeoutPage = () => {
     const [orders, setOrders] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [swipedOrderId, setSwipedOrderId] = useState(null);
+    const [alertModal, setAlertModal] = useState(null);       // { message }
+    const [confirmModal, setConfirmModal] = useState(null);   // { message, onConfirm }
 
     // Long-press refs
     const longPressTimer = useRef(null);
@@ -77,7 +79,7 @@ const TakeoutPage = () => {
                     initialTableNumber: '外帶',
                     orderStatus: order.status,
                     openTimestamp: order.timestamp ? new Date(order.timestamp).getTime() : Date.now(),
-                    customerCount: order.customerCount || 1,
+                    customerCount: order.customerCount ?? 0,
                     sendTime: order.sendTime || null,
                     dailyOrderNo: order.dailyOrderNo || null,
                 }
@@ -85,15 +87,19 @@ const TakeoutPage = () => {
             return;
         }
         if (order.status !== 'paid') {
-            alert(`訂單 ${formatOrderId(order)} 尚未完成結帳。\n請先完成結帳才能結案離店。`);
+            setAlertModal({ message: `訂單 ${formatOrderId(order)} 尚未完成結帳。\n請先完成結帳才能結案離店。` });
             setSwipedOrderId(null);
             return;
         }
-        if (window.confirm(`確定將訂單 ${formatOrderId(order)}（${order.customerName || '無顧客資訊'}）標記為「已取餐離店」並結案？`)) {
-            await archiveTakeoutOrder(order.id);
-            setSwipedOrderId(null);
-            await loadOrders();
-        }
+        setConfirmModal({
+            message: `確定將訂單 ${formatOrderId(order)}（${order.customerName || '無顧客資訊'}）標記為「已取餐離店」並結案？`,
+            onConfirm: async () => {
+                setConfirmModal(null);
+                await archiveTakeoutOrder(order.id);
+                setSwipedOrderId(null);
+                await loadOrders();
+            },
+        });
     };
 
     const handleRowClick = (order) => {
@@ -110,7 +116,7 @@ const TakeoutPage = () => {
                 initialTableNumber: '外帶',
                 orderStatus: order.status,
                 openTimestamp: order.timestamp ? new Date(order.timestamp).getTime() : Date.now(),
-                customerCount: order.customerCount || 1,
+                customerCount: order.customerCount ?? 0,
                 sendTime: order.sendTime || null,
                 dailyOrderNo: order.dailyOrderNo || null,
             }
@@ -358,6 +364,48 @@ const TakeoutPage = () => {
             <div className="flex-shrink-0 bg-white border-t border-gray-200 px-4 py-2 flex justify-center">
                 <span className="text-xs text-gray-400 font-bold">向左滑或長按訂單可快速操作</span>
             </div>
+
+            {/* Alert modal */}
+            {alertModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+                    <div className="bg-white rounded-2xl shadow-2xl px-6 py-5 mx-4 max-w-xs w-full flex flex-col items-center gap-4">
+                        <div className="w-12 h-12 rounded-full bg-orange-100 flex items-center justify-center flex-shrink-0">
+                            <svg className="w-6 h-6 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+                            </svg>
+                        </div>
+                        <p className="text-sm font-bold text-gray-800 text-center whitespace-pre-line">{alertModal.message}</p>
+                        <button
+                            onClick={() => setAlertModal(null)}
+                            className="w-full bg-[#2FB8B8] text-white font-black py-2.5 rounded-xl hover:opacity-90 transition-opacity"
+                        >確定</button>
+                    </div>
+                </div>
+            )}
+
+            {/* Confirm modal */}
+            {confirmModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+                    <div className="bg-white rounded-2xl shadow-2xl px-6 py-5 mx-4 max-w-xs w-full flex flex-col items-center gap-4">
+                        <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
+                            <svg className="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                        </div>
+                        <p className="text-sm font-bold text-gray-800 text-center whitespace-pre-line">{confirmModal.message}</p>
+                        <div className="flex gap-3 w-full">
+                            <button
+                                onClick={() => setConfirmModal(null)}
+                                className="flex-1 border border-gray-300 text-gray-600 font-bold py-2.5 rounded-xl hover:bg-gray-50 transition-colors"
+                            >取消</button>
+                            <button
+                                onClick={confirmModal.onConfirm}
+                                className="flex-1 bg-green-500 text-white font-black py-2.5 rounded-xl hover:bg-green-600 transition-colors"
+                            >確認離店</button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
