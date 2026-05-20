@@ -122,7 +122,7 @@ const AddGroupModal = ({ onAdd, onClose }) => {
 };
 
 // ─── 單一選項列（含細項品項對應） ─────────────────────────────────────────────
-const OptionRow = ({ opt, optionItemMap, menuItems, groupAppliesTo, onDelete, onMapChange }) => {
+const OptionRow = ({ opt, optionItemMap, menuItems, groupAppliesTo, onDelete, onMapChange, onMoveUp, onMoveDown, isFirst, isLast }) => {
     const [expanded, setExpanded] = useState(false);
     const mappedItems = optionItemMap[opt] || [];
     const hasMap = mappedItems.length > 0;
@@ -130,8 +130,16 @@ const OptionRow = ({ opt, optionItemMap, menuItems, groupAppliesTo, onDelete, on
     return (
         <div className={`border rounded-lg overflow-hidden ${expanded ? 'border-teal-200' : 'border-gray-200'}`}>
             <div className="flex items-center gap-2 px-3 py-2 bg-white">
-                {/* 拖曳選項排序（未來可擴充，目前為視覺錨點） */}
-                <span className="text-gray-300 select-none text-xs">⠿</span>
+                <div className="flex flex-col gap-0.5 flex-shrink-0">
+                    <button onClick={onMoveUp} disabled={isFirst}
+                        className="w-5 h-5 flex items-center justify-center rounded text-gray-300 hover:text-gray-600 hover:bg-gray-100 disabled:opacity-20 disabled:cursor-not-allowed transition-colors">
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 15l7-7 7 7"/></svg>
+                    </button>
+                    <button onClick={onMoveDown} disabled={isLast}
+                        className="w-5 h-5 flex items-center justify-center rounded text-gray-300 hover:text-gray-600 hover:bg-gray-100 disabled:opacity-20 disabled:cursor-not-allowed transition-colors">
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M19 9l-7 7-7-7"/></svg>
+                    </button>
+                </div>
                 <span className="flex-1 text-sm font-bold text-teal-700">{opt}</span>
                 <button
                     onClick={() => setExpanded(e => !e)}
@@ -209,6 +217,17 @@ const RemarkGroupCard = ({ group, menuItems, onSave, onDelete, onMoveUp, onMoveD
     const removeOption = opt => {
         setOptions(p => p.filter(o => o !== opt));
         setOptionItemMap(p => { const n = { ...p }; delete n[opt]; return n; });
+        mark();
+    };
+
+    const moveOption = (idx, dir) => {
+        setOptions(prev => {
+            const arr = [...prev];
+            const target = idx + dir;
+            if (target < 0 || target >= arr.length) return prev;
+            [arr[idx], arr[target]] = [arr[target], arr[idx]];
+            return arr;
+        });
         mark();
     };
 
@@ -328,7 +347,7 @@ const RemarkGroupCard = ({ group, menuItems, onSave, onDelete, onMoveUp, onMoveD
                             <span className="text-xs text-gray-400">可點選「全部品項」設定細項對應</span>
                         </div>
                         <div className="space-y-1.5 mb-2">
-                            {options.map(opt => (
+                            {options.map((opt, idx) => (
                                 <OptionRow
                                     key={opt}
                                     opt={opt}
@@ -337,6 +356,10 @@ const RemarkGroupCard = ({ group, menuItems, onSave, onDelete, onMoveUp, onMoveD
                                     groupAppliesTo={appliesTo}
                                     onDelete={removeOption}
                                     onMapChange={handleMapChange}
+                                    onMoveUp={() => moveOption(idx, -1)}
+                                    onMoveDown={() => moveOption(idx, 1)}
+                                    isFirst={idx === 0}
+                                    isLast={idx === options.length - 1}
                                 />
                             ))}
                             {options.length === 0 && (

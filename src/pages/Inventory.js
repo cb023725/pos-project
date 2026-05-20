@@ -15,7 +15,7 @@ const ThresholdInput = ({ label, value, onChange, color }) => (
             value={value}
             onChange={onChange}
             min="0"
-            className={`w-full p-3 border-2 rounded-lg text-lg font-bold text-right focus:ring-blue-500 focus:border-blue-500 ${color}`}
+            className={`w-full p-3 border-2 rounded-lg text-lg font-bold text-right focus:ring-[#4A9A7A] focus:border-[#4A9A7A] ${color}`}
         />
     </div>
 );
@@ -25,6 +25,7 @@ const ThresholdInput = ({ label, value, onChange, color }) => (
 // ----------------------------------------------------------------------
 const ThresholdSettingModal = ({ isOpen, onClose, item, onSave, onSaveLinks, allMenuItems, consumesMapping }) => {
     const [thresholds, setThresholds] = useState(DEFAULT_THRESHOLDS);
+    const [alertDisabled, setAlertDisabled] = useState(false);
     const [linkedIds, setLinkedIds] = useState(new Set());
     const [savingLinks, setSavingLinks] = useState(false);
 
@@ -39,7 +40,9 @@ const ThresholdSettingModal = ({ isOpen, onClose, item, onSave, onSaveLinks, all
 
     useEffect(() => {
         if (isOpen && item) {
-            setThresholds(item.thresholds || DEFAULT_THRESHOLDS);
+            const thr = item.thresholds || DEFAULT_THRESHOLDS;
+            setAlertDisabled(thr.disabled || false);
+            setThresholds({ full: thr.full ?? DEFAULT_THRESHOLDS.full, low: thr.low ?? DEFAULT_THRESHOLDS.low, urgent: thr.urgent ?? DEFAULT_THRESHOLDS.urgent });
             setLinkedIds(new Set(consumingMenuItems.map(mi => mi.id)));
         }
     }, [isOpen, item, consumingMenuItems]);
@@ -49,12 +52,14 @@ const ThresholdSettingModal = ({ isOpen, onClose, item, onSave, onSaveLinks, all
     };
 
     const handleSave = () => {
-        const { full, low, urgent } = thresholds;
-        if (!(urgent < low && low < full)) {
-            alert('閾值設定錯誤：必須滿足 緊急 < 偏低 < 充足');
-            return;
+        if (!alertDisabled) {
+            const { full, low, urgent } = thresholds;
+            if (!(urgent < low && low < full)) {
+                alert('閾值設定錯誤：必須滿足 緊急 < 偏低 < 充足');
+                return;
+            }
         }
-        onSave(item.id, thresholds);
+        onSave(item.id, { ...thresholds, disabled: alertDisabled });
     };
 
     const handleSaveLinks = async () => {
@@ -85,16 +90,26 @@ const ThresholdSettingModal = ({ isOpen, onClose, item, onSave, onSaveLinks, all
                 <h3 className="text-2xl font-black mb-6 text-gray-800 border-b pb-2">⚙️ {item.name} 設定</h3>
 
                 {/* 區塊 1：警戒線 */}
-                <h4 className="text-lg font-bold text-gray-700 mb-3 border-l-4 border-blue-500 pl-3">1. 庫存警戒線 (充足 &gt; 偏低 &gt; 緊急)</h4>
-                <div className="grid grid-cols-3 gap-4 mb-4">
+                <h4 className="text-lg font-bold text-gray-700 mb-3 border-l-4 border-[#4A9A7A] pl-3">1. 庫存警戒線 (充足 &gt; 偏低 &gt; 緊急)</h4>
+                <div className="flex items-center gap-3 mb-4 p-3 bg-gray-50 rounded-xl">
+                    <button onClick={() => setAlertDisabled(v => !v)}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${alertDisabled ? 'bg-gray-300' : 'bg-[#4A9A7A]'}`}>
+                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${alertDisabled ? 'translate-x-1' : 'translate-x-6'}`} />
+                    </button>
+                    <div>
+                        <span className="text-sm font-bold text-gray-700">警戒提醒</span>
+                        <span className="text-xs text-gray-400 ml-2">{alertDisabled ? '已關閉（僅記錄數量，不顯示狀態警示）' : '已開啟'}</span>
+                    </div>
+                </div>
+                <div className={`grid grid-cols-3 gap-4 mb-4 transition-opacity ${alertDisabled ? 'opacity-30 pointer-events-none' : ''}`}>
                     <ThresholdInput label="充足數量" value={thresholds.full}   onChange={e => handleInputChange('full', e.target.value)}   color="text-green-600 border-green-300" />
                     <ThresholdInput label="偏低數量" value={thresholds.low}    onChange={e => handleInputChange('low', e.target.value)}    color="text-orange-600 border-orange-300" />
                     <ThresholdInput label="緊急數量" value={thresholds.urgent} onChange={e => handleInputChange('urgent', e.target.value)} color="text-red-600 border-red-300" />
                 </div>
-                <button onClick={handleSave} className="w-full mb-8 bg-blue-500 hover:bg-blue-600 text-white p-2.5 rounded-xl font-black shadow-md">儲存警戒線</button>
+                <button onClick={handleSave} className="w-full mb-8 bg-[#4A9A7A] hover:bg-[#3A8A6A] text-white p-2.5 rounded-xl font-black shadow-md">儲存警戒線</button>
 
                 {/* 區塊 2：菜單連動（可編輯） */}
-                <h4 className="text-lg font-bold text-gray-700 mb-2 border-l-4 border-emerald-500 pl-3">2. 菜單銷售連動</h4>
+                <h4 className="text-lg font-bold text-gray-700 mb-2 border-l-4 border-[#4A9A7A] pl-3">2. 菜單銷售連動</h4>
                 <p className="text-sm text-gray-500 mb-4">勾選售出後消耗 <strong>{item.name}</strong> 一份庫存的菜單品項。</p>
                 {allMenuItems.length === 0 ? (
                     <div className="bg-gray-50 p-4 rounded-lg text-center text-gray-400 text-sm mb-4">載入中...</div>
@@ -105,14 +120,14 @@ const ThresholdSettingModal = ({ isOpen, onClose, item, onSave, onSaveLinks, all
                                 <p className="bg-gray-100 px-4 py-2 font-bold text-gray-700 text-sm">{category}</p>
                                 <div className="grid grid-cols-2 gap-0 divide-y divide-gray-100">
                                     {catItems.map(mi => (
-                                        <label key={mi.id} className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-emerald-50 transition-colors ${linkedIds.has(mi.id) ? 'bg-emerald-50' : ''}`}>
+                                        <label key={mi.id} className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-[#4A9A7A]/8 transition-colors ${linkedIds.has(mi.id) ? 'bg-[#4A9A7A]/10' : ''}`}>
                                             <input
                                                 type="checkbox"
                                                 checked={linkedIds.has(mi.id)}
                                                 onChange={() => handleLinkToggle(mi.id)}
-                                                className="w-4 h-4 accent-emerald-500 cursor-pointer"
+                                                className="w-4 h-4 accent-[#4A9A7A] cursor-pointer"
                                             />
-                                            <span className={`text-sm font-medium ${linkedIds.has(mi.id) ? 'text-emerald-700 font-bold' : 'text-gray-700'}`}>{mi.name}</span>
+                                            <span className={`text-sm font-medium ${linkedIds.has(mi.id) ? 'text-[#4A9A7A] font-bold' : 'text-gray-700'}`}>{mi.name}</span>
                                         </label>
                                     ))}
                                 </div>
@@ -120,7 +135,7 @@ const ThresholdSettingModal = ({ isOpen, onClose, item, onSave, onSaveLinks, all
                         ))}
                     </div>
                 )}
-                <button onClick={handleSaveLinks} disabled={savingLinks} className="w-full bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white p-2.5 rounded-xl font-black shadow-md mb-3">
+                <button onClick={handleSaveLinks} disabled={savingLinks} className="w-full bg-[#4A9A7A] hover:bg-[#3A8A6A] disabled:opacity-50 text-white p-2.5 rounded-xl font-black shadow-md mb-3">
                     {savingLinks ? '儲存中...' : '儲存連動設定'}
                 </button>
                 <button onClick={onClose} className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 p-2.5 rounded-xl font-bold">關閉</button>
@@ -178,7 +193,7 @@ const StockOperationModal = ({ isOpen, onClose, item, onSave }) => {
                 <div className="flex justify-between mb-4 bg-gray-100 rounded-lg p-1">
                     {['replenish','consume','inventory'].map(op => (
                         <button key={op} onClick={() => setOperationType(op)}
-                            className={`flex-grow p-2 rounded-lg text-sm font-bold transition-all ${operationType === op ? (op === 'replenish' ? 'bg-emerald-500' : op === 'consume' ? 'bg-orange-500' : 'bg-blue-500') + ' text-white shadow-md' : 'text-gray-600'}`}>
+                            className={`flex-grow p-2 rounded-lg text-sm font-bold transition-all ${operationType === op ? (op === 'replenish' ? 'bg-[#4A9A7A]/100' : op === 'consume' ? 'bg-orange-500' : 'bg-[#6888A8]') + ' text-white shadow-md' : 'text-gray-600'}`}>
                             {opLabel[op]}
                         </button>
                     ))}
@@ -193,7 +208,7 @@ const StockOperationModal = ({ isOpen, onClose, item, onSave }) => {
                     <button onClick={() => handleInput('0')} className="bg-gray-200 hover:bg-gray-300 p-3 rounded-xl text-xl font-bold">0</button>
                     <button onClick={handleDelete} className="bg-orange-500 hover:bg-orange-600 text-white p-3 rounded-xl text-lg font-bold">刪除</button>
                 </div>
-                <button onClick={handleSave} className="w-full mt-4 bg-emerald-500 hover:bg-emerald-600 text-white p-3 rounded-xl text-lg font-black shadow-md">
+                <button onClick={handleSave} className="w-full mt-4 bg-[#4A9A7A] hover:bg-[#3A8A6A] text-white p-3 rounded-xl text-lg font-black shadow-md">
                     確認執行{opLabel[operationType]}
                 </button>
             </div>
@@ -245,14 +260,14 @@ const AddItemModal = ({ isOpen, onClose, onSave, existingCategories }) => {
                         <label className="block text-sm font-bold text-gray-700 mb-1">品項名稱 *</label>
                         <input type="text" value={name} onChange={e => setName(e.target.value)}
                             placeholder="例：紅燒牛腩筋"
-                            className="w-full border-2 border-gray-200 rounded-lg p-2.5 text-sm focus:border-blue-400 focus:outline-none" />
+                            className="w-full border-2 border-gray-200 rounded-lg p-2.5 text-sm focus:border-[#4A9A7A] focus:outline-none" />
                     </div>
                     <div>
                         <label className="block text-sm font-bold text-gray-700 mb-1">類別 *</label>
                         <input type="text" value={category} onChange={e => setCategory(e.target.value)}
                             list="category-list"
                             placeholder="例：主食庫存"
-                            className="w-full border-2 border-gray-200 rounded-lg p-2.5 text-sm focus:border-blue-400 focus:outline-none" />
+                            className="w-full border-2 border-gray-200 rounded-lg p-2.5 text-sm focus:border-[#4A9A7A] focus:outline-none" />
                         <datalist id="category-list">
                             {existingCategories.map(c => <option key={c} value={c} />)}
                         </datalist>
@@ -262,7 +277,7 @@ const AddItemModal = ({ isOpen, onClose, onSave, existingCategories }) => {
                         <label className="block text-sm font-bold text-gray-700 mb-1">初始庫存（份）</label>
                         <input type="number" value={stock} onChange={e => setStock(Math.max(0, parseInt(e.target.value)||0))}
                             min="0"
-                            className="w-full border-2 border-gray-200 rounded-lg p-2.5 text-sm focus:border-blue-400 focus:outline-none" />
+                            className="w-full border-2 border-gray-200 rounded-lg p-2.5 text-sm focus:border-[#4A9A7A] focus:outline-none" />
                     </div>
                     <div>
                         <label className="block text-sm font-bold text-gray-700 mb-2">庫存警戒線</label>
@@ -415,6 +430,7 @@ const InventoryPage = () => {
 
     const getStockStatus = useCallback((item) => {
         const { stock } = item;
+        if (item.thresholds?.disabled) return { status: '充足', display: '不提醒', badge: 'bg-gray-400' };
         const { low, urgent } = item.thresholds || DEFAULT_THRESHOLDS;
         if (stock <= urgent) return { status: '緊急', display: '極需補貨', badge: 'bg-red-600' };
         if (stock < low)    return { status: '偏低', display: '庫存偏低', badge: 'bg-orange-500' };
@@ -616,7 +632,7 @@ const InventoryPage = () => {
                     </button>
                     <button
                         onClick={() => setIsAddModalOpen(true)}
-                        className="flex items-center gap-2 px-4 py-2.5 bg-blue-500 hover:bg-blue-600 text-white rounded-xl font-bold text-sm shadow-sm transition-colors"
+                        className="flex items-center gap-2 px-4 py-2.5 bg-[#4A9A7A] hover:bg-[#3A8A6A] text-white rounded-xl font-bold text-sm shadow-sm transition-colors"
                     >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
                         新增品項
@@ -656,7 +672,7 @@ const InventoryPage = () => {
                             <div className="flex bg-white border border-orange-200 rounded-lg overflow-hidden">
                                 {[['replenish','補貨','text-emerald-700'],['consume','消耗','text-orange-700'],['inventory','盤點','text-blue-700']].map(([op, label, color]) => (
                                     <button key={op} onClick={() => setBatchOpType(op)}
-                                        className={`px-4 py-1.5 text-sm font-bold transition-colors ${batchOpType === op ? (op === 'replenish' ? 'bg-emerald-500 text-white' : op === 'consume' ? 'bg-orange-500 text-white' : 'bg-blue-500 text-white') : `bg-white ${color} hover:bg-gray-50`}`}>
+                                        className={`px-4 py-1.5 text-sm font-bold transition-colors ${batchOpType === op ? (op === 'replenish' ? 'bg-[#4A9A7A]/100 text-white' : op === 'consume' ? 'bg-orange-500 text-white' : 'bg-blue-500 text-white') : `bg-white ${color} hover:bg-gray-50`}`}>
                                         {label}
                                     </button>
                                 ))}
@@ -665,7 +681,7 @@ const InventoryPage = () => {
                                 {batchOpType === 'replenish' ? '輸入要增加的數量' : batchOpType === 'consume' ? '輸入要扣除的數量' : '輸入盤點後的實際數量'}
                             </span>
                             <button onClick={handleBatchSave} disabled={batchSaving}
-                                className="px-5 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white rounded-lg font-bold text-sm shadow-sm transition-colors">
+                                className="px-5 py-2 bg-[#4A9A7A] hover:bg-[#3A8A6A] disabled:opacity-50 text-white rounded-lg font-bold text-sm shadow-sm transition-colors">
                                 {batchSaving ? '儲存中...' : `確認儲存 (${Object.values(batchValues).filter(v => v !== '' && Number(v) !== 0).length} 項)`}
                             </button>
                         </div>
