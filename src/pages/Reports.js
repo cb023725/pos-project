@@ -1,12 +1,16 @@
 // src/pages/Reports.js
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-    LineChart, Line, XAxis, YAxis, CartesianGrid,
+    ComposedChart, Line, Area, Bar,
+    XAxis, YAxis, CartesianGrid,
     Tooltip, ResponsiveContainer,
 } from 'recharts';
 import { getReportOrders, getCategorySettings } from '../db';
 
 const formatCurrency = (n) => Math.round(n || 0).toLocaleString('en-US');
+
+const DAY_ZH = ['日', '一', '二', '三', '四', '五', '六'];
+const getDayOfWeek = (dateStr) => DAY_ZH[new Date(dateStr + 'T12:00:00+08:00').getDay()];
 
 // ── GMT+8 日期工具 ────────────────────────────────────────────────────────────
 const TW_OFFSET = 8 * 3600 * 1000; // +8h in ms
@@ -108,7 +112,10 @@ const calcKpi = (orders, catSettings = []) => {
 };
 
 // delta badge — pill style, consistent position across all cards
-const Delta = ({ curr, prev, isCurrency = false }) => {
+const Delta = ({ curr, prev, isCurrency = false, enabled = true }) => {
+    if (!enabled) {
+        return <div className="mt-auto pt-2"><span className="text-xs text-gray-300">—</span></div>;
+    }
     if (prev === 0 && curr === 0) {
         return (
             <div className="mt-auto pt-2">
@@ -124,7 +131,7 @@ const Delta = ({ curr, prev, isCurrency = false }) => {
         <div className="mt-auto pt-2">
             <p className="text-[10px] text-gray-400 mb-0.5">較上期</p>
             <span className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-xs font-bold
-                ${up ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-500'}`}>
+                ${up ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-400'}`}>
                 {up ? '▲' : '▼'} {valStr}{pct !== null ? ` (${pct}%)` : ''}
             </span>
         </div>
@@ -159,7 +166,7 @@ const DateRangeBar = ({ startDate, endDate, onStart, onEnd }) => {
             <div className="flex gap-1 ml-2">
                 {shortcuts.map(s => (
                     <button key={s.label} onClick={s.action}
-                        className="text-xs font-bold text-[#2FB8B8] hover:bg-[#2FB8B8]/10 px-2 py-0.5 rounded whitespace-nowrap transition-colors"
+                        className="text-xs font-bold text-[#4A9A7A] hover:bg-[#4A9A7A]/10 px-2 py-0.5 rounded whitespace-nowrap transition-colors"
                     >{s.label}</button>
                 ))}
             </div>
@@ -167,64 +174,112 @@ const DateRangeBar = ({ startDate, endDate, onStart, onEnd }) => {
     );
 };
 
-// shared sort-toggle button
-const SortBtn = ({ label, k, current, setFn }) => (
-    <button onClick={() => setFn(k)}
-        className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-bold transition-colors
-            ${current === k ? 'bg-[#2FB8B8] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-        {label}{current === k && <span className="text-[10px]">▼</span>}
-    </button>
-);
+// sort-toggle button — supports { key, dir } state
+const SortBtn = ({ label, k, currentSort, setSort }) => {
+    const isActive = currentSort.key === k;
+    return (
+        <button
+            onClick={() => setSort(prev =>
+                prev.key === k
+                    ? { key: k, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+                    : { key: k, dir: 'desc' }
+            )}
+            className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-bold transition-colors
+                ${isActive ? 'bg-[#4A9A7A] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            {label}
+            {isActive && <span className="text-[10px]">{currentSort.dir === 'asc' ? '▲' : '▼'}</span>}
+        </button>
+    );
+};
 
-// shared breakdown table
-const BreakdownTable = ({ rows, labelHeader }) => (
-    <div className="overflow-x-auto">
-        <table className="min-w-full divide-y divide-gray-100 text-sm">
-            <thead className="bg-gray-50">
-                <tr>
-                    <th className="px-4 py-2 text-left   text-xs font-bold text-gray-500 w-28">{labelHeader}</th>
-                    <th className="px-4 py-2 text-right  text-xs font-bold text-gray-500 w-32">營業額</th>
-                    <th className="px-4 py-2 text-center text-xs font-bold text-gray-500 w-20">來客數</th>
-                    <th className="px-4 py-2 text-right  text-xs font-bold text-gray-500 w-24">客單價</th>
-                </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-                {rows.length === 0 ? (
-                    <tr><td colSpan={4} className="px-4 py-8 text-center text-gray-400">此日期區間無紀錄</td></tr>
-                ) : rows.map((row, i) => (
-                    <tr key={i} className={`hover:bg-gray-50 ${row.total > 0 ? '' : 'opacity-40'}`}>
-                        <td className="px-4 py-2 font-bold text-gray-700">{row.label}</td>
-                        <td className={`px-4 py-2 text-right font-bold ${row.total > 0 ? 'text-gray-800' : 'text-gray-400'}`}>
-                            ${formatCurrency(row.total)}
-                        </td>
-                        <td className={`px-4 py-2 text-center ${row.customers > 0 ? 'text-gray-700' : 'text-gray-400'}`}>
-                            {row.customers > 0 ? row.customers : '—'}
-                        </td>
-                        <td className={`px-4 py-2 text-right ${row.avgSpend > 0 ? 'text-gray-700' : 'text-gray-400'}`}>
-                            {row.avgSpend > 0 ? `$${formatCurrency(row.avgSpend)}` : '—'}
-                        </td>
+// shared breakdown table — column headers clickable for sort when showDay=true
+const BreakdownTable = ({ rows, labelHeader, showDay = false }) => {
+    const [sort, setSort] = useState({ key: 'label', dir: 'asc' });
+
+    const sortedRows = useMemo(() => {
+        if (!showDay) return rows;
+        return [...rows].sort((a, b) => {
+            let cmp = 0;
+            if      (sort.key === 'label')     cmp = a.label.localeCompare(b.label);
+            else if (sort.key === 'total')     cmp = a.total - b.total;
+            else if (sort.key === 'customers') cmp = a.customers - b.customers;
+            else if (sort.key === 'avgSpend')  cmp = a.avgSpend - b.avgSpend;
+            return sort.dir === 'asc' ? cmp : -cmp;
+        });
+    }, [rows, sort, showDay]);
+
+    const toggle = (key) => setSort(prev =>
+        prev.key === key
+            ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+            : { key, dir: key === 'label' ? 'asc' : 'desc' }
+    );
+    const icon = (key) => sort.key === key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : '';
+    const thCls = (key, align = 'left') =>
+        `px-4 py-2 text-${align} text-xs font-bold text-gray-500 cursor-pointer select-none hover:text-[#4A9A7A] transition-colors`;
+
+    // week separators only when sorted by date asc
+    const useWeekSep = showDay && sort.key === 'label' && sort.dir === 'asc';
+    const colSpan = showDay ? 5 : 4;
+
+    return (
+        <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-100 text-sm">
+                <thead className="bg-gray-50">
+                    <tr>
+                        <th onClick={() => showDay && toggle('label')} className={showDay ? thCls('label') + ' w-28' : 'px-4 py-2 text-left text-xs font-bold text-gray-500 w-28'}>
+                            {labelHeader}{showDay && icon('label')}
+                        </th>
+                        {showDay && <th className="px-3 py-2 text-center text-xs font-bold text-gray-500 w-14">星期</th>}
+                        <th onClick={() => showDay && toggle('total')}     className={showDay ? thCls('total', 'right') + ' w-32' : 'px-4 py-2 text-right text-xs font-bold text-gray-500 w-32'}>營業額{showDay && icon('total')}</th>
+                        <th onClick={() => showDay && toggle('customers')} className={showDay ? thCls('customers', 'center') + ' w-20' : 'px-4 py-2 text-center text-xs font-bold text-gray-500 w-20'}>來客數{showDay && icon('customers')}</th>
+                        <th onClick={() => showDay && toggle('avgSpend')}  className={showDay ? thCls('avgSpend', 'right') + ' w-24' : 'px-4 py-2 text-right text-xs font-bold text-gray-500 w-24'}>客單價{showDay && icon('avgSpend')}</th>
                     </tr>
-                ))}
-            </tbody>
-        </table>
-    </div>
-);
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                    {sortedRows.length === 0 ? (
+                        <tr><td colSpan={colSpan} className="px-4 py-8 text-center text-gray-400">此日期區間無紀錄</td></tr>
+                    ) : sortedRows.flatMap((row, i) => {
+                        const isWeekend  = showDay && (row.dayOfWeek === '六' || row.dayOfWeek === '日');
+                        const isWeekStart = useWeekSep && row.dayOfWeek === '四' && i > 0;
+                        const prevRow = sortedRows[i - 1];
+                        const isHourGap = !showDay && i > 0 && prevRow &&
+                            parseInt(row.label) - parseInt(prevRow.label) > 1;
+                        const rowEl = (
+                            <tr key={`r${i}`} className={`hover:bg-gray-50 ${row.total > 0 ? '' : 'opacity-40'} ${isWeekend ? 'bg-orange-50/50' : ''}`}>
+                                <td className="px-4 py-2 font-bold text-gray-700">{row.label}</td>
+                                {showDay && (
+                                    <td className={`px-3 py-2 text-center text-xs font-bold ${isWeekend ? 'text-orange-400' : 'text-gray-400'}`}>週{row.dayOfWeek}</td>
+                                )}
+                                <td className={`px-4 py-2 text-right font-bold ${row.total > 0 ? 'text-gray-800' : 'text-gray-400'}`}>${formatCurrency(row.total)}</td>
+                                <td className={`px-4 py-2 text-center ${row.customers > 0 ? 'text-gray-700' : 'text-gray-400'}`}>{row.customers > 0 ? row.customers : '—'}</td>
+                                <td className={`px-4 py-2 text-right ${row.avgSpend > 0 ? 'text-gray-700' : 'text-gray-400'}`}>{row.avgSpend > 0 ? `$${formatCurrency(row.avgSpend)}` : '—'}</td>
+                            </tr>
+                        );
+                        if (isWeekStart) return [<tr key={`sep${i}`}><td colSpan={5} className="p-0 bg-gray-300 h-px" /></tr>, rowEl];
+                        if (isHourGap)  return [<tr key={`gap${i}`}><td colSpan={colSpan} className="p-0 bg-gray-200 h-px" /></tr>, rowEl];
+                        return [rowEl];
+                    })}
+                </tbody>
+            </table>
+        </div>
+    );
+};
 
 // ----------------------------------------------------------------------
-// Trend Chart — uses filtered orders + auto granularity
+// Trend Chart — dual-axis combined view + single metric toggle
 // ----------------------------------------------------------------------
 const CHART_METRICS = [
-    { key: 'revenue',   label: '營業額', color: '#2FB8B8', isCurrency: true },
-    { key: 'customers', label: '來客量', color: '#8B5CF6', isCurrency: false },
-    { key: 'avgSpend',  label: '客單價', color: '#F59E0B', isCurrency: true },
+    { key: 'combined', label: '合併',  color: '#4A9A7A', isCurrency: false },
+    { key: 'revenue',  label: '營業額', color: '#4A9A7A', isCurrency: true },
+    { key: 'customers',label: '來客量', color: '#D0A830', isCurrency: false },
+    { key: 'avgSpend', label: '客單價', color: '#6888A8', isCurrency: true },
 ];
 
 const TrendChart = ({ filteredOrders, isSingleDay, nonRevenueCats }) => {
-    const [activeMetric, setActiveMetric] = useState('revenue');
+    const [activeMetric, setActiveMetric] = useState('combined');
 
     const chartData = useMemo(() => {
         if (isSingleDay) {
-            // hourly 11–21
             const HOUR_START = 11, HOUR_END = 22;
             const hours = Array.from({ length: HOUR_END - HOUR_START + 1 }, (_, i) => ({
                 label: `${String(HOUR_START + i).padStart(2, '0')}:00`,
@@ -242,7 +297,6 @@ const TrendChart = ({ filteredOrders, isSingleDay, nonRevenueCats }) => {
             });
             return hours.map(r => ({ ...r, avgSpend: r.customers > 0 ? Math.round(r.revenue / r.customers) : 0 }));
         } else {
-            // daily
             const map = new Map();
             filteredOrders.forEach(o => {
                 const key = tsToDayTW(o.timestamp);
@@ -261,17 +315,43 @@ const TrendChart = ({ filteredOrders, isSingleDay, nonRevenueCats }) => {
         }
     }, [filteredOrders, isSingleDay, nonRevenueCats]);
 
+    const isCombined = activeMetric === 'combined';
     const metric = CHART_METRICS.find(m => m.key === activeMetric);
-    const fmtTick = (v) => metric.isCurrency ? (v >= 1000 ? `$${Math.round(v / 1000)}k` : `$${v}`) : String(v);
-    const fmtTooltip = (v) => metric.isCurrency ? [`$${formatCurrency(v)}`, metric.label] : [v, metric.label];
+    const fmtRevTick = v => v >= 1000 ? `$${Math.round(v / 1000)}k` : `$${v}`;
+    const fmtSingleTick = v => metric.isCurrency ? fmtRevTick(v) : String(v);
+
+    const combinedTooltip = ({ active, payload, label }) => {
+        if (!active || !payload?.length) return null;
+        return (
+            <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 10, padding: '8px 12px', fontSize: 12, boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}>
+                <p style={{ color: '#6B7280', marginBottom: 4, fontWeight: 700 }}>{label}</p>
+                {payload.map(p => (
+                    <p key={p.dataKey} style={{ color: p.color, margin: '2px 0' }}>
+                        {p.name}：{(p.dataKey === 'revenue' || p.dataKey === 'avgSpend') ? `$${formatCurrency(p.value)}` : p.value}
+                    </p>
+                ))}
+            </div>
+        );
+    };
+
+    const showDots = chartData.length <= 24;
 
     return (
         <div className="bg-white rounded-xl shadow overflow-hidden">
             <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between flex-wrap gap-2">
-                <h3 className="font-black text-gray-800">
-                    趨勢圖
-                    <span className="ml-2 text-xs font-normal text-gray-400">{isSingleDay ? '每小時' : '每日'}</span>
-                </h3>
+                <div className="flex items-center gap-3">
+                    <h3 className="font-black text-gray-800">
+                        趨勢圖
+                        <span className="ml-2 text-xs font-normal text-gray-400">{isSingleDay ? '每小時' : '每日'}</span>
+                    </h3>
+                    {isCombined && (
+                        <div className="flex items-center gap-3 text-xs text-gray-400">
+                            <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: '#4A9A7A', opacity: 0.8 }} />營業額</span>
+                            <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: '#D0A830', opacity: 0.8 }} />來客量</span>
+                            <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: '#6888A8', opacity: 0.8 }} />客單價</span>
+                        </div>
+                    )}
+                </div>
                 <div className="flex gap-1">
                     {CHART_METRICS.map(m => (
                         <button key={m.key} onClick={() => setActiveMetric(m.key)}
@@ -283,41 +363,50 @@ const TrendChart = ({ filteredOrders, isSingleDay, nonRevenueCats }) => {
                     ))}
                 </div>
             </div>
-            <div className="p-4" style={{ height: 240 }}>
+            <div className="p-4" style={{ height: 260 }}>
                 {chartData.length === 0 ? (
                     <div className="flex items-center justify-center h-full text-gray-400 font-bold">無資料</div>
                 ) : (
                     <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 4 }}>
+                        <ComposedChart data={chartData} margin={{ top: 8, right: isCombined ? 40 : 16, left: 0, bottom: 4 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
-                            <XAxis
-                                dataKey="label"
-                                tick={{ fontSize: 11, fill: '#9CA3AF' }}
-                                tickLine={false}
-                                axisLine={{ stroke: '#E5E7EB' }}
-                                interval="preserveStartEnd"
-                            />
-                            <YAxis
-                                tickFormatter={fmtTick}
-                                tick={{ fontSize: 11, fill: '#9CA3AF' }}
-                                tickLine={false}
-                                axisLine={false}
-                                width={52}
-                            />
-                            <Tooltip
-                                formatter={fmtTooltip}
-                                contentStyle={{ borderRadius: 10, border: '1px solid #E5E7EB', fontSize: 12, boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
-                                cursor={{ stroke: metric.color, strokeWidth: 1, strokeDasharray: '4 2' }}
-                            />
-                            <Line
-                                type="monotone"
-                                dataKey={activeMetric}
-                                stroke={metric.color}
-                                strokeWidth={2.5}
-                                dot={chartData.length <= 24 ? { r: 3.5, fill: '#fff', stroke: metric.color, strokeWidth: 2 } : false}
-                                activeDot={{ r: 5, fill: metric.color }}
-                            />
-                        </LineChart>
+                            <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#9CA3AF' }} tickLine={false}
+                                axisLine={{ stroke: '#E5E7EB' }} interval="preserveStartEnd" />
+                            {isCombined ? <>
+                                <YAxis yAxisId="rev" tickFormatter={fmtRevTick}
+                                    tick={{ fontSize: 11, fill: '#4A9A7A' }} tickLine={false} axisLine={false} width={52} />
+                                <YAxis yAxisId="cust" orientation="right"
+                                    tick={{ fontSize: 11, fill: '#D0A830' }} tickLine={false} axisLine={false} width={32} />
+                                <Tooltip content={combinedTooltip} cursor={{ stroke: '#E5E7EB', strokeWidth: 1 }} />
+                                <defs>
+                                    <linearGradient id="revAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%"  stopColor="#4A9A7A" stopOpacity={0.35} />
+                                        <stop offset="95%" stopColor="#4A9A7A" stopOpacity={0.02} />
+                                    </linearGradient>
+                                </defs>
+                                <Area yAxisId="rev" type="monotone" dataKey="revenue" name="營業額"
+                                    stroke="#4A9A7A" strokeWidth={2} fill="url(#revAreaGrad)" fillOpacity={1}
+                                    dot={false} activeDot={{ r: 4, fill: '#4A9A7A' }} />
+                                <Bar yAxisId="cust" dataKey="customers" name="來客量"
+                                    fill="#D0A830" opacity={0.65} radius={[3, 3, 0, 0]}
+                                    maxBarSize={24} />
+                                <YAxis yAxisId="avg" hide={true} domain={['auto', 'auto']} />
+                                <Line yAxisId="avg" type="monotone" dataKey="avgSpend" name="客單價"
+                                    stroke="#6888A8" strokeWidth={2} dot={false}
+                                    activeDot={{ r: 4, fill: '#6888A8' }} />
+                            </> : <>
+                                <YAxis tickFormatter={fmtSingleTick} tick={{ fontSize: 11, fill: '#9CA3AF' }}
+                                    tickLine={false} axisLine={false} width={52} />
+                                <Tooltip
+                                    formatter={v => metric.isCurrency ? [`$${formatCurrency(v)}`, metric.label] : [v, metric.label]}
+                                    contentStyle={{ borderRadius: 10, border: '1px solid #E5E7EB', fontSize: 12, boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
+                                    cursor={{ stroke: metric.color, strokeWidth: 1, strokeDasharray: '4 2' }}
+                                />
+                                <Line type="monotone" dataKey={activeMetric} stroke={metric.color} strokeWidth={2.5}
+                                    dot={showDots ? { r: 3.5, fill: '#fff', stroke: metric.color, strokeWidth: 2 } : false}
+                                    activeDot={{ r: 5, fill: metric.color }} />
+                            </>}
+                        </ComposedChart>
                     </ResponsiveContainer>
                 )}
             </div>
@@ -328,11 +417,79 @@ const TrendChart = ({ filteredOrders, isSingleDay, nonRevenueCats }) => {
 // ----------------------------------------------------------------------
 // 業績概況 Tab
 // ----------------------------------------------------------------------
-const SummaryTab = ({ filteredOrders, compOrders, startDate, endDate, nonRevenueCats, catSettings }) => {
-    const [dailySortKey, setDailySortKey] = useState('date');
+const SUMMARY_SLOTS = [
+    { key: 'all',    label: '全天' },
+    { key: 'lunch',  label: '中午' },
+    { key: 'dinner', label: '晚上' },
+];
+const applyTimeSlot = (orders, slot) => {
+    if (slot === 'all') return orders;
+    return orders.filter(o => {
+        const min = tsToMinOfDayTW(o.timestamp);
+        if (slot === 'lunch')  return min >= 11 * 60 && min <= 16 * 60;
+        if (slot === 'dinner') return min >  16 * 60 && min <= 22 * 60;
+        return true;
+    });
+};
 
-    const kpi     = useMemo(() => calcKpi(filteredOrders, catSettings), [filteredOrders, catSettings]);
-    const prevKpi = useMemo(() => calcKpi(compOrders, catSettings),     [compOrders, catSettings]);
+const fmtMD = (dateStr) => dateStr ? dateStr.slice(5).replace('-', '/') : '';
+
+const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate, nonRevenueCats, catSettings, adjustments = [] }) => {
+    const [summarySlot, setSummarySlot] = useState('all');
+    const [historyPage, setHistoryPage] = useState(1);
+
+    const slotOrders     = useMemo(() => {
+        setHistoryPage(1);
+        return applyTimeSlot(filteredOrders, summarySlot);
+    }, [filteredOrders, summarySlot]);
+    const slotCompOrders = useMemo(() => applyTimeSlot(compOrders,     summarySlot), [compOrders,     summarySlot]);
+
+    const kpi     = useMemo(() => calcKpi(slotOrders,     catSettings), [slotOrders,     catSettings]);
+    const prevKpi = useMemo(() => calcKpi(slotCompOrders, catSettings), [slotCompOrders, catSettings]);
+
+    // 期間內的折扣/退款（以 createdAt 日期篩選）
+    const periodAdj = useMemo(() => {
+        return adjustments.filter(a => {
+            const d = tsToDayTW(new Date(a.createdAt).getTime());
+            if (startDate && d < startDate) return false;
+            if (endDate   && d > endDate)   return false;
+            return true;
+        });
+    }, [adjustments, startDate, endDate]);
+    const periodAdjTotal = useMemo(() => periodAdj.reduce((s, a) => s + (a.amount || 0), 0), [periodAdj]);
+
+    // 平日 vs 假日日均統計
+    const wwKpi = useMemo(() => {
+        const dayMap = new Map();
+        slotOrders.forEach(o => {
+            const d = tsToDayTW(o.timestamp);
+            const ex = dayMap.get(d) || { date: d, revenue: 0, customers: 0 };
+            let orderNonRevenue = 0;
+            (o.items || []).forEach(item => {
+                if (nonRevenueCats.has(item.category)) orderNonRevenue += item.price * item.quantity;
+            });
+            ex.revenue += o.total - orderNonRevenue;
+            ex.customers += o.adjustedCustomerCount || 0;
+            dayMap.set(d, ex);
+        });
+        const weekdays = [], weekends = [];
+        dayMap.forEach(day => {
+            const dow = new Date(day.date + 'T12:00:00+08:00').getDay();
+            (dow === 0 || dow === 6 ? weekends : weekdays).push(day);
+        });
+        const calc = (arr) => {
+            if (arr.length === 0) return { days: 0, avgRevenue: 0, avgCustomers: 0, avgSpend: 0 };
+            const totalRev = arr.reduce((s, d) => s + d.revenue, 0);
+            const totalCust = arr.reduce((s, d) => s + d.customers, 0);
+            return {
+                days: arr.length,
+                avgRevenue:   Math.round(totalRev / arr.length),
+                avgCustomers: Math.round(totalCust / arr.length),
+                avgSpend:     totalCust > 0 ? Math.round(totalRev / totalCust) : 0,
+            };
+        };
+        return { weekday: calc(weekdays), weekend: calc(weekends) };
+    }, [slotOrders, nonRevenueCats]);
 
     const isSingleDay = startDate && endDate && startDate === endDate;
 
@@ -342,7 +499,7 @@ const SummaryTab = ({ filteredOrders, compOrders, startDate, endDate, nonRevenue
         const hours = Array.from({ length: HOUR_END - HOUR_START + 1 }, (_, i) => ({
             label: `${String(HOUR_START + i).padStart(2, '0')}:00`, total: 0, customers: 0,
         }));
-        filteredOrders.forEach(o => {
+        slotOrders.forEach(o => {
             const h = tsToHourTW(o.timestamp);
             if (h < HOUR_START || h > HOUR_END) return;
             let orderFrozen = 0;
@@ -352,13 +509,20 @@ const SummaryTab = ({ filteredOrders, compOrders, startDate, endDate, nonRevenue
             hours[h - HOUR_START].total     += o.total - orderFrozen;
             hours[h - HOUR_START].customers += o.adjustedCustomerCount || 0;
         });
-        return hours.map(r => ({ ...r, avgSpend: r.customers > 0 ? Math.round(r.total / r.customers) : 0 }));
-    }, [filteredOrders, nonRevenueCats]);
+        const CORE_HOURS = new Set(
+            summarySlot === 'lunch'  ? [12, 13, 14] :
+            summarySlot === 'dinner' ? [16, 17, 18, 19] :
+                                       [12, 13, 14, 16, 17, 18, 19]
+        );
+        return hours
+            .map(r => ({ ...r, avgSpend: r.customers > 0 ? Math.round(r.total / r.customers) : 0 }))
+            .filter(r => CORE_HOURS.has(parseInt(r.label)) || r.total > 0);
+    }, [slotOrders, nonRevenueCats, summarySlot]);
 
     // Daily rows
     const dailyRows = useMemo(() => {
         const dayMap = new Map();
-        filteredOrders.forEach(o => {
+        slotOrders.forEach(o => {
             const d = tsToDayTW(o.timestamp);
             const ex = dayMap.get(d) || { label: d, total: 0, customers: 0 };
             let orderFrozen = 0;
@@ -377,18 +541,19 @@ const SummaryTab = ({ filteredOrders, compOrders, startDate, endDate, nonRevenue
             }
         }
         const rows = Array.from(dayMap.values()).map(r => ({
-            ...r, avgSpend: r.customers > 0 ? Math.round(r.total / r.customers) : 0,
+            ...r,
+            avgSpend: r.customers > 0 ? Math.round(r.total / r.customers) : 0,
+            dayOfWeek: getDayOfWeek(r.label),
         }));
-        if (dailySortKey === 'revenue') return rows.sort((a, b) => b.total - a.total);
         return rows.sort((a, b) => a.label.localeCompare(b.label));
-    }, [filteredOrders, startDate, endDate, dailySortKey, nonRevenueCats]);
+    }, [slotOrders, startDate, endDate, nonRevenueCats]);
 
     // Dynamic group KPI cards (one per non-'营業額' reportGroup)
     const GROUP_CARD_COLORS = [
-        { color: 'border-cyan-500',   textColor: 'text-cyan-700' },
-        { color: 'border-violet-500', textColor: 'text-violet-700' },
-        { color: 'border-rose-500',   textColor: 'text-rose-700' },
-        { color: 'border-amber-500',  textColor: 'text-amber-700' },
+        { gradFrom: '#C87848', gradTo: '#DFA07A', textColor: 'text-[#7A3A18]' },
+        { gradFrom: '#5A9870', gradTo: '#88B898', textColor: 'text-[#1A5838]' },
+        { gradFrom: '#C09830', gradTo: '#DBC060', textColor: 'text-[#6A5010]' },
+        { gradFrom: '#6890B0', gradTo: '#92AEC8', textColor: 'text-[#284868]' },
     ];
     const groupCards = Array.from(kpi.groupSalesMap.entries())
         .filter(([grp]) => kpi.groupShowKpi[grp] !== false)
@@ -401,125 +566,298 @@ const SummaryTab = ({ filteredOrders, compOrders, startDate, endDate, nonRevenue
                 value: `$${formatCurrency(amt)}`,
                 ...gc,
                 sub: include ? '計入總營收' : '不計入總營收',
-                delta: <Delta curr={amt} prev={prevAmt} isCurrency />,
+                delta: <Delta curr={amt} prev={prevAmt} isCurrency enabled={!!compPeriod} />,
             };
         });
 
     // KPI card definitions — all use flex-col so Delta always sits at the bottom
     const kpiCards = [
         {
-            label: '總營收',   value: `$${formatCurrency(kpi.adjustedTotal)}`,
-            color: 'border-[#2FB8B8]',  textColor: 'text-[#2FB8B8]',
-            sub: `白天 $${formatCurrency(kpi.day)} ／ 晚上 $${formatCurrency(kpi.night)}`,
-            delta: <Delta curr={kpi.adjustedTotal} prev={prevKpi.adjustedTotal} isCurrency />,
+            label: '總營收',   value: `$${formatCurrency(kpi.adjustedTotal + periodAdjTotal)}`,
+            gradFrom: '#4A9A7A', gradTo: '#78BBAA', textColor: 'text-[#1A5A45]',
+            sub: <>
+                    {`白天 $${formatCurrency(kpi.day)}`}<br />{`晚上 $${formatCurrency(kpi.night)}`}
+                    {periodAdjTotal !== 0 && <><br /><span className="text-gray-400">含折扣調整 {periodAdjTotal > 0 ? '+' : '−'}${formatCurrency(Math.abs(periodAdjTotal))}</span></>}
+                  </>,
+            delta: <Delta curr={kpi.adjustedTotal + periodAdjTotal} prev={prevKpi.adjustedTotal} isCurrency enabled={!!compPeriod} />,
         },
         {
             label: '餐點營收', value: `$${formatCurrency(kpi.dineIn)}`,
-            color: 'border-green-500',  textColor: 'text-green-700',
-            sub: `白天 $${formatCurrency(kpi.day)} ／ 晚上 $${formatCurrency(kpi.night)}`,
-            delta: <Delta curr={kpi.dineIn} prev={prevKpi.dineIn} isCurrency />,
+            gradFrom: '#D47856', gradTo: '#EAA07C', textColor: 'text-[#8A3A18]',
+            sub: <>
+                    {`白天 $${formatCurrency(kpi.day)}`}<br />{`晚上 $${formatCurrency(kpi.night)}`}
+                    {periodAdjTotal !== 0 && <><br /><span className="text-orange-400">折扣 {periodAdjTotal > 0 ? '+' : '−'}${formatCurrency(Math.abs(periodAdjTotal))}</span></>}
+                  </>,
+            delta: <Delta curr={kpi.dineIn} prev={prevKpi.dineIn} isCurrency enabled={!!compPeriod} />,
         },
         ...groupCards,
         {
             label: '來客數',   value: `${kpi.customers} 人`,
-            color: 'border-purple-500', textColor: 'text-purple-700',
+            gradFrom: '#D0A830', gradTo: '#EAC860', textColor: 'text-[#7A5800]',
             sub: null,
-            delta: <Delta curr={kpi.customers} prev={prevKpi.customers} />,
+            delta: <Delta curr={kpi.customers} prev={prevKpi.customers} enabled={!!compPeriod} />,
         },
         {
             label: '客單價',   value: `$${formatCurrency(kpi.avgSpend)}`,
-            color: 'border-orange-500', textColor: 'text-orange-700',
-            sub: `白天 $${formatCurrency(kpi.dayAvgSpend)} ／ 晚上 $${formatCurrency(kpi.nightAvgSpend)}`,
-            delta: <Delta curr={kpi.avgSpend} prev={prevKpi.avgSpend} isCurrency />,
+            gradFrom: '#6888A8', gradTo: '#96AACC', textColor: 'text-[#2A4868]',
+            sub: <>{`白天 $${formatCurrency(kpi.dayAvgSpend)}`}<br />{`晚上 $${formatCurrency(kpi.nightAvgSpend)}`}</>,
+            delta: <Delta curr={kpi.avgSpend} prev={prevKpi.avgSpend} isCurrency enabled={!!compPeriod} />,
         },
     ];
 
     return (
         <div className="space-y-5">
+            {/* 時段篩選 */}
+            <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-gray-400">時段</span>
+                <div className="flex gap-1">
+                    {SUMMARY_SLOTS.map(s => (
+                        <button key={s.key} onClick={() => setSummarySlot(s.key)}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors
+                                ${summarySlot === s.key ? 'bg-[#4A9A7A] text-white' : 'bg-white text-gray-600 shadow-sm hover:bg-gray-50'}`}>
+                            {s.label}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
             {/* KPI cards — flex-col + min-h ensures uniform layout */}
+            {compPeriod && (
+                <p className="text-xs text-gray-400">
+                    ▲▼ 較上期（{compPeriod.hint}）：
+                    <span className="font-semibold text-gray-500 ml-1">
+                        {compPeriod.start === compPeriod.end
+                            ? compPeriod.start
+                            : `${compPeriod.start} ～ ${compPeriod.end}`}
+                    </span>
+                </p>
+            )}
             <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(kpiCards.length, 6)}, minmax(0, 1fr))` }}>
                 {kpiCards.map(c => (
                     <div key={c.label}
-                        className={`bg-white rounded-xl shadow p-4 border-l-4 ${c.color} flex flex-col`}
+                        className="bg-white rounded-xl shadow flex flex-col relative overflow-hidden"
                         style={{ minHeight: 130 }}>
-                        <p className="text-xs font-bold text-gray-500 mb-1">{c.label}</p>
-                        <p className={`text-2xl font-black ${c.textColor}`}>{c.value}</p>
-                        {/* sub: always occupies space even when null */}
-                        <p className="text-xs text-gray-400 mt-0.5 min-h-[16px]">{c.sub || ''}</p>
-                        {c.delta}
+                        <div className="absolute left-0 top-0 bottom-0 w-1"
+                            style={{ background: `linear-gradient(to bottom, ${c.gradFrom}, ${c.gradTo})` }} />
+                        <div className="p-4 pl-5 flex flex-col flex-1">
+                            <p className="text-xs font-bold text-gray-500 mb-1">{c.label}</p>
+                            <p className={`text-2xl font-black ${c.textColor}`}>{c.value}</p>
+                            {/* sub: always occupies space even when null */}
+                            <p className="text-xs text-gray-400 mt-0.5 min-h-[16px]">{c.sub || ''}</p>
+                            {c.delta}
+                        </div>
                     </div>
                 ))}
             </div>
 
-            {/* Trend chart */}
-            <TrendChart filteredOrders={filteredOrders} isSingleDay={isSingleDay} nonRevenueCats={nonRevenueCats} />
-
-            {/* Breakdown table */}
-            <div className="bg-white rounded-xl shadow overflow-hidden">
-                <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
-                    <h3 className="font-black text-gray-800">{isSingleDay ? '每小時業績' : '每日業績'}</h3>
-                    {!isSingleDay && (
-                        <div className="flex gap-1.5">
-                            <SortBtn label="日期"   k="date"    current={dailySortKey} setFn={setDailySortKey} />
-                            <SortBtn label="營業額" k="revenue" current={dailySortKey} setFn={setDailySortKey} />
-                        </div>
-                    )}
-                </div>
-                <BreakdownTable rows={isSingleDay ? hourlyRows : dailyRows} labelHeader={isSingleDay ? '小時' : '日期'} />
-            </div>
-
-            {/* Receipt detail */}
-            <div className="bg-white rounded-xl shadow overflow-hidden">
-                <div className="px-5 py-3 border-b border-gray-100">
-                    <h3 className="font-black text-gray-800">歷史單據明細</h3>
-                </div>
-                <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-100 text-sm">
+            {/* 平日 vs 假日 */}
+            {!isSingleDay && (wwKpi.weekday.days > 0 || wwKpi.weekend.days > 0) && (
+                <div className="bg-white rounded-xl shadow overflow-hidden">
+                    <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+                        <h3 className="font-black text-gray-800">平日 vs 假日</h3>
+                        <span className="text-xs text-gray-400">日平均</span>
+                    </div>
+                    <table className="w-full text-sm">
                         <thead className="bg-gray-50">
                             <tr>
-                                <th className="px-3 py-2 text-left   text-xs font-bold text-gray-500 whitespace-nowrap w-16">單號</th>
-                                <th className="px-3 py-2 text-left   text-xs font-bold text-gray-500 whitespace-nowrap">結帳時間</th>
-                                <th className="px-3 py-2 text-center text-xs font-bold text-gray-500 whitespace-nowrap w-16">桌號</th>
-                                <th className="px-3 py-2 text-center text-xs font-bold text-gray-500 whitespace-nowrap w-12">人數</th>
-                                <th className="px-3 py-2 text-left   text-xs font-bold text-gray-500">結帳項目</th>
-                                <th className="px-3 py-2 text-right  text-xs font-bold text-gray-500 whitespace-nowrap w-24">金額</th>
+                                <th className="pl-5 pr-3 py-3 text-left text-xs font-bold text-gray-400 w-28"></th>
+                                <th className="px-4 py-3 text-center text-xs font-bold text-gray-600">
+                                    平日
+                                    <span className="ml-1 font-normal text-gray-400">一～五</span>
+                                    <span className="ml-1.5 font-normal text-gray-400">({wwKpi.weekday.days} 天)</span>
+                                </th>
+                                <th className="px-4 py-3 text-center text-xs font-bold text-[#D47856]">
+                                    假日
+                                    <span className="ml-1 font-normal text-gray-400">六、日</span>
+                                    <span className="ml-1.5 font-normal text-gray-400">({wwKpi.weekend.days} 天)</span>
+                                </th>
+                                <th className="px-4 py-3 text-center text-xs font-bold text-gray-400 w-20">差異</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                            {filteredOrders.length === 0 ? (
-                                <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">此日期區間無紀錄</td></tr>
-                            ) : filteredOrders.map((o, i) => (
-                                <tr key={`${o.invoiceNumber}-${i}`} className="hover:bg-gray-50">
-                                    <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-400 font-mono align-top pt-3">
-                                        #{displayOrderId(o)}
-                                    </td>
-                                    <td className="px-3 py-2 whitespace-nowrap text-gray-600 text-xs align-top pt-3">
-                                        {formatDateTime(o.timestamp)}
-                                    </td>
-                                    <td className="px-3 py-2 whitespace-nowrap text-center font-bold text-gray-800 align-top pt-3">
-                                        {o.table}
-                                    </td>
-                                    <td className="px-3 py-2 whitespace-nowrap text-center text-gray-600 align-top pt-3">
-                                        {(o.adjustedCustomerCount || 0) > 0 ? o.adjustedCustomerCount : ''}
-                                    </td>
-                                    <td className="px-3 py-2 text-gray-700 align-top">
-                                        <ul className="list-disc list-inside space-y-0.5 pt-1">
-                                            {(o.items || []).map((item, j) => (
-                                                <li key={j} className="text-sm leading-snug">
-                                                    {item.name} × {item.quantity}（${formatCurrency(item.price)}）
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    </td>
-                                    <td className="px-3 py-2 whitespace-nowrap text-right font-black text-gray-800 align-top pt-3">
-                                        ${formatCurrency(o.total)}
-                                    </td>
-                                </tr>
-                            ))}
+                            {[
+                                { label: '日均營收', wd: wwKpi.weekday.avgRevenue,   we: wwKpi.weekend.avgRevenue,   fmt: v => `$${formatCurrency(v)}` },
+                                { label: '日均來客', wd: wwKpi.weekday.avgCustomers, we: wwKpi.weekend.avgCustomers, fmt: v => `${v} 人` },
+                                { label: '客單價',   wd: wwKpi.weekday.avgSpend,     we: wwKpi.weekend.avgSpend,     fmt: v => `$${formatCurrency(v)}` },
+                            ].map(r => {
+                                const diff = r.wd > 0 && r.we > 0 ? Math.round((r.we - r.wd) / r.wd * 100) : null;
+                                return (
+                                    <tr key={r.label} className="hover:bg-gray-50">
+                                        <td className="pl-5 pr-3 py-3.5 text-xs font-bold text-gray-500">{r.label}</td>
+                                        <td className="px-4 py-3.5 text-center font-black text-gray-800">{r.wd > 0 ? r.fmt(r.wd) : '—'}</td>
+                                        <td className="px-4 py-3.5 text-center font-black text-[#D47856] bg-[#D47856]/5">{r.we > 0 ? r.fmt(r.we) : '—'}</td>
+                                        <td className="px-4 py-3.5 text-center text-xs font-bold">
+                                            {diff !== null ? (
+                                                <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${diff >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-500'}`}>
+                                                    {diff >= 0 ? '+' : ''}{diff}%
+                                                </span>
+                                            ) : <span className="text-gray-300">—</span>}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
                         </tbody>
                     </table>
                 </div>
+            )}
+
+            {/* Trend chart */}
+            <TrendChart filteredOrders={slotOrders} isSingleDay={isSingleDay} nonRevenueCats={nonRevenueCats} />
+
+            {/* Breakdown table */}
+            <div className="bg-white rounded-xl shadow overflow-hidden">
+                <div className="px-5 py-3 border-b border-gray-100">
+                    <h3 className="font-black text-gray-800">{isSingleDay ? '每小時業績' : '每日業績'}
+                        {!isSingleDay && <span className="ml-2 text-xs font-normal text-gray-400">點擊欄位標題排序</span>}
+                    </h3>
+                </div>
+                <BreakdownTable rows={isSingleDay ? hourlyRows : dailyRows} labelHeader={isSingleDay ? '小時' : '日期'} showDay={!isSingleDay} />
             </div>
+
+            {/* Adjustment detail */}
+            {periodAdj.length > 0 && (
+                <div className="bg-white rounded-xl shadow overflow-hidden">
+                    <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+                        <h3 className="font-black text-gray-800">折扣 / 退款明細</h3>
+                        <span className={`text-sm font-black ${periodAdjTotal < 0 ? 'text-orange-500' : 'text-green-600'}`}>
+                            合計 {periodAdjTotal > 0 ? '+' : '−'}${formatCurrency(Math.abs(periodAdjTotal))}
+                        </span>
+                    </div>
+                    <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-gray-100 text-sm">
+                            <thead className="bg-gray-50">
+                                <tr>
+                                    <th className="px-4 py-2 text-left text-xs font-bold text-gray-500">時間</th>
+                                    <th className="px-4 py-2 text-left text-xs font-bold text-gray-500">原因</th>
+                                    <th className="px-4 py-2 text-left text-xs font-bold text-gray-500">受影響品項</th>
+                                    <th className="px-4 py-2 text-right text-xs font-bold text-gray-500 w-24">金額</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                                {periodAdj.map(a => (
+                                    <tr key={a.id} className="hover:bg-gray-50">
+                                        <td className="px-4 py-2 whitespace-nowrap text-xs text-gray-400">
+                                            {formatDateTime(new Date(a.createdAt).getTime())}
+                                        </td>
+                                        <td className="px-4 py-2 whitespace-nowrap">
+                                            <span className={`font-bold ${a.amount < 0 ? 'text-orange-600' : 'text-green-700'}`}>{a.reasonPreset}</span>
+                                            {a.reasonNote && <span className="text-gray-400 text-xs ml-1">（{a.reasonNote}）</span>}
+                                        </td>
+                                        <td className="px-4 py-2 text-gray-600 text-xs">
+                                            {(a.affectedItems || []).map(i => i.name).join('、')}
+                                        </td>
+                                        <td className={`px-4 py-2 text-right font-black whitespace-nowrap ${a.amount < 0 ? 'text-orange-500' : 'text-green-600'}`}>
+                                            {a.amount > 0 ? '+' : '−'}${formatCurrency(Math.abs(a.amount))}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {/* Receipt detail */}
+            {(() => {
+                const PAGE_SIZE = 30;
+                // slotOrders is already newest-first (sorted by loadOrders b.timestamp - a.timestamp)
+                const totalPages = Math.max(1, Math.ceil(slotOrders.length / PAGE_SIZE));
+                const safePage = Math.min(historyPage, totalPages);
+                const pageOrders = slotOrders.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+                return (
+                <div className="bg-white rounded-xl shadow overflow-hidden">
+                    <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+                        <h3 className="font-black text-gray-800">
+                            歷史單據明細
+                            <span className="ml-2 text-xs font-normal text-gray-400">{slotOrders.length} 筆</span>
+                        </h3>
+                        {totalPages > 1 && (
+                            <div className="flex items-center gap-1 text-xs font-bold">
+                                <button onClick={() => setHistoryPage(p => Math.max(1, p - 1))} disabled={safePage <= 1}
+                                    className="px-2 py-1 rounded-lg border border-gray-200 text-gray-500 disabled:opacity-30 hover:bg-gray-50 transition-colors">
+                                    ‹
+                                </button>
+                                <span className="px-2 text-gray-600">{safePage} / {totalPages}</span>
+                                <button onClick={() => setHistoryPage(p => Math.min(totalPages, p + 1))} disabled={safePage >= totalPages}
+                                    className="px-2 py-1 rounded-lg border border-gray-200 text-gray-500 disabled:opacity-30 hover:bg-gray-50 transition-colors">
+                                    ›
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                    <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-gray-100 text-sm">
+                            <thead className="bg-gray-50">
+                                <tr>
+                                    <th className="px-3 py-2 text-left   text-xs font-bold text-gray-500 whitespace-nowrap w-16">單號</th>
+                                    <th className="px-3 py-2 text-left   text-xs font-bold text-gray-500 whitespace-nowrap">結帳時間</th>
+                                    <th className="px-3 py-2 text-center text-xs font-bold text-gray-500 whitespace-nowrap w-16">桌號</th>
+                                    <th className="px-3 py-2 text-center text-xs font-bold text-gray-500 whitespace-nowrap w-12">人數</th>
+                                    <th className="px-3 py-2 text-left   text-xs font-bold text-gray-500">結帳項目</th>
+                                    <th className="px-3 py-2 text-right  text-xs font-bold text-gray-500 whitespace-nowrap w-24">金額</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                                {slotOrders.length === 0 ? (
+                                    <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">此日期區間無紀錄</td></tr>
+                                ) : pageOrders.map((o, i) => (
+                                    <tr key={`${o.invoiceNumber}-${i}`} className="hover:bg-gray-50">
+                                        <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-400 font-mono align-top pt-3">
+                                            #{displayOrderId(o)}
+                                        </td>
+                                        <td className="px-3 py-2 whitespace-nowrap text-gray-600 text-xs align-top pt-3">
+                                            {formatDateTime(o.timestamp)}
+                                        </td>
+                                        <td className="px-3 py-2 whitespace-nowrap text-center font-bold text-gray-800 align-top pt-3">
+                                            {o.table}
+                                        </td>
+                                        <td className="px-3 py-2 whitespace-nowrap text-center text-gray-600 align-top pt-3">
+                                            {(o.adjustedCustomerCount || 0) > 0 ? o.adjustedCustomerCount : ''}
+                                        </td>
+                                        <td className="px-3 py-2 text-gray-700 align-top">
+                                            <ul className="list-disc list-inside space-y-0.5 pt-1">
+                                                {(o.items || []).map((item, j) => (
+                                                    <li key={j} className="text-sm leading-snug">
+                                                        {item.name} × {item.quantity}（${formatCurrency(item.price)}）
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </td>
+                                        <td className="px-3 py-2 whitespace-nowrap text-right font-black text-gray-800 align-top pt-3">
+                                            ${formatCurrency(o.total)}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                    {totalPages > 1 && (
+                        <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-400 font-bold">
+                            <span>第 {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, slotOrders.length)} 筆，共 {slotOrders.length} 筆</span>
+                            <div className="flex items-center gap-1">
+                                <button onClick={() => setHistoryPage(1)} disabled={safePage <= 1}
+                                    className="px-2 py-1 rounded-lg border border-gray-200 text-gray-500 disabled:opacity-30 hover:bg-gray-50 transition-colors">
+                                    «
+                                </button>
+                                <button onClick={() => setHistoryPage(p => Math.max(1, p - 1))} disabled={safePage <= 1}
+                                    className="px-2 py-1 rounded-lg border border-gray-200 text-gray-500 disabled:opacity-30 hover:bg-gray-50 transition-colors">
+                                    ‹
+                                </button>
+                                <span className="px-2">{safePage} / {totalPages}</span>
+                                <button onClick={() => setHistoryPage(p => Math.min(totalPages, p + 1))} disabled={safePage >= totalPages}
+                                    className="px-2 py-1 rounded-lg border border-gray-200 text-gray-500 disabled:opacity-30 hover:bg-gray-50 transition-colors">
+                                    ›
+                                </button>
+                                <button onClick={() => setHistoryPage(totalPages)} disabled={safePage >= totalPages}
+                                    className="px-2 py-1 rounded-lg border border-gray-200 text-gray-500 disabled:opacity-30 hover:bg-gray-50 transition-colors">
+                                    »
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+                );
+            })()}
         </div>
     );
 };
@@ -527,16 +865,34 @@ const SummaryTab = ({ filteredOrders, compOrders, startDate, endDate, nonRevenue
 // ----------------------------------------------------------------------
 // 銷售排行 Tab
 // ----------------------------------------------------------------------
+const TIME_SLOTS = [
+    { key: 'all',    label: '全天' },
+    { key: 'lunch',  label: '中午' },
+    { key: 'dinner', label: '晚上' },
+];
+
 const RankingTab = ({ filteredOrders, nonRevenueCats }) => {
-    const [itemSortKey,  setItemSortKey]  = useState('revenue');
-    const [catSortKey,   setCatSortKey]   = useState('revenue');
-    const [groupSortKey, setGroupSortKey] = useState('revenue');
+    const [itemSort,  setItemSort]  = useState({ key: 'revenue', dir: 'desc' });
+    const [catSort,   setCatSort]   = useState({ key: 'revenue', dir: 'desc' });
+    const [groupSort, setGroupSort] = useState({ key: 'revenue', dir: 'desc' });
+    const [timeSlot,  setTimeSlot]  = useState('all');
+    const [catFilter, setCatFilter] = useState('全部');
+
+    const slotOrders = useMemo(() => {
+        if (timeSlot === 'all') return filteredOrders;
+        return filteredOrders.filter(o => {
+            const min = tsToMinOfDayTW(o.timestamp);
+            if (timeSlot === 'lunch')  return min >= 11 * 60 && min <= 16 * 60;
+            if (timeSlot === 'dinner') return min >  16 * 60 && min <= 22 * 60;
+            return true;
+        });
+    }, [filteredOrders, timeSlot]);
 
     const { itemRank, catRank, groupRank } = useMemo(() => {
         const itemMap  = new Map();
         const catMap   = new Map();
         const groupMap = new Map(); // { groupName -> Map<itemName, {name,qty,rev}> }
-        filteredOrders.forEach(o => {
+        slotOrders.forEach(o => {
             (o.items || []).forEach(item => {
                 const rev = item.price * item.quantity;
                 const cat = item.category || '未分類';
@@ -565,17 +921,56 @@ const RankingTab = ({ filteredOrders, nonRevenueCats }) => {
                 items: Array.from(gm.values()),
             })),
         };
-    }, [filteredOrders, nonRevenueCats]);
+    }, [slotOrders, nonRevenueCats]);
 
-    const sorted = (arr, key) => [...arr].sort((a, b) => b[key] - a[key]);
+    // 商品排行可用類別清單
+    const itemCategories = useMemo(() => {
+        const cats = new Set(itemRank.map(i => i.category).filter(Boolean));
+        return ['全部', ...Array.from(cats).sort()];
+    }, [itemRank]);
 
-    const RankTable = ({ data, sortKey, setSort, title, emptyMsg }) => (
+    // 篩選後商品排行
+    const filteredItemRank = useMemo(() =>
+        catFilter === '全部' ? itemRank : itemRank.filter(i => i.category === catFilter),
+    [itemRank, catFilter]);
+
+    const [selectedItem, setSelectedItem] = useState(null);
+    const [trendMetric, setTrendMetric]   = useState('quantity');
+
+    // 品項每日趨勢資料（依 slotOrders 計算，與時段切換連動）
+    const trendData = useMemo(() => {
+        if (!selectedItem) return [];
+        const dayMap = new Map();
+        slotOrders.forEach(o => {
+            const d = tsToDayTW(o.timestamp);
+            (o.items || []).forEach(item => {
+                if (item.name !== selectedItem) return;
+                const ex = dayMap.get(d) || { label: d, quantity: 0, revenue: 0 };
+                ex.quantity += item.quantity;
+                ex.revenue  += item.price * item.quantity;
+                dayMap.set(d, ex);
+            });
+        });
+        return Array.from(dayMap.values()).sort((a, b) => a.label.localeCompare(b.label));
+    }, [selectedItem, slotOrders]);
+
+    const sortBy = (arr, { key, dir }) => {
+        const s = [...arr].sort((a, b) =>
+            typeof a[key] === 'string' ? a[key].localeCompare(b[key]) : a[key] - b[key]
+        );
+        return dir === 'asc' ? s : s.reverse();
+    };
+
+    const handleSelectItem = (name) => setSelectedItem(prev => prev === name ? null : name);
+
+    const RankTable = ({ data, sort, setSort, title, emptyMsg, showTrend = false }) => (
         <div className="bg-white rounded-xl shadow overflow-hidden">
             <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
                 <h3 className="font-black text-gray-800">{title}</h3>
                 <div className="flex gap-1.5">
-                    <SortBtn label="銷售額" k="revenue"  current={sortKey} setFn={setSort} />
-                    <SortBtn label="銷售量" k="quantity" current={sortKey} setFn={setSort} />
+                    <SortBtn label="銷售額" k="revenue"  currentSort={sort} setSort={setSort} />
+                    <SortBtn label="銷售量" k="quantity" currentSort={sort} setSort={setSort} />
+                    <SortBtn label="名稱"   k="name"     currentSort={sort} setSort={setSort} />
                 </div>
             </div>
             <div className="overflow-x-auto">
@@ -591,33 +986,123 @@ const RankingTab = ({ filteredOrders, nonRevenueCats }) => {
                     <tbody className="divide-y divide-gray-100">
                         {data.length === 0 ? (
                             <tr><td colSpan={4} className="px-4 py-8 text-center text-gray-400">{emptyMsg || '此日期區間無資料'}</td></tr>
-                        ) : data.map((item, i) => (
-                            <tr key={item.name} className={`hover:bg-gray-50 ${i === 0 ? 'bg-yellow-50/60' : ''}`}>
-                                <td className="px-4 py-2.5 text-center">
-                                    {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : <span className="text-xs text-gray-400">{i + 1}</span>}
-                                </td>
-                                <td className="px-4 py-2.5 font-bold text-gray-800">{item.name}</td>
-                                <td className="px-4 py-2.5 text-right text-gray-600">{item.quantity} 份</td>
-                                <td className="px-4 py-2.5 text-right font-black text-gray-800">${formatCurrency(item.revenue)}</td>
-                            </tr>
-                        ))}
+                        ) : data.map((item, i) => {
+                            const isSelected = showTrend && selectedItem === item.name;
+                            return (
+                                <tr key={item.name}
+                                    onClick={() => showTrend && handleSelectItem(item.name)}
+                                    className={`${showTrend ? 'cursor-pointer' : ''} ${isSelected ? 'bg-[#4A9A7A]/10' : i === 0 && sort.key !== 'name' ? 'bg-yellow-50/60' : ''} hover:bg-[#4A9A7A]/5`}>
+                                    <td className="px-4 py-2.5 text-center text-xs text-gray-400">{i + 1}</td>
+                                    <td className={`px-4 py-2.5 font-bold ${isSelected ? 'text-[#4A9A7A]' : 'text-gray-800'}`}>
+                                        {item.name}
+                                        {showTrend && <span className="ml-1 text-[10px] font-normal text-gray-400">點擊趨勢</span>}
+                                    </td>
+                                    <td className="px-4 py-2.5 text-right text-gray-600">{item.quantity} 份</td>
+                                    <td className="px-4 py-2.5 text-right font-black text-gray-800">${formatCurrency(item.revenue)}</td>
+                                </tr>
+                            );
+                        })}
                     </tbody>
                 </table>
             </div>
         </div>
     );
 
+    const fmtTrend = trendMetric === 'revenue'
+        ? v => (v >= 1000 ? `$${Math.round(v/1000)}k` : `$${v}`)
+        : v => String(v);
+
     return (
         <div className="space-y-5">
+            {/* 時段切換 */}
+            <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-gray-400">時段</span>
+                <div className="flex gap-1">
+                    {TIME_SLOTS.map(s => (
+                        <button key={s.key} onClick={() => setTimeSlot(s.key)}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors
+                                ${timeSlot === s.key ? 'bg-[#4A9A7A] text-white' : 'bg-white text-gray-600 shadow-sm hover:bg-gray-50'}`}>
+                            {s.label}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            {/* 品項銷售趨勢 */}
+            {selectedItem && (
+                <div className="bg-white rounded-xl shadow overflow-hidden">
+                    <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+                        <div>
+                            <h3 className="font-black text-gray-800">{selectedItem} — 每日趨勢</h3>
+                            <p className="text-xs text-gray-400 mt-0.5">
+                                {TIME_SLOTS.find(s => s.key === timeSlot)?.label}・共 {trendData.reduce((s, d) => s + d.quantity, 0)} 份
+                            </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <div className="flex gap-1">
+                                {[{ k: 'quantity', label: '銷售量' }, { k: 'revenue', label: '銷售額' }].map(m => (
+                                    <button key={m.k} onClick={() => setTrendMetric(m.k)}
+                                        className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors
+                                            ${trendMetric === m.k ? 'bg-[#4A9A7A] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                                        {m.label}
+                                    </button>
+                                ))}
+                            </div>
+                            <button onClick={() => setSelectedItem(null)}
+                                className="ml-1 text-gray-400 hover:text-gray-600 text-lg font-bold leading-none">×</button>
+                        </div>
+                    </div>
+                    <div className="p-4" style={{ height: 220 }}>
+                        {trendData.length === 0 ? (
+                            <div className="flex items-center justify-center h-full text-gray-400">此時段無資料</div>
+                        ) : (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <ComposedChart data={trendData} margin={{ top: 8, right: 16, left: 0, bottom: 4 }}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+                                    <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#9CA3AF' }} tickLine={false}
+                                        axisLine={{ stroke: '#E5E7EB' }} interval="preserveStartEnd" />
+                                    <YAxis tickFormatter={fmtTrend} tick={{ fontSize: 11, fill: '#9CA3AF' }}
+                                        tickLine={false} axisLine={false} width={48} />
+                                    <Tooltip
+                                        formatter={v => trendMetric === 'revenue' ? [`$${formatCurrency(v)}`, '銷售額'] : [`${v} 份`, '銷售量']}
+                                        contentStyle={{ borderRadius: 10, border: '1px solid #E5E7EB', fontSize: 12 }}
+                                        cursor={{ stroke: '#4A9A7A', strokeWidth: 1, strokeDasharray: '4 2' }}
+                                    />
+                                    <Line type="monotone" dataKey={trendMetric} stroke="#4A9A7A" strokeWidth={2.5}
+                                        dot={{ r: 4, fill: '#fff', stroke: '#4A9A7A', strokeWidth: 2 }}
+                                        activeDot={{ r: 5, fill: '#4A9A7A' }} />
+                                </ComposedChart>
+                            </ResponsiveContainer>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* 商品類別篩選 */}
+            {itemCategories.length > 2 && (
+                <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-bold text-gray-400">類別</span>
+                    <div className="flex gap-1 flex-wrap">
+                        {itemCategories.map(cat => (
+                            <button key={cat} onClick={() => { setCatFilter(cat); setSelectedItem(null); }}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors
+                                    ${catFilter === cat ? 'bg-[#4A9A7A] text-white' : 'bg-white text-gray-600 shadow-sm hover:bg-gray-50'}`}>
+                                {cat}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
+
             <div className="grid grid-cols-2 gap-5">
-                <RankTable data={sorted(itemRank,  itemSortKey)}  sortKey={itemSortKey}  setSort={setItemSortKey}  title="🏆 商品銷售排行" />
-                <RankTable data={sorted(catRank,   catSortKey)}   sortKey={catSortKey}   setSort={setCatSortKey}   title="🔖 類別銷售排行" />
+                <RankTable data={sortBy(filteredItemRank, itemSort)} sort={itemSort} setSort={setItemSort} title="🏆 商品銷售排行" showTrend />
+                <RankTable data={sortBy(catRank,          catSort)}  sort={catSort}  setSort={setCatSort}  title="🔖 類別銷售排行" />
             </div>
             {groupRank.map(({ groupName, items }) => (
                 <RankTable
                     key={groupName}
-                    data={sorted(items, groupSortKey)}
-                    sortKey={groupSortKey} setSort={setGroupSortKey}
+                    data={sortBy(items, groupSort)}
+                    sort={groupSort} setSort={setGroupSort}
                     title={`🧊 ${groupName} 銷售排行`}
                     emptyMsg={`此日期區間無${groupName}銷售紀錄`}
                 />
@@ -631,6 +1116,7 @@ const RankingTab = ({ filteredOrders, nonRevenueCats }) => {
 // ----------------------------------------------------------------------
 const ReportPage = () => {
     const [orders, setOrders]           = useState([]);
+    const [adjustments, setAdjustments] = useState([]);
     const [isLoading, setIsLoading]     = useState(true);
     const [tab, setTab]                 = useState('summary');
     const [startDate, setStartDate]     = useState(today());
@@ -648,7 +1134,12 @@ const ReportPage = () => {
     const loadOrders = async () => {
         setIsLoading(true);
         try {
-            const [raw, cats] = await Promise.all([getReportOrders(), getCategorySettings()]);
+            const [raw, cats, adjData] = await Promise.all([
+                getReportOrders(),
+                getCategorySettings(),
+                fetch('/api/adjustments').then(r => r.json()).catch(() => []),
+            ]);
+            setAdjustments(Array.isArray(adjData) ? adjData : []);
             setCatSettings(cats);
             const chronological = [...raw].sort((a, b) => a.timestamp - b.timestamp);
             const seen = new Map();
@@ -680,34 +1171,49 @@ const ReportPage = () => {
     //   1 day  → same weekday last week (-7 days)
     //   month  → same month last year (startDate begins on 1st)
     //   other  → same-length period immediately before
-    const compOrders = useMemo(() => {
-        if (!startDate || !endDate) return [];
+    const compPeriod = useMemo(() => {
+        if (!startDate || !endDate) return null;
         const nDays = Math.round((new Date(endDate) - new Date(startDate)) / 86400000) + 1;
-        let cStart, cEnd;
+        let cStart, cEnd, hint;
         if (nDays === 1) {
-            // 當日 → 上週同日
-            cStart = addDays(startDate, -7);
-            cEnd   = cStart;
+            // 往前掃最近有業績的同一星期幾（最多 8 週）
+            const orderDays = new Set(orders.map(o => tsToDayTW(o.timestamp)));
+            let found = null;
+            for (let w = 1; w <= 8; w++) {
+                const candidate = addDays(startDate, -7 * w);
+                if (orderDays.has(candidate)) { found = { candidate, w }; break; }
+            }
+            if (!found) return null;
+            cStart = found.candidate;
+            cEnd   = found.candidate;
+            hint   = found.w === 1
+                ? '上週同日'
+                : `最近同${DAY_ZH[new Date(cStart + 'T12:00:00+08:00').getDay()]}（${cStart}）`;
         } else if (startDate.endsWith('-01')) {
-            // 月份區間 → 去年同月
             const prevYear = (y) => `${parseInt(y.slice(0, 4)) - 1}${y.slice(4)}`;
             cStart = prevYear(startDate);
             cEnd   = prevYear(endDate);
+            hint   = '去年同期';
         } else {
-            // 其他 → 前 N 天
             cEnd   = addDays(startDate, -1);
             cStart = addDays(startDate, -nDays);
+            hint   = `前 ${nDays} 天`;
         }
+        return { start: cStart, end: cEnd, hint };
+    }, [startDate, endDate, orders]);
+
+    const compOrders = useMemo(() => {
+        if (!compPeriod) return [];
         return orders.filter(o => {
             const d = tsToDayTW(o.timestamp);
-            return d >= cStart && d <= cEnd;
+            return d >= compPeriod.start && d <= compPeriod.end;
         });
-    }, [orders, startDate, endDate]);
+    }, [orders, compPeriod]);
 
     if (isLoading) {
         return (
             <div className="flex items-center justify-center h-full">
-                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#2FB8B8]"></div>
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#4A9A7A]"></div>
             </div>
         );
     }
@@ -726,7 +1232,7 @@ const ReportPage = () => {
                 ].map(t => (
                     <button key={t.key} onClick={() => setTab(t.key)}
                         className={`px-5 py-2 rounded-lg font-black text-sm transition-all
-                            ${tab === t.key ? 'bg-white text-[#2FB8B8] shadow' : 'text-gray-500 hover:text-gray-700'}`}>
+                            ${tab === t.key ? 'bg-white text-[#4A9A7A] shadow' : 'text-gray-500 hover:text-gray-700'}`}>
                         {t.label}
                     </button>
                 ))}
@@ -736,10 +1242,12 @@ const ReportPage = () => {
                 ? <SummaryTab
                     filteredOrders={filteredOrders}
                     compOrders={compOrders}
+                    compPeriod={compPeriod}
                     startDate={startDate}
                     endDate={endDate}
                     nonRevenueCats={nonRevenueCats}
                     catSettings={catSettings}
+                    adjustments={adjustments}
                   />
                 : <RankingTab filteredOrders={filteredOrders} nonRevenueCats={nonRevenueCats} />
             }
