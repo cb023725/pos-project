@@ -271,8 +271,8 @@ const BreakdownTable = ({ rows, labelHeader, showDay = false }) => {
 const CHART_METRICS = [
     { key: 'combined', label: '合併',  color: '#4A9A7A', isCurrency: false },
     { key: 'revenue',  label: '營業額', color: '#4A9A7A', isCurrency: true },
-    { key: 'customers',label: '來客量', color: '#D0A830', isCurrency: false },
-    { key: 'avgSpend', label: '客單價', color: '#6888A8', isCurrency: true },
+    { key: 'customers',label: '來客量', color: '#E07030', isCurrency: false },
+    { key: 'avgSpend', label: '客單價', color: '#3878C8', isCurrency: true },
 ];
 
 const TrendChart = ({ filteredOrders, isSingleDay, nonRevenueCats }) => {
@@ -347,8 +347,8 @@ const TrendChart = ({ filteredOrders, isSingleDay, nonRevenueCats }) => {
                     {isCombined && (
                         <div className="flex items-center gap-3 text-xs text-gray-400">
                             <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: '#4A9A7A', opacity: 0.8 }} />營業額</span>
-                            <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: '#D0A830', opacity: 0.8 }} />來客量</span>
-                            <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: '#6888A8', opacity: 0.8 }} />客單價</span>
+                            <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: '#E07030', opacity: 0.85 }} />來客量</span>
+                            <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: '#3878C8', opacity: 0.85 }} />客單價</span>
                         </div>
                     )}
                 </div>
@@ -376,7 +376,7 @@ const TrendChart = ({ filteredOrders, isSingleDay, nonRevenueCats }) => {
                                 <YAxis yAxisId="rev" tickFormatter={fmtRevTick}
                                     tick={{ fontSize: 11, fill: '#4A9A7A' }} tickLine={false} axisLine={false} width={52} />
                                 <YAxis yAxisId="cust" orientation="right"
-                                    tick={{ fontSize: 11, fill: '#D0A830' }} tickLine={false} axisLine={false} width={32} />
+                                    tick={{ fontSize: 11, fill: '#E07030' }} tickLine={false} axisLine={false} width={32} />
                                 <Tooltip content={combinedTooltip} cursor={{ stroke: '#E5E7EB', strokeWidth: 1 }} />
                                 <defs>
                                     <linearGradient id="revAreaGrad" x1="0" y1="0" x2="0" y2="1">
@@ -388,12 +388,12 @@ const TrendChart = ({ filteredOrders, isSingleDay, nonRevenueCats }) => {
                                     stroke="#4A9A7A" strokeWidth={2} fill="url(#revAreaGrad)" fillOpacity={1}
                                     dot={false} activeDot={{ r: 4, fill: '#4A9A7A' }} />
                                 <Bar yAxisId="cust" dataKey="customers" name="來客量"
-                                    fill="#D0A830" opacity={0.65} radius={[3, 3, 0, 0]}
-                                    maxBarSize={24} />
+                                    fill="#E07030" opacity={0.75} radius={[3, 3, 0, 0]}
+                                    maxBarSize={22} />
                                 <YAxis yAxisId="avg" hide={true} domain={['auto', 'auto']} />
                                 <Line yAxisId="avg" type="monotone" dataKey="avgSpend" name="客單價"
-                                    stroke="#6888A8" strokeWidth={2} dot={false}
-                                    activeDot={{ r: 4, fill: '#6888A8' }} />
+                                    stroke="#3878C8" strokeWidth={2.5} dot={false}
+                                    activeDot={{ r: 4, fill: '#3878C8' }} />
                             </> : <>
                                 <YAxis tickFormatter={fmtSingleTick} tick={{ fontSize: 11, fill: '#9CA3AF' }}
                                     tickLine={false} axisLine={false} width={52} />
