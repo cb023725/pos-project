@@ -119,6 +119,7 @@ const CAT_HEAD_H = 14;               // 分類標題行高
 const CAT_LINE_H = 6;                // 分類虛線高度
 const CAT_GAP    = 8;                // 分類間距
 const ITEM_PAD   = 6;                // 每品項下方留白
+const REMARK_AFTER_PAD = 6;          // 有備註時額外底部間距（與下一道品項區隔）
 const FOOTER_H   = 28;               // 底部（實線+時間）
 const MARGIN_BOT = Math.round(5 * MM);
 
@@ -174,19 +175,29 @@ function groupByCategory(items) {
 // 出單短字：截到最多 8 個字元
 const truncateName = (n) => [...(n || '')].slice(0, 8).join('');
 
-const REMARK_FONT_SZ = 12;
-const REMARK_LINE_H  = 15;
+const REMARK_FONT_SZ = 12;   // 備註字號
+const REM_H_PAD      = 4;    // 備註框水平內距
+const REM_V_PAD      = 4;    // 備註框垂直內距
+const REM_GAP        = 5;    // 備註框水平間距
+const REM_ROW_GAP    = 5;    // 備註框換行間距
+const REM_RADIUS     = 2;    // 備註框圓角（近方角）
+const REM_LINE_W     = 0.8;  // 備註框邊框粗細
+const REM_TOP_GAP    = 3;    // 品項名稱與備註框的垂直間距
 
 // 計算頁面高度
 function calcRemarkH(remarks, measureDoc) {
     if (!remarks || remarks.length === 0) return 0;
-    measureDoc.font('Reg').fontSize(REMARK_FONT_SZ);
-    let h = 0;
-    for (let ri = 0; ri < remarks.length; ri += 3) {
-        const trio = remarks.slice(ri, ri + 3).join('  ');
-        h += measureDoc.heightOfString(trio, { width: CONT_W - 10 });
+    const MAX_W     = CONT_W;
+    measureDoc.font('Bold').fontSize(REMARK_FONT_SZ);
+    const boxH  = REMARK_FONT_SZ + REM_V_PAD * 2;
+    let x = 0, rows = 1;
+    for (const rem of remarks) {
+        const display = rem.replace(/不要|不加/g, 'Ｘ');
+        const boxW = measureDoc.widthOfString(display) + REM_H_PAD * 2;
+        if (x > 0 && x + boxW > MAX_W) { rows++; x = 0; }
+        x += boxW + REM_GAP;
     }
-    return h;
+    return rows * boxH + (rows - 1) * REM_ROW_GAP + REM_TOP_GAP + REMARK_AFTER_PAD;
 }
 
 function calcPageHeight(groups, measureDoc, extraFooterH = 0) {
@@ -297,7 +308,7 @@ function buildReceiptPDF(data, filePath, groups) {
 
                 // 數量框：1→黑框白底；>1→黑底白字加粗（更醒目）
                 const boxX = MARGIN_SIDE + TEXT_W + QTY_PAD;
-                const boxY = y + (Math.max(textH, QTY_BOX_H) - QTY_BOX_H) / 2;
+                const boxY = y;
                 if (qty === 1) {
                     doc.roundedRect(boxX, boxY, QTY_BOX_W, QTY_BOX_H, 3)
                        .lineWidth(1).strokeColor('black').stroke();
@@ -312,16 +323,34 @@ function buildReceiptPDF(data, filePath, groups) {
                              { width: QTY_BOX_W, align: 'center', lineBreak: false });
                 }
 
-                // 備註（縮排，自動換行，高度動態計算）
+                // 備註（方角外框，並排排列）
                 if (remarks.length > 0) {
-                    let remarkY = y + Math.max(textH, QTY_BOX_H) + 1;
-                    doc.font('Reg').fontSize(REMARK_FONT_SZ).fillColor('black');
-                    for (let ri = 0; ri < remarks.length; ri += 3) {
-                        const trio = remarks.slice(ri, ri + 3).join('  ');
-                        const trioH = doc.heightOfString(trio, { width: CONT_W - 10 });
-                        doc.text(trio, MARGIN_SIDE + 8, remarkY,
-                                 { width: CONT_W - 10, lineBreak: true });
-                        remarkY += trioH;
+                    const REM_BORDER_X = MARGIN_SIDE;
+                    const MAX_W        = CONT_W;
+
+                    doc.font('Bold').fontSize(REMARK_FONT_SZ).fillColor('black');
+                    const boxH  = REMARK_FONT_SZ + REM_V_PAD * 2;
+
+                    let rx = 0;
+                    const isMultiLine = textH > ITEM_FONT_SZ * 1.6;
+                    let ry = y + (isMultiLine ? textH : QTY_BOX_H) + REM_TOP_GAP;
+
+                    for (const rem of remarks) {
+                        const display = rem.replace(/不要|不加/g, 'Ｘ');
+                        const tw   = doc.widthOfString(display);
+                        const boxW = tw + REM_H_PAD * 2;
+
+                        if (rx > 0 && rx + boxW > MAX_W) { rx = 0; ry += boxH + REM_ROW_GAP; }
+
+                        // 方角外框
+                        doc.roundedRect(REM_BORDER_X + rx, ry, boxW, boxH, REM_RADIUS)
+                           .lineWidth(REM_LINE_W).strokeColor('black').stroke();
+
+                        // 文字
+                        doc.font('Bold').fontSize(REMARK_FONT_SZ).fillColor('black')
+                           .text(display, REM_BORDER_X + rx + REM_H_PAD, ry + REM_V_PAD, { lineBreak: false });
+
+                        rx += boxW + REM_GAP;
                     }
                 }
 
@@ -432,90 +461,107 @@ async function printPDF(filePath, pageH, copies = 1) {
 // ----------------------------------------------------
 function buildCloseReportPDF(data, filePath) {
     return new Promise((resolve, reject) => {
+        // ── Formatters ────────────────────────────────────────────────
         const fmtMoney = (n) => `$${Math.round(n || 0).toLocaleString('en-US')}`;
-        const fmtDate  = (ts) => {
-            const d = new Date(ts);
-            return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-        };
-        const fmtDT = (ts) => {
-            const d = new Date(ts);
-            return `${fmtDate(ts)} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-        };
+        const fmtDate  = (ts) => { const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
+        const fmtDT    = (ts) => { const d = new Date(ts); return `${fmtDate(ts)} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; };
 
-        const activeCount  = data.activeCount  ?? (data.activeInvoices?.length || 0);
-        const invoiceRange = data.invoiceRange ?? '';
-        const voidedCount  = data.voidedCount  ?? (data.voidedInvoices?.length || 0);
-        const voidedNums   = data.voidedNums   ?? [];
-        const voidedAmount = data.voidedAmount ?? (data.voidedInvoices || []).reduce((s, i) => s + (i.amount || 0), 0);
-        const expenses     = data.expenses || [];
-        const incomes      = data.incomes  || [];
+        // ── Data ──────────────────────────────────────────────────────
+        const activeCount    = data.activeCount  ?? (data.activeInvoices?.length || 0);
+        const invoiceRange   = data.invoiceRange ?? '';
+        const voidedCount    = data.voidedCount  ?? (data.voidedInvoices?.length || 0);
+        const voidedNums     = data.voidedNums   ?? [];
+        const voidedAmount   = data.voidedAmount ?? (data.voidedInvoices || []).reduce((s, i) => s + (i.amount || 0), 0);
+        const expenses       = data.expenses || [];
+        const incomes        = data.incomes  || [];
         const cancelledItems = data.cancelledItems || [];
-
-        // ── 常數 ─────────────────────────────────────────────────────
-        const CR_MT  = Math.round(1 * MM);
-        const CR_MB  = Math.round(5 * MM);
-        const CL     = 0;
-        const CW     = PAGE_W;
-        const AMT_PR = 5;           // 右側留白
-        const BH     = 26;          // 黑色標題列高
-        const RH     = 20;          // 一般 row 高
-        const SRH    = 14;          // 小字 row 高
-        const SH     = 7;           // 分隔線高（含間距）
-        const GAP    = 4;           // 黑色列後空白
-        const TCH    = 38;          // 兩欄金額（大數字 + 小標籤）
-        const HALF   = Math.floor((CW - 4) / 2);
-        const IH     = 22;          // 單品 row 高
-        // 版面：品名 | qty框 | 金額
-        const PRICE_W = 44;         // 金額欄寬（含 AMT_PR）
-        const BOX_W   = 24;
-        const BOX_H   = 17;
-        const boxX    = CW - AMT_PR - PRICE_W - 4 - BOX_W;
-        const nameW   = boxX - 4;
-
-        const customGroups = data.customGroups
-            || (data.frozenSales > 0 ? [{ name: '冷凍包', amount: data.frozenSales }] : []);
+        const adjustments    = data.adjustments || [];
+        const adjTotal       = adjustments.reduce((s, a) => s + (a.amount || 0), 0);
+        const hasAdj         = adjustments.length > 0;
+        const customGroups   = data.customGroups || (data.frozenSales > 0 ? [{ name: '冷凍包', amount: data.frozenSales }] : []);
         const activeCustomGroups = customGroups.filter(g => (g.amount || 0) > 0);
 
-        // ── 短溢原因預量測 ────────────────────────────────────────────
+        // 發票號碼拆兩行（~ 移至第二行）
+        const tildeIdx = invoiceRange.indexOf('~');
+        const invLine1 = tildeIdx > 0 ? invoiceRange.slice(0, tildeIdx).trim() : invoiceRange;
+        const invLine2 = tildeIdx > 0 ? '~ ' + invoiceRange.slice(tildeIdx + 1).trim() : null;
+
+        // ── Typography ────────────────────────────────────────────────
+        const FS_TITLE = 12;   // 黑底標題列
+        const FS_MAIN  = 11;   // 正文標籤與數值
+        const FS_AMT   = 13;   // 關鍵金額（加粗右對齊）
+        const FS_SUB   =  9;   // 子項目
+        const FS_TINY  =  8;   // 輔助小字（時間、號碼）
+
+        // ── Layout ────────────────────────────────────────────────────
+        const CR_MT = Math.round(1 * MM);
+        const CR_MB = Math.round(5 * MM);
+        const CL    = 0;
+        const CW    = PAGE_W;
+        const PR    = 5;    // 右邊距
+
+        const BH  = 26;    // 黑色標題列高（第一行）
+        const RH  = 22;    // 標準 row 高
+        const SRH = 15;    // 子項 row 高
+        const SH  =  6;    // 分隔線後間距
+        const GAP =  3;    // 黑色列後空白
+
+        // 品項 row（單品/折扣明細）
+        const IH    = 22;
+        const BOX_W = 24;
+        const BOX_H = 17;
+        const PRICE_W = 44;
+        const boxX  = CW - PR - PRICE_W - 4 - BOX_W;
+        const nameW = boxX - 4;
+        const HALF  = Math.floor((CW - 4) / 2);
+        const col1X = CL, col2X = CL + CW / 2, colW = CW / 2 - PR;
+
+        // ── Pre-measure discrepancy note ──────────────────────────────
         let diffNoteH = 0;
         if (data.diff && data.diff !== 0 && data.discrepancyNote) {
             const mDoc = new PDFDocument({ size: [PAGE_W, 1000] });
             mDoc.registerFont('Reg', FONT_REG);
-            mDoc.font('Reg').fontSize(9);
+            mDoc.font('Reg').fontSize(FS_TINY);
             diffNoteH = Math.max(SRH, mDoc.heightOfString(data.discrepancyNote, { width: CW - 8 }));
         }
 
-        // ── 計算頁面高度 ──────────────────────────────────────────────
+        // ── 頁面高度計算 ──────────────────────────────────────────────
         let h = CR_MT;
-        h += (BH + SRH + SRH) + GAP;                              // 關帳紀錄 header
-        h += RH + SH;                                              // 營業日期
-        h += RH + SH;                                              // 營業額
+        // Sec 1
+        h += BH + SRH + SRH + GAP;
+        h += RH + SH;   // 營業日期
+        if (hasAdj) {
+            h += RH + SH + SRH + SH + SRH + SH;   // 淨額 + 2 子項
+        } else {
+            h += RH + SH;
+        }
         activeCustomGroups.forEach(() => { h += RH + SH; });
         if (expenses.length > 0) h += SRH + Math.ceil(expenses.length / 2) * RH + SH;
         if (incomes.length  > 0) h += SRH + Math.ceil(incomes.length  / 2) * RH + SH;
         if (data.diff && data.diff !== 0) h += RH + diffNoteH + SH;
-
-        h += BH + GAP;                                             // 發票/收據 header
-        h += RH + SH;                                              // 發票張數
-        if (activeCount > 0 && invoiceRange) h += RH + SH;        // 發票號碼（一行）
+        // Sec 2
+        h += BH + GAP;
+        h += RH + SH;   // 發票張數
+        if (activeCount > 0 && invoiceRange) h += RH + (invLine2 ? SRH : 0) + SH;
         if (voidedCount > 0) {
-            h += RH + SH;                                          // 作廢張數/金額
-            h += Math.max(1, voidedNums.length) * RH + SH;        // 作廢號碼
+            h += RH + SH;
+            h += Math.max(1, voidedNums.length) * SRH + SH;
         }
-
-        h += BH + GAP;                                             // 現金取出 header
-        h += TCH + SH;
-
+        // Sec 3
+        h += BH + GAP + RH + SH + RH + SH;
+        // Sec 4
         if (cancelledItems.length > 0) {
-            h += BH + GAP;                                         // 註銷單品 header
-            h += cancelledItems.length * IH + SH;
-            h += TCH + SH;
+            h += BH + GAP + cancelledItems.length * IH + SH + RH + SH;
+        }
+        // Sec 5
+        if (hasAdj) {
+            h += BH + GAP + adjustments.length * (IH + SRH) + SH;
         }
         h += CR_MB + 8;
 
-        // ── 建立 PDF ──────────────────────────────────────────────────
+        // ── Build PDF ─────────────────────────────────────────────────
         const doc = new PDFDocument({
-            size:    [PAGE_W, h],
+            size: [PAGE_W, h],
             margins: { top: CR_MT, bottom: CR_MB, left: 0, right: 0 },
             compress: false,
         });
@@ -528,52 +574,69 @@ function buildCloseReportPDF(data, filePath) {
         doc.registerFont('Reg',  FONT_REG);
 
         let y = CR_MT;
-        const col1X = CL, col2X = CL + CW / 2, colW = CW / 2 - AMT_PR;
 
-        // ── 輔助函式 ──────────────────────────────────────────────────
-        const solidLine = () => {
-            doc.moveTo(CL, y).lineTo(CL + CW, y).lineWidth(0.6).strokeColor('black').stroke();
+        // ── 繪製輔助函式 ──────────────────────────────────────────────
+        // 分隔線
+        const sep = () => {
+            doc.moveTo(CL, y).lineTo(CL + CW, y).lineWidth(0.5).strokeColor('black').stroke();
+            y += SH;
         };
-        const sep = () => { solidLine(); y += SH; };
+        const dashedSep = () => {
+            doc.moveTo(CL, y).lineTo(CL + CW, y).lineWidth(0.3).strokeColor('black').dash(2, { space: 3 }).stroke().undash();
+            y += SH;
+        };
 
-        // 左標籤 右值（同一行）
-        const row = (label, value, labelSz = 10, valueSz = 11) => {
-            doc.font('Reg').fontSize(labelSz).fillColor('black')
-               .text(label, CL, y, { lineBreak: false });
-            doc.font('Bold').fontSize(valueSz).fillColor('black')
-               .text(value, CL, y, { width: CW - AMT_PR, align: 'right', lineBreak: false });
+        // 垂直置中 offset（在當前 y 的 rowH 範圍內置中 fontSize 的文字）
+        const cy = (rowH, fs) => y + Math.floor((rowH - fs) / 2);
+
+        // CJK 字型行高 ≈ fontSize × LHF；數字行高 ≈ fontSize × 1.0
+        // 讓數字固定比 CJK 標籤低 1pt → 兩者視覺底部對齊（與「發票張數 2」對齊方式一致）
+        const LHF = 1.3;
+        const rowLY = (rowH, fs) => Math.max(0, Math.floor((rowH - fs * LHF) / 2)); // CJK 標籤 offset
+        const row = (label, value, lFS = FS_MAIN, vFS = FS_AMT) => {
+            const rowStart = y;
+            const lY = rowStart + rowLY(RH, lFS);
+            const vY = lY + 1;   // 數字比標籤低 1pt → 底部視覺對齊
+            doc.font('Reg' ).fontSize(lFS).fillColor('black').text(label, CL, lY, { lineBreak: false });
+            doc.font('Bold').fontSize(vFS).fillColor('black').text(value, CL, vY, { width: CW - PR, align: 'right', lineBreak: false });
             y += RH;
         };
 
-        // 並排兩欄（支出/收入）
+        // 子項 row（FS_SUB；值可選加粗）
+        const subRow = (label, value, boldVal = false) => {
+            const rowStart = y;
+            const lY = rowStart + rowLY(SRH, FS_SUB);
+            const vY = lY + 1;
+            doc.font('Reg'            ).fontSize(FS_SUB).fillColor('black').text(label, CL + 4, lY, { lineBreak: false });
+            doc.font(boldVal ? 'Bold' : 'Reg').fontSize(FS_SUB).fillColor('black').text(value, CL,    vY, { width: CW - PR, align: 'right', lineBreak: false });
+            y += SRH;
+        };
+
+        // 並排兩欄（臨時支出/收入）
         const twoPerRow = (items, prefix) => {
+            const x2 = CL + HALF + 4, labelW = HALF - PR - 32;
             for (let i = 0; i < items.length; i += 2) {
                 const a = items[i], b = items[i + 1];
-                const x2 = CL + HALF + 4;
-                const labelW = HALF - AMT_PR - 32;
-                doc.font('Reg').fontSize(9).fillColor('black')
-                   .text(a.note, CL, y, { width: labelW, lineBreak: false });
-                doc.font('Reg').fontSize(9).fillColor('black')
-                   .text(`${prefix}${fmtMoney(a.amount)}`, CL, y, { width: HALF - AMT_PR, align: 'right', lineBreak: false });
+                const tY = cy(RH, FS_SUB);
+                doc.font('Reg').fontSize(FS_SUB).fillColor('black').text(a.note,                         CL, tY, { width: labelW,    lineBreak: false });
+                doc.font('Reg').fontSize(FS_SUB).fillColor('black').text(`${prefix}${fmtMoney(a.amount)}`, CL, tY, { width: HALF - PR, align: 'right', lineBreak: false });
                 if (b) {
-                    doc.font('Reg').fontSize(9).fillColor('black')
-                       .text(b.note, x2, y, { width: labelW, lineBreak: false });
-                    doc.font('Reg').fontSize(9).fillColor('black')
-                       .text(`${prefix}${fmtMoney(b.amount)}`, x2, y, { width: HALF - AMT_PR, align: 'right', lineBreak: false });
+                    doc.font('Reg').fontSize(FS_SUB).fillColor('black').text(b.note,                         x2, tY, { width: labelW,    lineBreak: false });
+                    doc.font('Reg').fontSize(FS_SUB).fillColor('black').text(`${prefix}${fmtMoney(b.amount)}`, x2, tY, { width: HALF - PR, align: 'right', lineBreak: false });
                 }
                 y += RH;
             }
         };
 
-        // 黑色標題列
+        // 黑底白字標題列
         const blackBar = (lines) => {
             const barH = BH + (lines.length - 1) * SRH;
             doc.rect(CL, y, CW, barH).fill('black');
-            doc.fillColor('white').font('Bold').fontSize(13)
-               .text(lines[0], CL, y + 5, { width: CW, align: 'center', lineBreak: false });
+            doc.fillColor('white').font('Bold').fontSize(FS_TITLE)
+               .text(lines[0], CL, y + Math.floor((BH - FS_TITLE) / 2), { width: CW, align: 'center', lineBreak: false });
             lines.slice(1).forEach((ln, i) => {
-                doc.font('Reg').fontSize(9)
-                   .text(ln, CL, y + BH + i * SRH - 2, { width: CW, align: 'center', lineBreak: false });
+                doc.font('Reg').fontSize(FS_TINY)
+                   .text(ln, CL, y + BH + i * SRH + Math.floor((SRH - FS_TINY) / 2), { width: CW, align: 'center', lineBreak: false });
             });
             doc.fillColor('black');
             y += barH + GAP;
@@ -582,48 +645,45 @@ function buildCloseReportPDF(data, filePath) {
         // ── Section 1：關帳紀錄 ──────────────────────────────────────
         blackBar(['關帳紀錄', fmtDT(data.periodStart), `~ ${fmtDT(data.periodEnd)}`]);
 
-        row('營業日期', fmtDate(data.periodEnd || data.periodStart));
+        row('營業日期', fmtDate(data.periodEnd || data.periodStart), FS_MAIN, FS_MAIN);
         sep();
 
-        doc.font('Reg').fontSize(10).fillColor('black')
-           .text('營業額', CL, y, { lineBreak: false });
-        doc.font('Bold').fontSize(14).fillColor('black')
-           .text(fmtMoney(data.sales), CL, y - 2, { width: CW - AMT_PR, align: 'right', lineBreak: false });
-        y += RH; sep();
+        if (hasAdj) {
+            row('營業淨額', fmtMoney((data.sales || 0) + adjTotal));
+            sep();
+            subRow('　餐點應收', fmtMoney(data.sales || 0));
+            dashedSep();
+            subRow('　折扣金額', (adjTotal > 0 ? '+' : '') + fmtMoney(adjTotal));
+            sep();
+        } else {
+            row('營業額', fmtMoney(data.sales || 0));
+            sep();
+        }
 
         activeCustomGroups.forEach(group => {
-            doc.font('Reg').fontSize(10).fillColor('black')
-               .text(group.name, CL, y, { lineBreak: false });
-            doc.font('Bold').fontSize(14).fillColor('black')
-               .text(fmtMoney(group.amount), CL, y - 2, { width: CW - AMT_PR, align: 'right', lineBreak: false });
-            y += RH; sep();
+            row(group.name, fmtMoney(group.amount));
+            sep();
         });
 
         if (expenses.length > 0) {
-            doc.font('Reg').fontSize(9).fillColor('black')
-               .text('臨時支出', CL, y, { lineBreak: false });
+            doc.font('Reg').fontSize(FS_SUB).fillColor('black').text('臨時支出', CL, cy(SRH, FS_SUB), { lineBreak: false });
             y += SRH;
             twoPerRow(expenses, '-');
             sep();
         }
         if (incomes.length > 0) {
-            doc.font('Reg').fontSize(9).fillColor('black')
-               .text('臨時收入', CL, y, { lineBreak: false });
+            doc.font('Reg').fontSize(FS_SUB).fillColor('black').text('臨時收入', CL, cy(SRH, FS_SUB), { lineBreak: false });
             y += SRH;
             twoPerRow(incomes, '+');
             sep();
         }
 
         if (data.diff && data.diff !== 0) {
-            const sign = data.diff > 0 ? '+' : '';
+            const sign      = data.diff > 0 ? '+' : '';
             const diffLabel = data.diff > 0 ? '溢額' : '短額';
-            doc.font('Reg').fontSize(10).fillColor('black')
-               .text(diffLabel, CL, y, { lineBreak: false });
-            doc.font('Bold').fontSize(11).fillColor('black')
-               .text(`${sign}${fmtMoney(data.diff)}`, CL, y, { width: CW - AMT_PR, align: 'right', lineBreak: false });
-            y += RH;
+            row(diffLabel, `${sign}${fmtMoney(data.diff)}`, FS_MAIN, FS_MAIN);
             if (data.discrepancyNote) {
-                doc.font('Reg').fontSize(9).fillColor('black')
+                doc.font('Reg').fontSize(FS_TINY).fillColor('black')
                    .text(data.discrepancyNote, CL + 4, y, { width: CW - 8, lineBreak: true });
                 y += diffNoteH;
             }
@@ -633,54 +693,46 @@ function buildCloseReportPDF(data, filePath) {
         // ── Section 2：發票/收據 ──────────────────────────────────────
         blackBar(['發票/收據']);
 
-        // 發票張數（左標籤 右大數字）
-        doc.font('Reg').fontSize(10).fillColor('black')
-           .text('發票張數', CL, y, { lineBreak: false });
-        doc.font('Bold').fontSize(18).fillColor('black')
-           .text(String(activeCount), CL, y - 3, { width: CW - AMT_PR, align: 'right', lineBreak: false });
-        y += RH; sep();
+        row('發票張數', String(activeCount), FS_MAIN, FS_AMT);
+        sep();
 
-        // 發票號碼（標籤 + 號碼同一行）
         if (activeCount > 0 && invoiceRange) {
-            doc.font('Reg').fontSize(9).fillColor('black')
-               .text('發票號碼', CL, y, { width: 48, lineBreak: false });
-            doc.font('Bold').fontSize(9).fillColor('black')
-               .text(invoiceRange, CL, y, { width: CW - AMT_PR, align: 'right', lineBreak: false });
-            y += RH; sep();
+            // 第一行：發票號碼 標籤（FS_TINY 節省空間）+ 起始號
+            const INV_LBL_W = 36;
+            const invLblY = y + rowLY(RH, FS_TINY);   // CJK 標籤（LHF 補正）
+            const invNumY = invLblY + 1;               // 數字低 1pt
+            doc.font('Reg' ).fontSize(FS_TINY).fillColor('black').text('發票號碼', CL,              invLblY, { width: INV_LBL_W,             lineBreak: false });
+            doc.font('Bold').fontSize(FS_TINY).fillColor('black').text(invLine1,   CL + INV_LBL_W, invNumY, { width: CW - PR - INV_LBL_W,  align: 'right', lineBreak: false });
+            y += RH;
+            if (invLine2) {
+                // 第二行：~ 結束號（無標籤，右對齊）
+                doc.font('Bold').fontSize(FS_TINY).fillColor('black')
+                   .text(invLine2, CL, cy(SRH, FS_TINY), { width: CW - PR, align: 'right', lineBreak: false });
+                y += SRH;
+            }
+            sep();
         }
 
-        // 作廢發票（有才印）
         if (voidedCount > 0) {
-            doc.font('Reg').fontSize(10).fillColor('black')
-               .text(`發票作廢 ${voidedCount}張`, CL, y, { width: CW / 2, lineBreak: false });
-            doc.font('Bold').fontSize(10).fillColor('black')
-               .text(fmtMoney(voidedAmount), CL, y, { width: CW - AMT_PR, align: 'right', lineBreak: false });
-            y += RH; sep();
-            // 每張號碼一列，標籤只在第一列顯示
+            row(`發票作廢 ${voidedCount} 張`, fmtMoney(voidedAmount), FS_MAIN, FS_MAIN);
+            sep();
             for (let i = 0; i < Math.max(1, voidedNums.length); i++) {
-                doc.font('Reg').fontSize(9).fillColor('black')
-                   .text(i === 0 ? '作廢號碼' : '', CL, y, { width: 48, lineBreak: false });
+                const label = i === 0 ? '作廢號碼' : '';
+                doc.font('Reg' ).fontSize(FS_SUB).fillColor('black').text(label,           CL, cy(SRH, FS_SUB), { width: 46,       lineBreak: false });
                 if (voidedNums[i]) {
-                    doc.font('Bold').fontSize(9).fillColor('black')
-                       .text(voidedNums[i], CL, y, { width: CW - AMT_PR, align: 'right', lineBreak: false });
+                    doc.font('Bold').fontSize(FS_SUB).fillColor('black').text(voidedNums[i], CL, cy(SRH, FS_SUB), { width: CW - PR, align: 'right', lineBreak: false });
                 }
-                y += RH;
+                y += SRH;
             }
             sep();
         }
 
         // ── Section 3：現金取出 / 預留零用金 ─────────────────────────
         blackBar(['現金取出 / 預留零用金']);
-        doc.font('Bold').fontSize(15).fillColor('black')
-           .text(fmtMoney(data.withdrawalAmount || 0), col1X, y, { width: colW, align: 'right', lineBreak: false });
-        doc.font('Bold').fontSize(15).fillColor('black')
-           .text(fmtMoney(data.reserveAmount || 0), col2X, y, { width: colW, align: 'right', lineBreak: false });
-        y += 20;
-        doc.font('Reg').fontSize(8).fillColor('black')
-           .text('期間取出金額', col1X, y, { width: colW, align: 'right', lineBreak: false });
-        doc.font('Reg').fontSize(8).fillColor('black')
-           .text('預留零用金', col2X, y, { width: colW, align: 'right', lineBreak: false });
-        y += 18; sep();
+        row('期間取出金額', fmtMoney(data.withdrawalAmount || 0), FS_MAIN, FS_MAIN);
+        sep();
+        row('預留零用金',   fmtMoney(data.reserveAmount   || 0), FS_MAIN, FS_MAIN);
+        sep();
 
         // ── Section 4：註銷單品明細（有棄單才印）────────────────────
         if (cancelledItems.length > 0) {
@@ -689,33 +741,47 @@ function buildCloseReportPDF(data, filePath) {
             for (const ci of cancelledItems) {
                 const qty   = ci.quantity || 1;
                 const price = (ci.price || 0) * qty;
-                totalQty += qty;
-                totalAmt += price;
-                const textY = y + Math.floor((IH - 10) / 2);
+                totalQty += qty; totalAmt += price;
+                const textY = y + Math.floor((IH - FS_MAIN) / 2);
                 const bY    = y + Math.floor((IH - BOX_H) / 2);
-                // 品名（廚房短名）
-                doc.font('Reg').fontSize(10).fillColor('black')
-                   .text(ci.printName || ci.name, CL + 2, textY, { width: nameW, lineBreak: false });
-                // 數量框
-                doc.rect(boxX, bY, BOX_W, BOX_H).lineWidth(0.8).strokeColor('black').stroke();
-                doc.font('Bold').fontSize(10).fillColor('black')
-                   .text(String(qty), boxX, bY + Math.floor((BOX_H - 10) / 2), { width: BOX_W, align: 'center', lineBreak: false });
-                // 金額（右）
-                doc.font('Bold').fontSize(10).fillColor('black')
-                   .text(fmtMoney(price), CL, textY, { width: CW - AMT_PR, align: 'right', lineBreak: false });
+                doc.font('Reg' ).fontSize(FS_MAIN).fillColor('black').text(ci.printName || ci.name, CL + 2, textY, { width: nameW,   lineBreak: false });
+                doc.rect(boxX, bY, BOX_W, BOX_H).lineWidth(0.7).strokeColor('black').stroke();
+                doc.font('Bold').fontSize(FS_MAIN).fillColor('black').text(String(qty), boxX, bY + Math.floor((BOX_H - FS_MAIN) / 2), { width: BOX_W, align: 'center', lineBreak: false });
+                doc.font('Bold').fontSize(FS_MAIN).fillColor('black').text(fmtMoney(price), CL, textY, { width: CW - PR, align: 'right', lineBreak: false });
                 y += IH;
             }
             sep();
-            doc.font('Bold').fontSize(15).fillColor('black')
-               .text(String(totalQty), col1X, y, { width: colW, align: 'right', lineBreak: false });
-            doc.font('Bold').fontSize(15).fillColor('black')
-               .text(fmtMoney(totalAmt), col2X, y, { width: colW, align: 'right', lineBreak: false });
-            y += 20;
-            doc.font('Reg').fontSize(8).fillColor('black')
-               .text('註銷單品數量', col1X, y, { width: colW, align: 'right', lineBreak: false });
-            doc.font('Reg').fontSize(8).fillColor('black')
-               .text('註銷單品金額', col2X, y, { width: colW, align: 'right', lineBreak: false });
-            y += 18; sep();
+            // 合計行（左標籤 | 中件數 | 右金額）
+            doc.font('Reg' ).fontSize(FS_SUB ).fillColor('black').text('合計',           CL,  cy(RH, FS_SUB ), { lineBreak: false });
+            doc.font('Bold').fontSize(FS_MAIN).fillColor('black').text(`${totalQty} 件`, col1X, cy(RH, FS_MAIN), { width: (CW - PR) / 2, align: 'right', lineBreak: false });
+            doc.font('Bold').fontSize(FS_AMT ).fillColor('black').text(fmtMoney(totalAmt), CL,  cy(RH, FS_AMT ), { width: CW - PR,        align: 'right', lineBreak: false });
+            y += RH; sep();
+        }
+
+        // ── Section 5：折扣/退款明細（有才印）────────────────────────
+        if (hasAdj) {
+            blackBar(['折扣 / 退款明細']);
+            for (const adj of adjustments) {
+                const amtSign = adj.amount >= 0 ? '+' : '';
+                const amtStr  = `${amtSign}${fmtMoney(adj.amount)}`;
+                const reason  = adj.reasonNote ? `${adj.reasonPreset}（${adj.reasonNote}）` : adj.reasonPreset;
+                const items   = (adj.affectedItems || []).map(i => i.name).join('、') || '—';
+
+                // Line 1：原因（無金額）
+                const l1Y = y + Math.floor((IH - FS_MAIN) / 2);
+                doc.font('Reg').fontSize(FS_MAIN).fillColor('black').text(reason, CL + 2, l1Y, { width: CW - PR - 4, lineBreak: false });
+                y += IH;
+
+                // Line 2：品項（左）+ 金額（右，Bold FS_SUB）
+                const l2Y = y + Math.floor((SRH - FS_TINY) / 2);
+                doc.font('Bold').fontSize(FS_SUB);
+                const amtW   = doc.widthOfString(amtStr);
+                const itemsW = Math.max(20, CW - PR - amtW - 6);
+                doc.font('Reg' ).fontSize(FS_TINY).fillColor('black').text(`　${items}`, CL + 2, l2Y, { width: itemsW,  lineBreak: false });
+                doc.font('Bold').fontSize(FS_SUB ).fillColor('black').text(amtStr,       CL,     l2Y, { width: CW - PR, align: 'right', lineBreak: false });
+                y += SRH;
+            }
+            sep();
         }
 
         doc.end();
@@ -1255,8 +1321,15 @@ app.post('/api/orders/:id/move-table', async (req, res) => {
 
             await supabase.from('orders').update({ status: 'abandoned', updated_at: now }).eq('id', orderId);
         } else {
-            // 獨立模式：只更新桌號
-            await supabase.from('orders').update({ table_number: newTable, updated_at: now }).eq('id', orderId);
+            // 獨立模式：更新桌號與訂單類型
+            const newOrderType = newTable === '外帶' ? '外帶' : '內用';
+            await supabase.from('orders').update({
+                table_number: newTable, order_type: newOrderType, updated_at: now,
+            }).eq('id', orderId);
+            // 同步更新此訂單已建立的發票（例如部分結帳時已開立的發票）
+            await supabase.from('invoices').update({
+                table_name: newTable, order_type: newOrderType,
+            }).eq('order_id', orderId).eq('status', '已開立');
         }
 
         // 重算來源桌位狀態
@@ -1329,10 +1402,10 @@ app.get('/api/orders/report', async (req, res) => {
             timestamp: new Date(inv.payment_time).getTime(),
             total: inv.total || inv.amount,
             items: inv.items_snapshot || [],
-            table: inv.table_name || o?.table_number || '外帶',
+            table: o?.table_number || inv.table_name || '外帶',
             currentOrderCustomerCount: o?.customer_count,
             customerCount: inv.customer_count || 0,
-            orderType: inv.order_type,
+            orderType: o?.order_type || inv.order_type || (inv.table_name === '外帶' ? '外帶' : '內用'),
         };
     }));
 });
@@ -1351,43 +1424,14 @@ app.get('/api/orders/:id', async (req, res) => {
     if (error) return res.status(404).json({ error: error.message });
     res.json(orderToCamel(data));
 });
-// 建立新訂單（daily_order_no 一律為 null，待確認點餐時透過 /assign-no 補派）
-app.post('/api/orders/new', async (req, res) => {
-    const od = req.body;
-    const now = new Date().toISOString();
-    const row = {
-        table_number: od.table, order_type: od.table === '外帶' ? '外帶' : '內用',
-        status: od.status || 'open', items: od.items || [], total: od.total || 0,
-        daily_order_no: null, sub_total: od.subTotal || 0, paid_amount: 0,
-        customer_count: od.customerCount || 1, customer_name: od.customerName || '',
-        customer_phone: od.customerPhone || '', customer_id: od.customerId || null,
-        needs_utensils: od.needsUtensils || false, pickup_time: od.pickupTime || null,
-        order_date: od.date || now,
-        timestamp: od.timestamp ? new Date(od.timestamp).toISOString() : now,
-        send_time: od.sendTime || null,
-        updated_at: now,
-    };
-    const { data, error } = await supabase.from('orders').insert(row).select().single();
-    if (error) return res.status(500).json({ error: error.message });
-    if (od.table && od.table !== '外帶') {
-        await supabase.from('tables').upsert({ table_number: od.table, status: od.status||'open', order_id: data.id, updated_at: now });
-    }
-    res.json({ id: data.id, dailyOrderNo: null });
-});
-// 為 daily_order_no=null 的訂單補派單號（首次送單時呼叫）
-app.post('/api/orders/:id/assign-no', async (req, res) => {
-    const orderId = parseInt(req.params.id);
-    // 從 Supabase app_settings 讀取關帳邊界，不信任 client localStorage（多裝置不一致）
+// 計算下一個流水號（從關帳邊界後算起，關帳後從 001 重算）
+async function computeNextDailyOrderNo() {
     const [{ data: closeIdRow }, { data: closeTsRow }] = await Promise.all([
         supabase.from('app_settings').select('value').eq('key', 'last_close_order_id').single(),
         supabase.from('app_settings').select('value').eq('key', 'last_close_time').single(),
     ]);
     const storedCloseOrderId = parseInt(closeIdRow?.value || '0', 10);
     const lastCloseTs = closeTsRow?.value || null;
-    const { data: existing } = await supabase.from('orders').select('daily_order_no').eq('id', orderId).single();
-    if (!existing) return res.status(404).json({ error: 'not found' });
-    if (existing.daily_order_no) return res.json({ dailyOrderNo: existing.daily_order_no }); // 已派過
-    // 計算：與 /api/orders/new 相同的期間邊界，只計已派號的訂單
     let count = 0;
     if (storedCloseOrderId > 0) {
         const { count: c } = await supabase.from('orders').select('id', { count: 'exact', head: true })
@@ -1406,7 +1450,42 @@ app.post('/api/orders/:id/assign-no', async (req, res) => {
             .gte('timestamp', midnight.toISOString()).not('daily_order_no', 'is', null);
         count = c || 0;
     }
-    const dailyOrderNo = count + 1;
+    return count + 1;
+}
+
+// 建立新訂單（外帶訂單立即派單號；內用待首次送單時透過 /assign-no 補派）
+app.post('/api/orders/new', async (req, res) => {
+    const od = req.body;
+    const now = new Date().toISOString();
+    const isTakeout = od.table === '外帶';
+    // 外帶訂單建立時即派流水號，確保關帳後從 001 連續計算，不依賴後續送廚操作
+    const dailyOrderNo = isTakeout ? await computeNextDailyOrderNo() : null;
+    const row = {
+        table_number: od.table, order_type: isTakeout ? '外帶' : '內用',
+        status: od.status || 'open', items: od.items || [], total: od.total || 0,
+        daily_order_no: dailyOrderNo, sub_total: od.subTotal || 0, paid_amount: 0,
+        customer_count: od.customerCount ?? 1, customer_name: od.customerName || '',
+        customer_phone: od.customerPhone || '', customer_id: od.customerId || null,
+        needs_utensils: od.needsUtensils || false, pickup_time: od.pickupTime || null,
+        order_date: od.date || now,
+        timestamp: od.timestamp ? new Date(od.timestamp).toISOString() : now,
+        send_time: od.sendTime || null,
+        updated_at: now,
+    };
+    const { data, error } = await supabase.from('orders').insert(row).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    if (od.table && !isTakeout) {
+        await supabase.from('tables').upsert({ table_number: od.table, status: od.status||'open', order_id: data.id, updated_at: now });
+    }
+    res.json({ id: data.id, dailyOrderNo: data.daily_order_no || null });
+});
+// 為 daily_order_no=null 的訂單補派單號（首次送單時呼叫）
+app.post('/api/orders/:id/assign-no', async (req, res) => {
+    const orderId = parseInt(req.params.id);
+    const { data: existing } = await supabase.from('orders').select('daily_order_no').eq('id', orderId).single();
+    if (!existing) return res.status(404).json({ error: 'not found' });
+    if (existing.daily_order_no) return res.json({ dailyOrderNo: existing.daily_order_no }); // 已派過
+    const dailyOrderNo = await computeNextDailyOrderNo();
     await supabase.from('orders').update({ daily_order_no: dailyOrderNo }).eq('id', orderId);
     res.json({ dailyOrderNo });
 });
@@ -1488,8 +1567,8 @@ app.post('/api/orders/:id/complete', async (req, res) => {
             invoice_number: `INV-${Date.now()}`,
             payment_time: now,
             order_id: orderId, daily_order_no: existing.daily_order_no,
-            order_type: tableNumber === '外帶' ? '外帶' : '內用',
-            table_name: tableNumber, customer_count: existing.customer_count||0,
+            order_type: existing.order_type || (existing.table_number === '外帶' ? '外帶' : '內用'),
+            table_name: existing.table_number || tableNumber, customer_count: existing.customer_count||0,
             total: amountNow, amount: amountNow,
             items_snapshot: snapshot, status: '已開立', void_time: null,
         });
@@ -1517,6 +1596,38 @@ app.post('/api/orders/:id/complete', async (req, res) => {
 });
 
 // ============================================================
+// 折扣/退款調整
+// ============================================================
+app.get('/api/adjustments', async (req, res) => {
+    const { since } = req.query;
+    let q = supabase.from('adjustments').select('*').order('created_at', { ascending: true });
+    if (since) q = q.gte('created_at', new Date(parseInt(since)).toISOString());
+    const { data, error } = await q;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json((data || []).map(rowToCamel));
+});
+app.post('/api/adjustments', async (req, res) => {
+    const { originalInvoiceId, reasonPreset, reasonNote, amount, affectedItems } = req.body;
+    console.log('[adjustment] body:', JSON.stringify({ originalInvoiceId, reasonPreset, amount, itemsLen: affectedItems?.length }));
+    if (!originalInvoiceId || !reasonPreset || amount === undefined || !affectedItems?.length)
+        return res.status(400).json({ error: '缺少必填欄位', received: { originalInvoiceId, reasonPreset, amount, affectedItemsLen: affectedItems?.length } });
+    const { data, error } = await supabase.from('adjustments').insert({
+        original_invoice_id: originalInvoiceId,
+        reason_preset:  reasonPreset,
+        reason_note:    reasonNote || null,
+        amount:         amount,
+        affected_items: affectedItems,
+    }).select().single();
+    if (error) { console.log('[adjustment] supabase error:', error.message); return res.status(500).json({ error: error.message }); }
+    console.log('[adjustment] created:', data?.id);
+    res.json(rowToCamel(data));
+});
+app.delete('/api/adjustments/:id', async (req, res) => {
+    const { error } = await supabase.from('adjustments').delete().eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+});
+
 // 發票
 // ============================================================
 app.get('/api/invoices', async (req, res) => {
@@ -1526,7 +1637,21 @@ app.get('/api/invoices', async (req, res) => {
     if (from)   q = q.gte('payment_time', from);
     const { data, error } = await q;
     if (error) return res.status(500).json({ error: error.message });
-    res.json((data||[]).map(invoiceToCamel));
+    // JOIN orders 取得最新的 daily_order_no、table_number、order_type（以訂單為準，避免換桌後發票欄位過期）
+    const orderIds = [...new Set((data||[]).map(r => r.order_id).filter(Boolean))];
+    const { data: ords } = orderIds.length
+        ? await supabase.from('orders').select('id, daily_order_no, table_number, order_type').in('id', orderIds)
+        : { data: [] };
+    const oMap = new Map((ords||[]).map(o => [o.id, o]));
+    res.json((data||[]).map(r => {
+        const ord = oMap.get(r.order_id);
+        return invoiceToCamel({
+            ...r,
+            daily_order_no: r.daily_order_no || ord?.daily_order_no,
+            table_name:  ord?.table_number  || r.table_name,
+            order_type:  ord?.order_type    || r.order_type,
+        });
+    }));
 });
 // 作廢發票
 app.post('/api/invoices/:id/void', async (req, res) => {
@@ -1693,7 +1818,7 @@ function orderToCamel(r) {
         id: r.id, table: r.table_number, orderType: r.order_type, status: r.status,
         items: r.items||[], total: r.total||0, subTotal: r.sub_total||0,
         paidAmount: r.paid_amount||0, dailyOrderNo: r.daily_order_no,
-        customerCount: r.customer_count||1, customerName: r.customer_name||'',
+        customerCount: r.customer_count ?? 1, customerName: r.customer_name||'',
         customerPhone: r.customer_phone||'', customerId: r.customer_id||null,
         needsUtensils: r.needs_utensils||false, pickupTime: r.pickup_time != null ? Number(r.pickup_time) : null,
         date: r.order_date, timestamp: r.timestamp ? new Date(r.timestamp).getTime() : null,
@@ -1708,7 +1833,7 @@ function invoiceToCamel(r) {
         paymentMethod: r.payment_method, paymentTime: r.payment_time,
         status: r.status, amount: r.total||r.amount||0, total: r.total||r.amount||0,
         itemsSnapshot: r.items_snapshot||[], dailyOrderNo: r.daily_order_no,
-        orderType: r.order_type, tableName: r.table_name,
+        orderType: r.order_type || (r.table_name === '外帶' ? '外帶' : '內用'), tableName: r.table_name,
         customerCount: r.customer_count||0, voidTime: r.void_time||null,
     };
 }
@@ -1833,7 +1958,11 @@ app.post('/print-preview', async (req, res) => {
 // ----------------------------------------------------
 app.use(express.static(path.join(__dirname, 'build')));
 app.get(/.*/, (req, res) => {
-    res.sendFile(path.join(__dirname, 'build', 'index.html'));
+    res.sendFile(path.join(__dirname, 'build', 'index.html'), (err) => {
+        if (err) {
+            res.status(503).send('<html><head><meta http-equiv="refresh" content="5"></head><body style="font-family:sans-serif;text-align:center;padding:60px"><h2>系統重新建置中，請稍候...</h2><p>頁面將在 5 秒後自動重新整理</p></body></html>');
+        }
+    });
 });
 
 // ----------------------------------------------------
