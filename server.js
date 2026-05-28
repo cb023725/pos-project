@@ -1319,7 +1319,9 @@ app.post('/api/orders/:id/move-table', async (req, res) => {
                 customer_count: mergedCount, updated_at: now,
             }).eq('id', mergeWithOrderId);
 
-            await supabase.from('orders').update({ status: 'abandoned', updated_at: now }).eq('id', orderId);
+            // 合併棄單用獨立 'merged' 狀態，與真正棄單（'abandoned'）區隔
+            // 避免 cash-drawer 的棄單清單誤列已合併訂單的品項
+            await supabase.from('orders').update({ status: 'merged', updated_at: now }).eq('id', orderId);
         } else {
             // 獨立模式：更新桌號與訂單類型
             const newOrderType = newTable === '外帶' ? '外帶' : '內用';
