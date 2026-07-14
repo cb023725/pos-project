@@ -1524,9 +1524,17 @@ app.patch('/api/orders/:id', async (req, res) => {
     const b = req.body; const now = new Date().toISOString();
     const updates = { updated_at: now };
     if (b.status        !== undefined) updates.status        = b.status;
-    if (b.items         !== undefined) updates.items         = b.items;
-    if (b.total         !== undefined) updates.total         = b.total;
-    if (b.subTotal      !== undefined) updates.sub_total     = b.subTotal;
+    if (b.items         !== undefined) {
+        updates.items = b.items;
+        // total/subTotal 沒有跟著 items 一起傳（目前所有呼叫端皆如此）時，
+        // 從 items 重新計算，避免金額停留在編輯前的舊值
+        const computedTotal = b.items.reduce((s, i) => s + (i.price||0) * (i.quantity||1), 0);
+        updates.total     = b.total     !== undefined ? b.total     : computedTotal;
+        updates.sub_total = b.subTotal  !== undefined ? b.subTotal  : computedTotal;
+    } else {
+        if (b.total    !== undefined) updates.total     = b.total;
+        if (b.subTotal !== undefined) updates.sub_total = b.subTotal;
+    }
     if (b.paidAmount    !== undefined) updates.paid_amount   = b.paidAmount;
     if (b.sendTime      !== undefined) updates.send_time     = b.sendTime;
     if (b.finishTime    !== undefined) updates.finish_time   = b.finishTime;
