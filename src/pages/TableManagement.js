@@ -415,6 +415,23 @@ const TableManagementPage = () => {
         }
     }, [loadTableStatuses]);
 
+    const handleMoveToTakeout = useCallback(async (tableId, order) => {
+        // 換到外帶：直接執行，不顯示合併確認（外帶一律獨立新單），完成後直接切換到外帶 OrderPage
+        await executeMoveOrder(order, tableId, '外帶', null);
+        navigate('/order', {
+            state: {
+                isTakeout: true,
+                orderId: order.orderId || null,
+                orderStatus: order.status || 'open',
+                openTimestamp: order.timestamp || Date.now(),
+                customerCount: order.customerCount ?? 0,
+                sendTime: order.sendTime || null,
+                dailyOrderNo: order.dailyOrderNo || null,
+                forceNewOrder: !order.orderId,
+            }
+        });
+    }, [executeMoveOrder, navigate]);
+
     const handleTableClick = useCallback((tableId, status, currentOrder) => {
         const OCCUPIED_STATUSES = ['open', 'served', 'paid']; 
         const isOccupied = OCCUPIED_STATUSES.includes(status);
@@ -589,6 +606,7 @@ const TableManagementPage = () => {
                                     handleResetTable={handleResetTable}
                                     onMoveRequest={handleMoveRequest}
                                     onMergeRequest={handleMergeRequest}
+                                    onMoveToTakeout={handleMoveToTakeout}
                                     isLoading={isLoading}
                                 />
                             </div>
@@ -627,6 +645,7 @@ const TableManagementPage = () => {
                                         handleResetTable={handleResetTable}
                                         onMoveRequest={handleMoveRequest}
                                         onMergeRequest={handleMergeRequest}
+                                        onMoveToTakeout={handleMoveToTakeout}
                                         isLoading={isLoading}
                                     />
                                 </div>

@@ -309,9 +309,7 @@ const StockLimitModal = ({ warning, onConfirm, onCancel }) => {
                 <p className="text-gray-800 font-bold text-lg mb-1">{warning.menuItemName}</p>
                 <p className="text-gray-500 text-sm mb-1">庫存品項：<span className="font-bold text-gray-700">{warning.invItemName}</span></p>
                 <p className="text-gray-500 text-sm mb-5">
-                    資料庫剩 <span className="font-black text-red-600">{warning.dbStock}</span> 份，
-                    本桌已點 <span className="font-black">{warning.consumed}</span> 份，
-                    可用 <span className={`font-black ${warning.available <= 0 ? 'text-red-600' : 'text-orange-500'}`}>{warning.available}</span> 份
+                    目前庫存 <span className="font-black text-red-600">{warning.dbStock}</span> 份，請與廚房確認
                 </p>
                 <div className="flex gap-3">
                     <button onClick={onCancel}  className="flex-1 py-3 rounded-xl font-black bg-gray-100 text-gray-700 hover:bg-gray-200">取消</button>
@@ -330,7 +328,7 @@ const DepletedConfirmModal = ({ item, onConfirm, onCancel }) => {
             <div className="bg-white p-6 rounded-2xl shadow-2xl w-80">
                 <h3 className="text-xl font-black mb-2 border-b pb-2 text-orange-600">⚠️ 庫存售完</h3>
                 <p className="text-gray-800 font-bold text-lg mb-1">{item.name}</p>
-                <p className="text-gray-500 text-sm mb-5">此品項庫存已售完，確定要繼續點餐？</p>
+                <p className="text-gray-500 text-sm mb-5">目前庫存 0 份，請與廚房確認是否繼續點餐</p>
                 <div className="flex gap-3">
                     <button onClick={onCancel}  className="flex-1 py-3 rounded-xl font-black bg-gray-100 text-gray-700 hover:bg-gray-200">取消</button>
                     <button onClick={onConfirm} className="flex-1 py-3 rounded-xl font-black text-white bg-orange-500 hover:bg-orange-600">確認點餐</button>
@@ -408,10 +406,10 @@ const CheckoutOptionModal = ({ isOpen, onClose, onFullCheckout, onStartPartialCh
                         </>
                     )}
                     <div className="flex gap-2">
-                        <button onClick={onPrintKitchen} className="flex-1 py-3 rounded-xl bg-teal-600 text-white font-black text-sm">
+                        <button onClick={onPrintKitchen} className="flex-1 py-3 rounded-xl bg-[#4A9A7A] text-white font-black text-sm">
                             印廚房單
                         </button>
-                        <button onClick={onPrintCustomer} className="flex-1 py-3 rounded-xl bg-teal-700 text-white font-black text-sm">
+                        <button onClick={onPrintCustomer} className="flex-1 py-3 rounded-xl bg-[#3A8A6A] text-white font-black text-sm">
                             印顧客單
                         </button>
                     </div>
@@ -443,8 +441,8 @@ const CheckoutSuccessModal = ({ isOpen, total, isPartial, isTakeout, onConfirm }
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
                 {/* 頂部 */}
                 <div className="flex flex-col items-center pt-8 pb-5 px-6">
-                    <div className="w-16 h-16 rounded-full border-[3px] border-[#2FB8B8] flex items-center justify-center mb-3">
-                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#2FB8B8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <div className="w-16 h-16 rounded-full border-[3px] border-[#4A9A7A] flex items-center justify-center mb-3">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#4A9A7A" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                             <polyline points="20 6 9 17 4 12" />
                         </svg>
                     </div>
@@ -477,7 +475,7 @@ const CheckoutSuccessModal = ({ isOpen, total, isPartial, isTakeout, onConfirm }
                             inputMode="numeric"
                             value={cashInput}
                             onChange={e => setCashInput(e.target.value)}
-                            className="w-full text-right text-2xl font-black border-2 border-gray-200 focus:border-[#2FB8B8] rounded-xl px-4 py-2 pr-10 outline-none"
+                            className="w-full text-right text-2xl font-black border-2 border-gray-200 focus:border-blue-500 rounded-xl px-4 py-2 pr-10 outline-none"
                         />
                         <button
                             onClick={() => setCashInput('')}
@@ -633,6 +631,37 @@ const ClearUnpaidModal = ({ isOpen, itemCount, onConfirm, onCancel }) => {
     );
 };
 
+const ItemChangeModal = ({ isOpen, onClose, onDiscard }) => {
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+                <div className="flex flex-col items-center pt-8 pb-5 px-6">
+                    <div className="w-20 h-20 rounded-full bg-amber-50 border-[3px] border-amber-400 flex items-center justify-center mb-5">
+                        <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M12 9v4"/><path d="M12 17h.01"/>
+                            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/>
+                        </svg>
+                    </div>
+                    <h3 className="text-2xl font-black text-gray-800 mb-3">餐點尚未確認</h3>
+                    <p className="text-base text-gray-600 text-center leading-relaxed font-bold">
+                        請點選「確認點餐」或「結帳」才會更新訂單。<br />直接返回不會儲存這次的餐點變動。
+                    </p>
+                </div>
+                <div className="border-t border-gray-100" />
+                <div className="flex divide-x divide-gray-100">
+                    <button onClick={onClose} className="flex-1 py-5 text-gray-600 font-black text-xl hover:bg-gray-50 transition-colors">
+                        繼續編輯
+                    </button>
+                    <button onClick={onDiscard} className="flex-1 py-5 text-red-500 font-black text-xl hover:bg-red-50 transition-colors">
+                        直接返回
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const AbandonOrderModal = ({ isOpen, tableNumber, onConfirm, onCancel }) => {
     const navigate = useNavigate();
     const [consumeChoice, setConsumeChoice] = useState(null);
@@ -725,15 +754,6 @@ const TakeoutCustomerInfo = ({ customerName, setCustomerName, customerPhone, set
 
     const handleNameChange = (val) => {
         setCustomerName(val);
-        clearTimeout(phoneSearchTimeout.current);
-        if (val.length >= 1) {
-            phoneSearchTimeout.current = setTimeout(async () => {
-                const results = await searchCustomer(val);
-                setCustomerSuggestions(results);
-            }, 300);
-        } else {
-            setCustomerSuggestions([]);
-        }
     };
 
     const handleSelectSuggestion = (c) => {
@@ -767,7 +787,6 @@ const TakeoutCustomerInfo = ({ customerName, setCustomerName, customerPhone, set
             {/* 姓名 + 電話 row */}
             <div className="flex gap-2 relative">
                 <div className="flex flex-col flex-1 min-w-0">
-                    <span className="text-[10px] font-bold text-gray-500 mb-0.5">姓名</span>
                     <div className="flex gap-1">
                         <input
                             type="text"
@@ -789,7 +808,6 @@ const TakeoutCustomerInfo = ({ customerName, setCustomerName, customerPhone, set
                     </div>
                 </div>
                 <div className="flex flex-col flex-1 min-w-0">
-                    <span className="text-[10px] font-bold text-gray-500 mb-0.5">電話</span>
                     <input
                         type="tel"
                         value={customerPhone}
@@ -818,7 +836,6 @@ const TakeoutCustomerInfo = ({ customerName, setCustomerName, customerPhone, set
             <div className="flex items-end gap-2">
                 {/* 餐具 兩按鈕 */}
                 <div className="flex flex-col flex-1 min-w-0">
-                    <span className="text-[10px] font-bold text-gray-500 mb-0.5">餐具</span>
                     <div className="flex gap-1 h-9">
                         <button
                             type="button"
@@ -827,7 +844,7 @@ const TakeoutCustomerInfo = ({ customerName, setCustomerName, customerPhone, set
                                 ${needsUtensils ? 'bg-orange-500 border-orange-500 text-white' : 'bg-white border-gray-300 text-gray-500 hover:border-orange-400 hover:text-orange-500'}`}
                         >
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 002-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 00-5 5v6c0 1.1.9 2 2 2h3zm0 0v7"/></svg>
-                            需要餐具
+                            需餐具
                         </button>
                         <button
                             type="button"
@@ -835,7 +852,6 @@ const TakeoutCustomerInfo = ({ customerName, setCustomerName, customerPhone, set
                             className={`flex-1 flex items-center justify-center gap-1 rounded-lg border-2 font-bold text-xs transition-colors
                                 ${!needsUtensils ? 'bg-gray-500 border-gray-500 text-white' : 'bg-white border-gray-300 text-gray-400 hover:border-gray-400'}`}
                         >
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                             不需餐具
                         </button>
                     </div>
@@ -843,7 +859,6 @@ const TakeoutCustomerInfo = ({ customerName, setCustomerName, customerPhone, set
 
                 {/* 取餐時間 */}
                 <div className="flex flex-col flex-1 min-w-0">
-                    <span className="text-[10px] font-bold text-gray-500 mb-0.5">取餐時間</span>
                     <div className="flex items-center gap-1 h-9">
                         <input
                             type="time"
@@ -851,8 +866,8 @@ const TakeoutCustomerInfo = ({ customerName, setCustomerName, customerPhone, set
                             onChange={handlePickupTimeInput}
                             className="border border-gray-300 rounded-lg px-1.5 h-full text-sm font-bold outline-none focus:border-orange-400 flex-1 min-w-0"
                         />
+                        <button onClick={() => addMinutes(-5)} className="h-full px-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-xs font-bold text-gray-600 flex-shrink-0">-5</button>
                         <button onClick={() => addMinutes(5)} className="h-full px-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-xs font-bold text-gray-600 flex-shrink-0">+5</button>
-                        <button onClick={() => addMinutes(10)} className="h-full px-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-xs font-bold text-gray-600 flex-shrink-0">+10</button>
                     </div>
                 </div>
             </div>
@@ -972,7 +987,7 @@ const RemarkSelectionModal = ({ item, groups, initialRemarks, onToggle, onCancel
                                             <button key={opt}
                                                 onClick={() => g.type === 'multi' ? handleMulti(g.id, opt) : handleSingle(g.id, opt)}
                                                 className={`px-3 py-2.5 rounded-xl text-base font-bold border-2 transition-all whitespace-nowrap ${
-                                                    active ? 'bg-teal-500 text-white border-teal-500 shadow-sm' : 'bg-white text-gray-600 border-gray-200 hover:border-teal-300'
+                                                    active ? 'bg-blue-500 text-white border-blue-500 shadow-sm' : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300'
                                                 }`}
                                             >{opt}</button>
                                         );
@@ -1020,7 +1035,7 @@ const OrderPage = () => {
     );
     const [customerName, setCustomerName] = useState('');
     const [customerPhone, setCustomerPhone] = useState('');
-    const [needsUtensils, setNeedsUtensils] = useState(false);
+    const [needsUtensils, setNeedsUtensils] = useState(true);
     const [pickupTime, setPickupTime] = useState(() => Date.now() + 20 * 60000);
     const [customerSuggestions, setCustomerSuggestions] = useState([]);
 
@@ -1028,8 +1043,10 @@ const OrderPage = () => {
     const [originalCustomerCount, setOriginalCustomerCount] = useState(
         isTakeout ? (location.state?.customerCount ?? 0) : (location.state?.customerCount || 1)
     );
-    const [originalNeedsUtensils, setOriginalNeedsUtensils] = useState(false);
+    const [originalNeedsUtensils, setOriginalNeedsUtensils] = useState(true);
     const [originalPickupTime, setOriginalPickupTime] = useState(() => Date.now() + 20 * 60000);
+    const [originalCustomerName,  setOriginalCustomerName]  = useState('');
+    const [originalCustomerPhone, setOriginalCustomerPhone] = useState('');
 
     const [originalItems, setOriginalItems] = useState([]);
 
@@ -1047,9 +1064,11 @@ const OrderPage = () => {
     const [isCheckoutOptionModalOpen, setIsCheckoutOptionModalOpen] = useState(false);
     const [checkoutResult, setCheckoutResult] = useState(null); // { total, isPartial, navigateTo }
     const [tableChangeConflict, setTableChangeConflict] = useState(null); // { pendingTable, targetOrders }
+    const [showTablePicker, setShowTablePicker] = useState(false);
     const [showAbandonModal, setShowAbandonModal] = useState(false);
     const [showClearModal,  setShowClearModal]  = useState(false);
     const [showClearUnpaidModal, setShowClearUnpaidModal] = useState(false);
+    const [showItemChangeModal, setShowItemChangeModal] = useState(false); // 返回時偵測到餐點異動，需先確認點餐/結帳
     const [partialConfirmItems, setPartialConfirmItems] = useState(null); // 分開結帳確認 modal
     const [isPartialCheckoutMode, setIsPartialCheckoutMode] = useState(false);
     const [selectedItemsForCheckout, setSelectedItemsForCheckout] = useState([]); // 部分結帳時選中的項目 internalId
@@ -1269,8 +1288,8 @@ const OrderPage = () => {
                 setCurrentOrderId(openOrder.id);
                 setOrderStatus(openOrder.status);
                 setCustomerCount(isTakeout ? (openOrder.customerCount ?? 0) : (openOrder.customerCount || 1));
-                if (openOrder.customerName) setCustomerName(openOrder.customerName);
-                if (openOrder.customerPhone) setCustomerPhone(openOrder.customerPhone);
+                if (openOrder.customerName) { setCustomerName(openOrder.customerName); setOriginalCustomerName(openOrder.customerName); }
+                if (openOrder.customerPhone) { setCustomerPhone(openOrder.customerPhone); setOriginalCustomerPhone(openOrder.customerPhone); }
                 if (openOrder.needsUtensils !== undefined) {
                     setNeedsUtensils(!!openOrder.needsUtensils);
                     setOriginalNeedsUtensils(!!openOrder.needsUtensils);
@@ -1415,11 +1434,19 @@ const OrderPage = () => {
         const hasCountChanged    = customerCount !== originalCustomerCount;
         const hasUtensilsChanged = isTakeout && needsUtensils !== originalNeedsUtensils;
         const hasPickupChanged   = isTakeout && pickupTime !== originalPickupTime;
-        const hasMetaChanged     = hasCountChanged || hasUtensilsChanged || hasPickupChanged;
+        const hasNameChanged     = isTakeout && customerName !== originalCustomerName;
+        const hasPhoneChanged    = isTakeout && customerPhone !== originalCustomerPhone;
+        const hasMetaChanged     = hasCountChanged || hasUtensilsChanged || hasPickupChanged || hasNameChanged || hasPhoneChanged;
 
         const isContentChanged  = JSON.stringify(currentOrder) !== JSON.stringify(originalItems);
         const stripRemarks      = arr => JSON.stringify(arr.map(({ remarks, ...rest }) => rest));
         const isStructureChanged = stripRemarks(currentOrder) !== stripRemarks(originalItems);
+
+        // 餐點內容有異動（新增/刪除/改數量，不含純備註）→ 擋下返回，需先確認點餐或結帳才能更新訂單
+        if (isStructureChanged) {
+            setShowItemChangeModal(true);
+            return;
+        }
 
         const hasAnyChange = isContentChanged || hasMetaChanged;
 
@@ -1438,11 +1465,13 @@ const OrderPage = () => {
                         customerCount,
                         needsUtensils: isTakeout ? needsUtensils : undefined,
                         pickupTime: isTakeout ? pickupTime : undefined,
+                        customerName: isTakeout ? customerName : undefined,
+                        customerPhone: isTakeout ? customerPhone : undefined,
                         sendTime,
                         finishTime,
                     });
-                } else if (currentOrder.length > 0 || hasCountChanged) {
-                    // 有品項 OR 內用只改人數 → 建立新訂單（daily_order_no 恆為 null）
+                } else if (currentOrder.length > 0 || hasCountChanged || hasNameChanged || hasPhoneChanged) {
+                    // 有品項 OR 人數/顧客資料有變動 → 建立新訂單（daily_order_no 恆為 null）
                     const result = await createNewOrder({
                         table: tableNumber || '外帶',
                         status: 'open',
@@ -1453,6 +1482,8 @@ const OrderPage = () => {
                         timestamp: openTimestamp,
                         needsUtensils: isTakeout ? needsUtensils : undefined,
                         pickupTime: isTakeout ? pickupTime : undefined,
+                        customerName: isTakeout ? customerName : undefined,
+                        customerPhone: isTakeout ? customerPhone : undefined,
                     });
                     if (result?.id) setCurrentOrderId(result.id);
                 }
@@ -1469,6 +1500,12 @@ const OrderPage = () => {
             await occupyTableWithoutOrder(tableNumber, openTimestamp);
         }
 
+        navigate(isTakeout ? '/takeout' : '/tables');
+    };
+
+    // 餐點異動 modal 選「直接返回」：捨棄本次餐點變動，不儲存直接離開
+    const handleDiscardItemChanges = () => {
+        setShowItemChangeModal(false);
         navigate(isTakeout ? '/takeout' : '/tables');
     };
 
@@ -1953,13 +1990,47 @@ const handleChangeItemQuantity = (internalId, diff) => {
             setOriginalTableId(newTable);
             setIsDirty(false);
             setTableChangeConflict(null);
+            // 外帶換到內用桌：isTakeout 是 const，需要 navigate 切換到內用模式
+            if (isTakeout && newTable && newTable !== '外帶') {
+                navigate('/order', {
+                    replace: true,
+                    state: {
+                        isTakeout: false,
+                        initialTableNumber: newTable,
+                        orderId: mergeWithTargetOrder ? null : currentOrderId,
+                        orderStatus: mergeWithTargetOrder ? 'served' : orderStatus,
+                        openTimestamp,
+                        customerCount,
+                        sendTime: sendTime || null,
+                        dailyOrderNo: dailyOrderNo || null,
+                    }
+                });
+                return;
+            }
+            // 內用換到外帶：isTakeout 是 const，需要 navigate 切換到外帶模式（帶出餐具/取餐時間/顧客資訊）
+            if (!isTakeout && newTable === '外帶') {
+                navigate('/order', {
+                    replace: true,
+                    state: {
+                        isTakeout: true,
+                        orderId: currentOrderId,
+                        orderStatus,
+                        openTimestamp,
+                        customerCount,
+                        sendTime: sendTime || null,
+                        dailyOrderNo: dailyOrderNo || null,
+                        forceNewOrder: !currentOrderId,
+                    }
+                });
+                return;
+            }
         } catch (e) {
             console.error('換桌失敗:', e);
             alert(`換桌操作失敗: ${e.message}`);
         } finally {
             setIsLoading(false);
         }
-    }, [tableNumber, currentOrderId, currentOrder, orderStatus, customerCount, sendTime, finishTime, customerName, customerPhone, needsUtensils, pickupTime, navigate]);
+    }, [tableNumber, currentOrderId, currentOrder, orderStatus, customerCount, sendTime, finishTime, customerName, customerPhone, needsUtensils, pickupTime, navigate, isTakeout, openTimestamp, dailyOrderNo]);
 
     const handleTableChange = async (event) => {
         const newTable = event.target.value;
@@ -1967,6 +2038,12 @@ const handleChangeItemQuantity = (internalId, diff) => {
 
         setIsLoading(true);
         try {
+            // 換到外帶：外帶一律是各自獨立的新單，不需衝突/合併確認，直接切換
+            if (newTable === '外帶') {
+                await executeTableMove(newTable, null);
+                return;
+            }
+
             const activeOrders = await getActiveOrders();
             const targetOrders = activeOrders.filter(o => o.table === newTable && ['open', 'served', 'paid'].includes(o.status));
 
@@ -1995,6 +2072,32 @@ const handleChangeItemQuantity = (internalId, diff) => {
         } catch (e) {
             console.error('換桌失敗:', e);
             alert(`換桌操作失敗: ${e.message}`);
+            setIsLoading(false);
+        }
+    };
+
+    const handleTakeoutMoveToTable = async (newTable) => {
+        setShowTablePicker(false);
+        setIsLoading(true);
+        try {
+            const activeOrders = await getActiveOrders();
+            const targetOrders = activeOrders.filter(o => o.table === newTable && ['open','served','paid'].includes(o.status));
+            if (targetOrders.length > 0) {
+                if (!currentOrderId) {
+                    setTableNumber(newTable);
+                    setOriginalTableId(newTable);
+                    navigate('/order', { replace: true, state: { isTakeout: false, initialTableNumber: newTable, orderStatus: 'open', openTimestamp, customerCount } });
+                    setIsLoading(false);
+                    return;
+                }
+                setTableChangeConflict({ pendingTable: newTable, targetOrders });
+                setIsLoading(false);
+                return;
+            }
+            await executeTableMove(newTable, null);
+        } catch (e) {
+            console.error('外帶換桌失敗:', e);
+            alert(`換桌失敗: ${e.message}`);
             setIsLoading(false);
         }
     };
@@ -2107,7 +2210,14 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                 </button>
                                 
                                 {isTakeout ? (
-                                    <span className="text-white font-black text-xl px-1.5">外帶</span>
+                                    <button
+                                        onClick={() => setShowTablePicker(true)}
+                                        className="text-white font-black text-xl px-1.5 py-0.5 rounded-lg hover:bg-white/20 transition-colors flex items-center gap-1"
+                                        title="點擊可換到內用桌"
+                                    >
+                                        外帶
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+                                    </button>
                                 ) : (
                                     <select
                                         value={tableNumber}
@@ -2285,7 +2395,7 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                                         className={`flex items-center justify-between ${isPartialCheckoutMode ? 'p-3' : 'p-2'} border rounded-xl mb-0.5 bg-white shadow-sm transition-colors
                                                             ${isPartialCheckoutMode
                                                                 ? (isRowSelected ? 'border-orange-500 bg-orange-50 ring-2 ring-orange-500 cursor-pointer' : 'hover:bg-gray-100 cursor-pointer')
-                                                                : (hasApplicableGroups ? `cursor-pointer ${isEditingThis ? 'border-teal-400 bg-teal-50 ring-2 ring-teal-400' : 'hover:bg-amber-50 hover:border-amber-200'}` : '')
+                                                                : (hasApplicableGroups ? `cursor-pointer ${isEditingThis ? 'border-blue-400 bg-blue-50 ring-2 ring-blue-300' : 'hover:bg-amber-50 hover:border-amber-200'}` : '')
                                                             }`}
                                                         onClick={isPartialCheckoutMode
                                                             ? () => handleItemClick(item, rowGroupIds)
@@ -2318,7 +2428,7 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                                                 )}
                                                                 <span className="font-bold text-2xl whitespace-nowrap">{item.name}</span>
                                                                 {hasApplicableGroups && !isPartialCheckoutMode && (
-                                                                    <svg className={`w-3 h-3 flex-shrink-0 ${isEditingThis ? 'text-teal-500' : hasItemRemarks ? 'text-amber-500' : 'text-gray-300'}`} fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" /></svg>
+                                                                    <svg className={`w-3 h-3 flex-shrink-0 ${isEditingThis ? 'text-blue-500' : hasItemRemarks ? 'text-amber-500' : 'text-gray-300'}`} fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" /></svg>
                                                                 )}
                                                             </div>
                                                             <RemarkBadges remarks={item.remarks} />
@@ -2365,7 +2475,7 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                             <div
                                                 key={item.internalId}
                                                 className={`flex items-start justify-between p-2 border border-green-200 rounded-xl mb-1 bg-white shadow-sm transition-colors
-                                                    ${hasApplicableGroups ? `cursor-pointer ${isEditingThis ? 'border-teal-400 bg-teal-50 ring-2 ring-teal-400' : 'hover:bg-amber-50 hover:border-amber-200'}` : ''}`}
+                                                    ${hasApplicableGroups ? `cursor-pointer ${isEditingThis ? 'border-blue-400 bg-blue-50 ring-2 ring-blue-300' : 'hover:bg-amber-50 hover:border-amber-200'}` : ''}`}
                                                 onClick={hasApplicableGroups ? () => handleCartItemClick(item) : undefined}
                                             >
                                                 <div
@@ -2386,7 +2496,7 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                                         )}
                                                         <span className="font-bold text-2xl whitespace-nowrap">{item.name}</span>
                                                         {hasApplicableGroups && (
-                                                            <svg className={`w-3 h-3 flex-shrink-0 ${isEditingThis ? 'text-teal-500' : hasItemRemarks ? 'text-amber-500' : 'text-gray-300'}`} fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" /></svg>
+                                                            <svg className={`w-3 h-3 flex-shrink-0 ${isEditingThis ? 'text-blue-500' : hasItemRemarks ? 'text-amber-500' : 'text-gray-300'}`} fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" /></svg>
                                                         )}
                                                     </div>
                                                     <RemarkBadges remarks={item.remarks} />
@@ -2584,6 +2694,12 @@ const handleChangeItemQuantity = (internalId, diff) => {
                 onCancel={() => setShowAbandonModal(false)}
             />
 
+            <ItemChangeModal
+                isOpen={showItemChangeModal}
+                onClose={() => setShowItemChangeModal(false)}
+                onDiscard={handleDiscardItemChanges}
+            />
+
             <ClearUnpaidModal
                 isOpen={showClearUnpaidModal}
                 itemCount={unpaidItems.length}
@@ -2698,6 +2814,29 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                 onClick={() => setTableChangeConflict(null)}
                                 className="w-full py-4 text-gray-400 font-black text-lg hover:bg-gray-50 transition-colors"
                             >取消</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 外帶換到內用桌 - 桌位選擇器 */}
+            {showTablePicker && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xs overflow-hidden">
+                        <div className="pt-6 pb-2 px-6">
+                            <h3 className="text-xl font-black text-gray-800 mb-1 text-center">換到內用桌</h3>
+                            <p className="text-sm text-gray-500 text-center mb-4">選擇目標桌位</p>
+                            <div className="grid grid-cols-4 gap-2">
+                                {['A1','A2','A3','A4','A5','A6','A7','A8'].map(t => (
+                                    <button key={t} onClick={() => handleTakeoutMoveToTable(t)}
+                                        className="py-3 rounded-xl font-black text-sm bg-blue-50 border-2 border-blue-200 text-blue-700 hover:bg-blue-100 transition-all active:scale-95">
+                                        {t}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                        <div className="border-t border-gray-100 mt-4">
+                            <button onClick={() => setShowTablePicker(false)} className="w-full py-4 text-gray-400 font-black text-lg hover:bg-gray-50 transition-colors">取消</button>
                         </div>
                     </div>
                 </div>
