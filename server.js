@@ -18,6 +18,22 @@ const supabase = createClient(
     process.env.SUPABASE_SERVICE_KEY
 );
 
+// PostgREST 單次查詢預設上限 1000 筆，超過會被悄悄截斷。
+// 用於資料量可能超過此上限的查詢（如全部發票/訂單），需分頁抓完整資料。
+const SUPA_PAGE_SIZE = 1000;
+async function fetchAllRows(buildQuery) {
+    let all = [];
+    let from = 0;
+    while (true) {
+        const { data, error } = await buildQuery().range(from, from + SUPA_PAGE_SIZE - 1);
+        if (error) throw error;
+        all = all.concat(data || []);
+        if (!data || data.length < SUPA_PAGE_SIZE) break;
+        from += SUPA_PAGE_SIZE;
+    }
+    return all;
+}
+
 const app  = express();
 const PORT = IS_DEV ? 3001 : 3000;
 
@@ -1244,9 +1260,16 @@ app.post('/api/tables/:tableNumber/reset', async (req, res) => {
         }
     }
     if (ord) {
-        const newStatus = ord.status === 'paid'   ? 'archived_paid'
-                        : ord.status === 'served' ? 'abandoned'   // 有餐未結帳 → 保留 orderID
-                        : null;                                    // new/open → 直接刪除
+        let newStatus = ord.status === 'paid'   ? 'archived_paid'
+                       : ord.status === 'served' ? 'abandoned'   // 有餐未結帳 → 保留 orderID
+                       : null;                                    // new/open → 直接刪除
+        if (!newStatus) {
+            // 保險：清桌與結帳若同時發生（競態條件），可能讀到刪除前一刻的舊狀態；
+            // 若此訂單已有未作廢的發票，代表確實結過帳，不可刪除，強制視為已結帳保留
+            const { data: activeInv } = await supabase.from('invoices').select('id')
+                .eq('order_id', ord.id).eq('status', '已開立').limit(1);
+            if (activeInv && activeInv.length > 0) newStatus = 'archived_paid';
+        }
         if (newStatus) {
             await supabase.from('orders').update({ status: newStatus, updated_at: now }).eq('id', ord.id);
             // 棄單庫存扣除（依員工選擇）
@@ -1387,13 +1410,17 @@ app.get('/api/orders/max-id', async (req, res) => {
     res.json({ maxId: data?.[0]?.id || 0 });
 });
 app.get('/api/orders/report', async (req, res) => {
-    const { data: invs, error } = await supabase.from('invoices').select('*')
-        .eq('status', '已開立').order('payment_time');
-    if (error) return res.status(500).json({ error: error.message });
+    let invs;
+    try {
+        invs = await fetchAllRows(() =>
+            supabase.from('invoices').select('*').eq('status', '已開立').order('payment_time'));
+    } catch (error) {
+        return res.status(500).json({ error: error.message });
+    }
     const orderIds = [...new Set((invs||[]).map(i => i.order_id))];
-    const { data: ords } = orderIds.length
-        ? await supabase.from('orders').select('*').in('id', orderIds)
-        : { data: [] };
+    const ords = orderIds.length
+        ? await fetchAllRows(() => supabase.from('orders').select('*').in('id', orderIds))
+        : [];
     const oMap = new Map((ords||[]).map(o => [o.id, o]));
     res.json((invs||[]).map(inv => {
         const o = oMap.get(inv.order_id);
@@ -1427,6 +1454,8 @@ app.get('/api/orders/:id', async (req, res) => {
     res.json(orderToCamel(data));
 });
 // 計算下一個流水號（從關帳邊界後算起，關帳後從 001 重算）
+// 用 MAX 而非 COUNT：若有已編號訂單事後被刪除（如清桌誤刪），COUNT 會少算一筆導致號碼被重新發出、與既有訂單重複；
+// MAX 不受刪除影響，頂多留下空號，不會重號。
 async function computeNextDailyOrderNo() {
     const [{ data: closeIdRow }, { data: closeTsRow }] = await Promise.all([
         supabase.from('app_settings').select('value').eq('key', 'last_close_order_id').single(),
@@ -1434,25 +1463,24 @@ async function computeNextDailyOrderNo() {
     ]);
     const storedCloseOrderId = parseInt(closeIdRow?.value || '0', 10);
     const lastCloseTs = closeTsRow?.value || null;
-    let count = 0;
+    const maxNoAfter = async (q) => {
+        const { data } = await q.not('daily_order_no', 'is', null)
+            .order('daily_order_no', { ascending: false }).limit(1);
+        return data?.[0]?.daily_order_no || 0;
+    };
+    let maxNo = 0;
     if (storedCloseOrderId > 0) {
-        const { count: c } = await supabase.from('orders').select('id', { count: 'exact', head: true })
-            .gt('id', storedCloseOrderId).not('daily_order_no', 'is', null);
-        count = c || 0;
+        maxNo = await maxNoAfter(supabase.from('orders').select('daily_order_no').gt('id', storedCloseOrderId));
     } else if (lastCloseTs) {
         const { data: before } = await supabase.from('orders').select('id')
             .lt('timestamp', new Date(lastCloseTs).toISOString()).order('id', { ascending: false }).limit(1);
         const lastId = before?.[0]?.id || 0;
-        const { count: c } = await supabase.from('orders').select('id', { count: 'exact', head: true })
-            .gt('id', lastId).not('daily_order_no', 'is', null);
-        count = c || 0;
+        maxNo = await maxNoAfter(supabase.from('orders').select('daily_order_no').gt('id', lastId));
     } else {
         const midnight = new Date(); midnight.setHours(0,0,0,0);
-        const { count: c } = await supabase.from('orders').select('id', { count: 'exact', head: true })
-            .gte('timestamp', midnight.toISOString()).not('daily_order_no', 'is', null);
-        count = c || 0;
+        maxNo = await maxNoAfter(supabase.from('orders').select('daily_order_no').gte('timestamp', midnight.toISOString()));
     }
-    return count + 1;
+    return maxNo + 1;
 }
 
 // 建立新訂單（外帶訂單立即派單號；內用待首次送單時透過 /assign-no 補派）
@@ -1634,16 +1662,22 @@ app.delete('/api/adjustments/:id', async (req, res) => {
 // ============================================================
 app.get('/api/invoices', async (req, res) => {
     const { status, from } = req.query;
-    let q = supabase.from('invoices').select('*').order('id');
-    if (status) q = q.eq('status', status);
-    if (from)   q = q.gte('payment_time', from);
-    const { data, error } = await q;
-    if (error) return res.status(500).json({ error: error.message });
+    let data;
+    try {
+        data = await fetchAllRows(() => {
+            let q = supabase.from('invoices').select('*').order('id');
+            if (status) q = q.eq('status', status);
+            if (from)   q = q.gte('payment_time', from);
+            return q;
+        });
+    } catch (error) {
+        return res.status(500).json({ error: error.message });
+    }
     // JOIN orders 取得最新的 daily_order_no、table_number、order_type（以訂單為準，避免換桌後發票欄位過期）
     const orderIds = [...new Set((data||[]).map(r => r.order_id).filter(Boolean))];
-    const { data: ords } = orderIds.length
-        ? await supabase.from('orders').select('id, daily_order_no, table_number, order_type').in('id', orderIds)
-        : { data: [] };
+    const ords = orderIds.length
+        ? await fetchAllRows(() => supabase.from('orders').select('id, daily_order_no, table_number, order_type').in('id', orderIds))
+        : [];
     const oMap = new Map((ords||[]).map(o => [o.id, o]));
     res.json((data||[]).map(r => {
         const ord = oMap.get(r.order_id);
