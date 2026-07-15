@@ -230,12 +230,12 @@ const TableCard = ({
                                     </div>
                                 ) : order.items && order.items.length > 0 ? (
                                     (() => {
+                                        const mergeKey = (item) => `${item.id}:::${JSON.stringify((item.remarks || []).slice().sort())}:::${item.isTakeoutPortion ? 'T' : ''}`;
                                         const displayItems = [];
                                         const mergedMap = new Map();
                                         const groupIdsMap = new Map(); // key → [internalId, ...]
                                         for (const item of order.items) {
-                                            const rKey = JSON.stringify((item.remarks || []).slice().sort());
-                                            const key = `${item.id}:::${rKey}`;
+                                            const key = mergeKey(item);
                                             if (!groupIdsMap.has(key)) groupIdsMap.set(key, []);
                                             groupIdsMap.get(key).push(item.internalId || item.id);
                                             if (mergedMap.has(key)) {
@@ -249,8 +249,7 @@ const TableCard = ({
                                             }
                                         }
                                         return displayItems.map((item, itemIdx) => {
-                                            const rKey = JSON.stringify((item.remarks || []).slice().sort());
-                                            const groupIds = groupIdsMap.get(`${item.id}:::${rKey}`) || [item.internalId || item.id];
+                                            const groupIds = groupIdsMap.get(mergeKey(item)) || [item.internalId || item.id];
                                             return (
                                             <div key={item.internalId || item.id || itemIdx} className="group py-0.5" onClick={(e) => e.stopPropagation()}>
                                                 <div className="flex items-center justify-between">
@@ -263,6 +262,9 @@ const TableCard = ({
                                                             className="w-5 h-5 rounded border-2 border-gray-300 text-green-600 cursor-pointer flex-shrink-0"
                                                         />
                                                         <span className={`ml-1.5 text-base font-bold truncate ${item.isServed ? 'text-gray-300 line-through' : 'text-gray-700'}`}>{item.name}</span>
+                                                        {item.isTakeoutPortion && (
+                                                            <span className="ml-1 text-[9px] font-bold text-teal-700 bg-teal-100 rounded px-1 py-0.5 flex-shrink-0">外帶</span>
+                                                        )}
                                                     </label>
                                                     <span className={`ml-1 text-sm font-black whitespace-nowrap ${item.isServed ? 'text-gray-300' : 'text-gray-500'}`}>x{item.quantity}</span>
                                                 </div>

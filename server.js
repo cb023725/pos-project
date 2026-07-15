@@ -156,7 +156,7 @@ function mergeNoRemarkItems(items) {
     for (const item of items) {
         const remarks = item.remarks || [];
         const rKey = [...remarks].sort().join('|||');
-        const key = (item.category || '') + '|' + (item.printName || item.name || '') + '|' + rKey;
+        const key = (item.category || '') + '|' + (item.printName || item.name || '') + '|' + rKey + '|' + (item.isTakeoutPortion ? 'T' : '');
         if (merged.has(key)) {
             merged.get(key).qty = (merged.get(key).qty || 1) + (item.qty || 1);
         } else {
@@ -186,6 +186,24 @@ function groupByCategory(items) {
             category,
             items: catItems.slice().sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99)),
         }));
+}
+
+// 內用單裡標記外帶（isTakeoutPortion）的品項，獨立集中列在單子最後面
+// （外帶通常晚點才做，等內用客人用完餐才取，不跟內用品項混在一起分類）
+// 分類標題欄位左右各自定位、寬度固定，emoji 字型不支援、太長的字會跟右側「共N樣」重疊，
+// 「外帶[需餐具]」這種簡短括號格式量測過寬度沒問題，直接放title
+function groupByCategoryWithTakeout(items, needsUtensils) {
+    const dineInItems = items.filter(i => !i.isTakeoutPortion);
+    const takeoutPortionItems = items.filter(i => i.isTakeoutPortion);
+    const groups = groupByCategory(dineInItems);
+    if (takeoutPortionItems.length > 0) {
+        const utensilsNote = needsUtensils === false ? '[不需餐具]' : needsUtensils ? '[需餐具]' : '';
+        groups.push({
+            category: `外帶${utensilsNote}`,
+            items: takeoutPortionItems.slice().sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99)),
+        });
+    }
+    return groups;
 }
 
 // 出單短字：截到最多 8 個字元
@@ -1077,7 +1095,7 @@ app.post('/print', printRateLimit, async (req, res) => {
 
             // 廚房聯（kitchen 或 all 模式）：預設 2 份各自切割，kitchenCopies 可覆蓋
             if (printMode === 'kitchen' || printMode === 'all') {
-                const allGroups = groupByCategory(allItems);
+                const allGroups = groupByCategoryWithTakeout(allItems, data.needsUtensils);
                 if (allGroups.length > 0) {
                     const f = path.join(os.tmpdir(), `receipt_k_${Date.now()}.pdf`);
                     const h = await buildReceiptPDF(data, f, allGroups);
@@ -1962,7 +1980,8 @@ app.post('/print-preview', async (req, res) => {
         const allItems = mergeNoRemarkItems(rawItems);
         const kitchenItems = allItems.filter(i => !BAR_CATS.has(i.category || ''));
         const barItems     = allItems.filter(i =>  BAR_CATS.has(i.category || ''));
-        const kitchenGroups = groupByCategory(kitchenItems);
+        // 內用單裡標記外帶的品項，跟 /print 一樣獨立集中列在單子最後面（預覽維持一致）
+        const kitchenGroups = groupByCategoryWithTakeout(kitchenItems, data.needsUtensils);
         const barGroups     = groupByCategory(barItems);
 
         const ts = Date.now();

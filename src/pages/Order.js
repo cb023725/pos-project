@@ -114,6 +114,7 @@ const ACTION_TYPE = {
     TOGGLE_ITEM_SERVED: 'TOGGLE_ITEM_SERVED',
     MARK_ALL_SERVED: 'MARK_ALL_SERVED',
     CONVERT_TO_SINGLE: 'CONVERT_TO_SINGLE',
+    TOGGLE_TAKEOUT_PORTION: 'TOGGLE_TAKEOUT_PORTION',
 };
 
 const initialOrderState = {
@@ -152,6 +153,7 @@ const orderReducer = (state, action) => {
                 isServed: false,
                 isPaid: false,
                 sentBatch: 0,
+                isTakeoutPortion: false,
                 stock: dbItem?.stock,
                 consumes: dbItem?.consumes,
                 category: dbItem?.category || '未分類',
@@ -265,6 +267,15 @@ const orderReducer = (state, action) => {
                     remarks: [], // 單點的可選備註群組可能跟主餐不同，轉換後重新選擇
                 };
             });
+            if (setIsDirty) setIsDirty(true);
+            return { ...state, currentOrder: updatedOrder };
+        }
+
+        case ACTION_TYPE.TOGGLE_TAKEOUT_PORTION: {
+            const { internalId, setIsDirty } = action.payload;
+            const updatedOrder = state.currentOrder.map(item =>
+                item.internalId === internalId ? { ...item, isTakeoutPortion: !item.isTakeoutPortion } : item
+            );
             if (setIsDirty) setIsDirty(true);
             return { ...state, currentOrder: updatedOrder };
         }
@@ -939,7 +950,7 @@ const RemarkBadges = ({ remarks }) => {
 };
 
 // ─── 註記選擇 Modal（即時儲存，無確認按鈕，再點品項即關閉） ──────────────
-const RemarkSelectionModal = ({ item, groups, initialRemarks, onToggle, onCancel, menuItems, onConvertToSingle }) => {
+const RemarkSelectionModal = ({ item, groups, initialRemarks, onToggle, onCancel, menuItems, onConvertToSingle, isTakeoutPortion, onToggleTakeoutPortion }) => {
     const [selections, setSelections] = useState({});
 
     // 初始化：從現有備註還原選擇狀態
@@ -1009,6 +1020,18 @@ const RemarkSelectionModal = ({ item, groups, initialRemarks, onToggle, onCancel
                                     className="text-xs font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 border border-orange-300 rounded-lg px-2 py-1 whitespace-nowrap"
                                 >
                                     此份單點 (${singleItem.price})
+                                </button>
+                            )}
+                            {onToggleTakeoutPortion && (
+                                <button
+                                    onClick={onToggleTakeoutPortion}
+                                    className={`text-xs font-bold rounded-lg px-2 py-1 whitespace-nowrap border ${
+                                        isTakeoutPortion
+                                            ? 'text-white bg-teal-500 border-teal-500 hover:bg-teal-600'
+                                            : 'text-teal-600 bg-teal-50 hover:bg-teal-100 border-teal-300'
+                                    }`}
+                                >
+                                    {isTakeoutPortion ? '✓ 此份外帶' : '此份外帶'}
                                 </button>
                             )}
                         </div>
@@ -1307,6 +1330,14 @@ const OrderPage = () => {
         setPendingRemarkItem(null);
     }, [pendingRemarkItem, dispatch]);
 
+    // 內用單裡「此份外帶」：任何時候都能切換，不像單點按鈕鎖在送單前
+    const handleToggleTakeoutPortion = useCallback(() => {
+        if (!pendingRemarkItem?.editingInternalId) return;
+        dispatch({
+            type: ACTION_TYPE.TOGGLE_TAKEOUT_PORTION,
+            payload: { internalId: pendingRemarkItem.editingInternalId, setIsDirty },
+        });
+    }, [pendingRemarkItem, dispatch]);
 
     const handleConfirmSoldOut = useCallback(async () => {
         if (!soldOutItem) return;
@@ -1344,6 +1375,7 @@ const OrderPage = () => {
                     isServed: !!item.isServed,
                     isPaid: !!item.isPaid,
                     sentBatch: getSentBatch(item),
+                    isTakeoutPortion: !!item.isTakeoutPortion,
                     internalId: item.internalId || Math.random().toString(36).substr(2, 9),
                     sortOrder: item.sortOrder
                 }));
@@ -1433,7 +1465,7 @@ const OrderPage = () => {
             needsUtensils: needsUtensils,
             pickupTime: pickupTime,
             // 🚨 重點：將帶有最新數量、isSent 註記、isPaid 狀態的 orderItems 列表傳入 DB 儲存
-            items: orderItems.map(({ id, name, price, quantity, isSent, isServed, isPaid, sentBatch, category, internalId, sortOrder, remarks }) => ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, sentBatch: sentBatch || 0, category, internalId, sortOrder, remarks: remarks || [] })),
+            items: orderItems.map(({ id, name, price, quantity, isSent, isServed, isPaid, sentBatch, isTakeoutPortion, category, internalId, sortOrder, remarks }) => ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, sentBatch: sentBatch || 0, isTakeoutPortion: !!isTakeoutPortion, category, internalId, sortOrder, remarks: remarks || [] })),
             subTotal: total, total, timestamp: new Date(openTimestamp).toISOString(),
             status: status || 'new', sendTime: currentSendTime, finishTime: currentFinishTime,
         };
@@ -1495,14 +1527,17 @@ const OrderPage = () => {
         if (isLoading) return;
 
         const hasCountChanged    = customerCount !== originalCustomerCount;
-        const hasUtensilsChanged = isTakeout && needsUtensils !== originalNeedsUtensils;
+        // 內用單若有品項標記外帶，needsUtensils 代表「外帶部分需不需要餐具」，不再只限外帶單才判斷
+        const hasUtensilsChanged = needsUtensils !== originalNeedsUtensils;
         const hasPickupChanged   = isTakeout && pickupTime !== originalPickupTime;
         const hasNameChanged     = isTakeout && customerName !== originalCustomerName;
         const hasPhoneChanged    = isTakeout && customerPhone !== originalCustomerPhone;
         const hasMetaChanged     = hasCountChanged || hasUtensilsChanged || hasPickupChanged || hasNameChanged || hasPhoneChanged;
 
         const isContentChanged  = JSON.stringify(currentOrder) !== JSON.stringify(originalItems);
-        const stripRemarks      = arr => JSON.stringify(arr.map(({ remarks, ...rest }) => rest));
+        // 備註、外帶標記都比照人數一樣可以直接靜默儲存，不算「結構性異動」；
+        // 只有真的新增/刪除/改數量才需要擋下來要求先確認點餐或結帳
+        const stripRemarks      = arr => JSON.stringify(arr.map(({ remarks, isTakeoutPortion, ...rest }) => rest));
         const isStructureChanged = stripRemarks(currentOrder) !== stripRemarks(originalItems);
 
         // 餐點內容有異動（新增/刪除/改數量，不含純備註）→ 擋下返回，需先確認點餐或結帳才能更新訂單
@@ -1517,8 +1552,8 @@ const OrderPage = () => {
             // 任何變動（品項/人數/備註/設定）→ 統一靜默儲存，不派 dailyOrderNo
             setIsLoading(true);
             try {
-                const itemsToSave = currentOrder.map(({ id, name, price, quantity, isSent, isServed, isPaid, sentBatch, category, internalId, sortOrder, remarks }) =>
-                    ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, sentBatch: sentBatch || 0, category, internalId, sortOrder, remarks: remarks || [] })
+                const itemsToSave = currentOrder.map(({ id, name, price, quantity, isSent, isServed, isPaid, sentBatch, isTakeoutPortion, category, internalId, sortOrder, remarks }) =>
+                    ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, sentBatch: sentBatch || 0, isTakeoutPortion: !!isTakeoutPortion, category, internalId, sortOrder, remarks: remarks || [] })
                 );
                 if (currentOrderId) {
                     await updateOrderStatus({
@@ -1526,7 +1561,7 @@ const OrderPage = () => {
                         newStatus: orderStatus === 'new' ? 'open' : orderStatus,
                         newItems: itemsToSave,
                         customerCount,
-                        needsUtensils: isTakeout ? needsUtensils : undefined,
+                        needsUtensils: needsUtensils, // 內用單有外帶部分時也要存，不再限外帶單
                         pickupTime: isTakeout ? pickupTime : undefined,
                         customerName: isTakeout ? customerName : undefined,
                         customerPhone: isTakeout ? customerPhone : undefined,
@@ -1544,7 +1579,7 @@ const OrderPage = () => {
                         total: 0,
                         subTotal: 0,
                         timestamp: openTimestamp,
-                        needsUtensils: isTakeout ? needsUtensils : undefined,
+                        needsUtensils: needsUtensils, // 內用單有外帶部分時也要存，不再限外帶單
                         pickupTime: isTakeout ? pickupTime : undefined,
                         customerName: isTakeout ? customerName : undefined,
                         customerPhone: isTakeout ? customerPhone : undefined,
@@ -1684,6 +1719,7 @@ const handleConfirmOrder = async () => {
                                 price: i.price || 0,
                                 qty: i.quantity,
                                 remarks: i.remarks || [],
+                                isTakeoutPortion: !!i.isTakeoutPortion,
                             })),
                             customerName: customerName || null,
                             customerPhone: customerPhone || null,
@@ -1726,13 +1762,14 @@ const handleConfirmOrder = async () => {
             price: i.price || 0,
             qty: i.quantity,
             remarks: i.remarks || [],
+            isTakeoutPortion: !!i.isTakeoutPortion,
         })),
         ...(isTakeout && {
             customerName:  customerName  || null,
             customerPhone: customerPhone || null,
             pickupTime:    pickupTime    || null,
-            needsUtensils: needsUtensils,
         }),
+        needsUtensils: needsUtensils, // 內用單有外帶部分時，廚房單靠這個決定要不要印「需要餐具」
     });
 
     const handlePrintKitchen = () => {
@@ -1840,7 +1877,6 @@ const handleConfirmOrder = async () => {
                 customerName:  customerName  || null,
                 customerPhone: customerPhone || null,
                 pickupTime:    pickupTime    || null,
-                needsUtensils: needsUtensils,
             } : {};
             const toLine = (i) => ({
                 id: i.id, name: i.name,
@@ -1849,6 +1885,7 @@ const handleConfirmOrder = async () => {
                 sortOrder: i.sortOrder != null ? i.sortOrder : null,
                 price: i.price || 0, qty: i.quantity,
                 remarks: i.remarks || [],
+                isTakeoutPortion: !!i.isTakeoutPortion,
             });
 
             // 顧客聯先送（確保排在 CUPS 佇列第一，立即出紙），廚房單後送
@@ -1882,6 +1919,7 @@ const handleConfirmOrder = async () => {
                         alreadyPaid: true,
                         items: unsentItems.map(toLine),
                         ...takeoutExtra,
+                        needsUtensils: needsUtensils, // 內用單有外帶部分時，廚房單靠這個決定要不要印「需要餐具」
                     }),
                 }).catch(e => console.warn('廚房單列印失敗：', e));
             }
@@ -2037,8 +2075,8 @@ const handleChangeItemQuantity = (internalId, diff) => {
                     await updateOrderStatus({
                         orderId: currentOrderId,
                         newStatus: ['new', 'open'].includes(orderStatus) ? 'open' : orderStatus,
-                        newItems: currentOrder.map(({ id, name, price, quantity, isSent, isServed, isPaid, sentBatch, category, internalId, sortOrder, remarks }) =>
-                            ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, sentBatch: sentBatch || 0, category, internalId, sortOrder, remarks: remarks || [] })),
+                        newItems: currentOrder.map(({ id, name, price, quantity, isSent, isServed, isPaid, sentBatch, isTakeoutPortion, category, internalId, sortOrder, remarks }) =>
+                            ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, sentBatch: sentBatch || 0, isTakeoutPortion: !!isTakeoutPortion, category, internalId, sortOrder, remarks: remarks || [] })),
                         customerCount, sendTime, finishTime,
                         customerName, customerPhone, needsUtensils, pickupTime,
                     });
@@ -2240,8 +2278,8 @@ const handleChangeItemQuantity = (internalId, diff) => {
         try {
             const updatedItems = currentOrder.map(i =>
                 idSet.has(i.internalId) ? { ...i, isServed: newIsServed } : i
-            ).map(({ id, name, price, quantity, isSent, isServed, isPaid, sentBatch, category, internalId, sortOrder, remarks }) =>
-                ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, sentBatch: sentBatch || 0, category, internalId, sortOrder, remarks: remarks || [] })
+            ).map(({ id, name, price, quantity, isSent, isServed, isPaid, sentBatch, isTakeoutPortion, category, internalId, sortOrder, remarks }) =>
+                ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, sentBatch: sentBatch || 0, isTakeoutPortion: !!isTakeoutPortion, category, internalId, sortOrder, remarks: remarks || [] })
             );
             await updateOrderStatus({ orderId: currentOrderId, newStatus: orderStatus, newItems: updatedItems });
         } catch (e) {
@@ -2255,8 +2293,8 @@ const handleChangeItemQuantity = (internalId, diff) => {
         dispatch({ type: ACTION_TYPE.MARK_ALL_SERVED });
         setOriginalItems(prev => prev.map(i => ({ ...i, isServed: true })));
         try {
-            const updatedItems = currentOrder.map(({ id, name, price, quantity, isSent, isPaid, sentBatch, category, internalId, sortOrder, remarks }) =>
-                ({ id, name, price, quantity, isSent: !!isSent, isServed: true, isPaid: !!isPaid, sentBatch: sentBatch || 0, category, internalId, sortOrder, remarks: remarks || [] })
+            const updatedItems = currentOrder.map(({ id, name, price, quantity, isSent, isPaid, sentBatch, isTakeoutPortion, category, internalId, sortOrder, remarks }) =>
+                ({ id, name, price, quantity, isSent: !!isSent, isServed: true, isPaid: !!isPaid, sentBatch: sentBatch || 0, isTakeoutPortion: !!isTakeoutPortion, category, internalId, sortOrder, remarks: remarks || [] })
             );
             await updateOrderStatus({ orderId: currentOrderId, newStatus: orderStatus, newItems: updatedItems });
         } catch (e) {
@@ -2403,6 +2441,28 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                 setCustomerSuggestions={setCustomerSuggestions}
                             />
                         )}
+
+                        {/* 內用單裡有品項標記外帶時，才需要問整單（外帶部分）要不要餐具 */}
+                        {!isTakeout && currentOrder.some(i => i.isTakeoutPortion) && (
+                            <div className="flex items-center justify-between px-3 py-1.5 bg-teal-50 border-b border-teal-100 flex-shrink-0">
+                                <span className="text-xs font-bold text-teal-700 flex items-center gap-1">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/>
+                                    </svg>
+                                    外帶部分需要餐具？
+                                </span>
+                                <div className="flex gap-1">
+                                    <button
+                                        onClick={() => setNeedsUtensils(true)}
+                                        className={`px-2.5 py-1 rounded-lg text-xs font-bold border-2 transition-colors ${needsUtensils ? 'bg-teal-500 border-teal-500 text-white' : 'bg-white border-gray-300 text-gray-500'}`}
+                                    >需要餐具</button>
+                                    <button
+                                        onClick={() => setNeedsUtensils(false)}
+                                        className={`px-2.5 py-1 rounded-lg text-xs font-bold border-2 transition-colors ${!needsUtensils ? 'bg-gray-500 border-gray-500 text-white' : 'bg-white border-gray-300 text-gray-400'}`}
+                                    >不需餐具</button>
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {/* 內容區：訂單明細 (可滾動) */}
@@ -2423,7 +2483,7 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                     // 合併鍵：id + 排序後的備註 + 出單批次，相同才合併數量（不同批次不合併，避免混淆出單狀態）
                                     const remarkKey = (item) =>
                                         JSON.stringify((item.remarks || []).slice().sort());
-                                    const mergeKey = (item) => `${item.id}:::${remarkKey(item)}:::${getSentBatch(item)}`;
+                                    const mergeKey = (item) => `${item.id}:::${remarkKey(item)}:::${getSentBatch(item)}:::${item.isTakeoutPortion ? 'T' : ''}`;
 
                                     // 新點的在上、先點的在下：反轉後處理
                                     const reversedUnpaid = [...unpaidItems].reverse();
@@ -2564,6 +2624,9 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                                                     </div>
                                                                 )}
                                                                 <span className="font-bold text-2xl whitespace-nowrap">{item.name}</span>
+                                                                {item.isTakeoutPortion && (
+                                                                    <span className="text-[10px] font-bold text-teal-700 bg-teal-100 rounded px-1 py-0.5 flex-shrink-0">外帶</span>
+                                                                )}
                                                                 {hasApplicableGroups && !isPartialCheckoutMode && (
                                                                     <svg className={`w-3 h-3 flex-shrink-0 ${isEditingThis ? 'text-blue-500' : hasItemRemarks ? 'text-amber-500' : 'text-gray-300'}`} fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" /></svg>
                                                                 )}
@@ -2650,6 +2713,9 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                                             </div>
                                                         )}
                                                         <span className="font-bold text-2xl whitespace-nowrap">{item.name}</span>
+                                                        {item.isTakeoutPortion && (
+                                                            <span className="text-[10px] font-bold text-teal-700 bg-teal-100 rounded px-1 py-0.5 flex-shrink-0">外帶</span>
+                                                        )}
                                                         {hasApplicableGroups && (
                                                             <svg className={`w-3 h-3 flex-shrink-0 ${isEditingThis ? 'text-blue-500' : hasItemRemarks ? 'text-amber-500' : 'text-gray-300'}`} fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" /></svg>
                                                         )}
@@ -2927,6 +2993,8 @@ const handleChangeItemQuantity = (internalId, diff) => {
                 onCancel={handleRemarkCancel}
                 menuItems={menuItems}
                 onConvertToSingle={handleConvertToSingle}
+                isTakeoutPortion={!!currentOrder.find(i => i.internalId === pendingRemarkItem?.editingInternalId)?.isTakeoutPortion}
+                onToggleTakeoutPortion={!isTakeout ? handleToggleTakeoutPortion : undefined}
             />
 
             {/* 換桌衝突處理 Modal */}
