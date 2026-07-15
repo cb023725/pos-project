@@ -679,7 +679,10 @@ function buildCloseReportPDF(data, filePath) {
         // ── Section 1：關帳紀錄 ──────────────────────────────────────
         blackBar(['關帳紀錄', fmtDT(data.periodStart), `~ ${fmtDT(data.periodEnd)}`]);
 
-        row('營業日期', fmtDate(data.periodEnd || data.periodStart), FS_MAIN, FS_MAIN);
+        // 營業日期：優先用關帳頁手動確認/調整過的 businessDate（YYYY-MM-DD）；
+        // 沒有的話 fallback 到 periodStart（會計期間起點，多數情況即為正確營業日，
+        // 例如延後跨日關帳）而非 periodEnd（實際按下關帳的時間）
+        row('營業日期', data.businessDate || fmtDate(data.periodStart ?? data.periodEnd), FS_MAIN, FS_MAIN);
         sep();
 
         if (hasAdj) {

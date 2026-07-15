@@ -9,11 +9,48 @@ import {
     getTableStatuses,
     occupyTableWithoutOrder,
     moveOrderToTable,
+    getSettingValue,
+    saveSettingValue,
 } from '../db';
 
 import TableCard from '../components/TableCard';
 
 const TABLE_OPTIONS = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8'];
+
+// 店休標記：可能連續好幾天（過年等），一次選「店休到哪一天」整段標記，不用一天按一次
+const HolidayPickerModal = ({ isOpen, startDate, endDate, maxDate, onChangeEndDate, onConfirm, onCancel }) => {
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+                <div className="flex flex-col items-center pt-8 pb-5 px-6">
+                    <div className="w-20 h-20 rounded-full bg-amber-50 border-[3px] border-amber-300 flex items-center justify-center mb-5">
+                        <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+                        </svg>
+                    </div>
+                    <h3 className="text-2xl font-black text-gray-800 mb-2">標記店休</h3>
+                    <p className="text-base text-gray-500 text-center leading-relaxed font-medium mb-4">
+                        從 <span className="font-black text-gray-700">{startDate}</span> 店休到
+                    </p>
+                    <input
+                        type="date"
+                        value={endDate}
+                        min={startDate}
+                        max={maxDate}
+                        onChange={e => onChangeEndDate(e.target.value)}
+                        className="w-full text-lg font-black text-center text-gray-800 bg-gray-50 border border-gray-300 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-amber-300"
+                    />
+                </div>
+                <div className="border-t border-gray-100" />
+                <div className="flex divide-x divide-gray-100">
+                    <button onClick={onCancel} className="flex-1 py-5 text-gray-400 font-black text-xl hover:bg-gray-50 transition-colors">取消</button>
+                    <button onClick={onConfirm} className="flex-1 py-5 text-amber-600 font-black text-xl hover:bg-amber-50 transition-colors">確認標記</button>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 const PaidClearModal = ({ target, onConfirm, onCancel }) => {
     if (!target) return null;
@@ -280,6 +317,81 @@ const TableManagementPage = () => {
     const [conflictData, setConflictData] = useState(null);      // { movedOrder, fromTable, toTable, toOrders }
     const [moveSource, setMoveSource] = useState(null);           // { tableId, order }
     const [mergeSource, setMergeSource] = useState(null);         // { tableId, order, allOrders }
+    const [missedCloseDate, setMissedCloseDate] = useState(null);    // 顯示用，例如 '7/12'
+    const [missedCloseDateKey, setMissedCloseDateKey] = useState(null); // 'YYYY-MM-DD'，標記店休用
+
+    const toDateKey = (ts) => {
+        const d = new Date(ts);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+
+    // 偵測「跨日忘記關帳」：只有整整跳過至少一天沒關帳、且該天沒被標記店休才提醒，
+    // 每天結束後到當晚關帳前 lastCloseDate 本來就會是「昨天」，這是正常情況不算漏關
+    const checkMissedClose = useCallback(async () => {
+        try {
+            const [raw, holidaysRaw] = await Promise.all([
+                getSettingValue('last_close_time', null),
+                getSettingValue('store_holiday_dates', null),
+            ]);
+            if (!raw) { setMissedCloseDate(null); setMissedCloseDateKey(null); return; } // 從未關過帳，無從比對，不提醒
+            const holidays = new Set(holidaysRaw ? JSON.parse(holidaysRaw) : []);
+            const lastClose = new Date(parseInt(raw, 10));
+            const lastCloseDay = new Date(lastClose.getFullYear(), lastClose.getMonth(), lastClose.getDate());
+            const today = new Date();
+            const todayDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+            // 從上次關帳隔天開始逐日檢查，跳過已標記店休的日期，找出第一個真正被漏掉的日期
+            let cursor = new Date(lastCloseDay.getTime() + 86400000);
+            while (cursor < todayDay) {
+                const key = toDateKey(cursor.getTime());
+                if (!holidays.has(key)) {
+                    setMissedCloseDate(`${cursor.getMonth() + 1}/${cursor.getDate()}`);
+                    setMissedCloseDateKey(key);
+                    return;
+                }
+                cursor = new Date(cursor.getTime() + 86400000);
+            }
+            setMissedCloseDate(null);
+            setMissedCloseDateKey(null);
+        } catch (e) {
+            console.error('檢查關帳狀態失敗:', e);
+        }
+    }, []);
+
+    useEffect(() => { checkMissedClose(); }, [checkMissedClose]);
+
+    // 店休可能連續好幾天（例如過年），一天一天點太累，所以「店休」按鈕開一個小視窗，
+    // 可以選「店休到哪一天」，一次把整段區間都標記完
+    const [showHolidayPicker, setShowHolidayPicker] = useState(false);
+    const [holidayEndDate, setHolidayEndDate] = useState('');
+
+    const openHolidayPicker = useCallback(() => {
+        if (!missedCloseDateKey) return;
+        setHolidayEndDate(missedCloseDateKey);
+        setShowHolidayPicker(true);
+    }, [missedCloseDateKey]);
+
+    const yesterdayKey = toDateKey(Date.now() - 86400000);
+
+    const handleConfirmHoliday = useCallback(async () => {
+        if (!missedCloseDateKey || !holidayEndDate) return;
+        try {
+            const holidaysRaw = await getSettingValue('store_holiday_dates', null);
+            const holidays = new Set(holidaysRaw ? JSON.parse(holidaysRaw) : []);
+            let cursor = new Date(missedCloseDateKey + 'T00:00:00');
+            const clampedEnd = holidayEndDate > yesterdayKey ? yesterdayKey : holidayEndDate;
+            const end = new Date(clampedEnd + 'T00:00:00');
+            while (cursor <= end) {
+                holidays.add(toDateKey(cursor.getTime()));
+                cursor = new Date(cursor.getTime() + 86400000);
+            }
+            await saveSettingValue('store_holiday_dates', JSON.stringify(Array.from(holidays)));
+            setShowHolidayPicker(false);
+            await checkMissedClose();
+        } catch (e) {
+            console.error('標記店休失敗:', e);
+        }
+    }, [missedCloseDateKey, holidayEndDate, yesterdayKey, checkMissedClose]);
 
     const tableStatusesRef = useRef(tableStatuses);
 
@@ -592,7 +704,32 @@ const TableManagementPage = () => {
     };
 
     return (
-        <div className="h-[100dvh] w-full overflow-hidden grid grid-rows-2 font-sans gap-4 p-4 bg-gray-50">
+        <div className="h-[100dvh] w-full overflow-hidden flex flex-col font-sans bg-gray-50">
+            {missedCloseDate && (
+                <div className="flex-shrink-0 flex items-center justify-between gap-3 px-4 py-2 bg-amber-500 text-white">
+                    <span className="flex items-center gap-1.5 font-bold text-sm">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
+                            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>
+                        </svg>
+                        {missedCloseDate} 尚未關帳，請盡快至關帳頁補關帳
+                    </span>
+                    <div className="flex-shrink-0 flex items-center gap-2">
+                        <button
+                            onClick={openHolidayPicker}
+                            className="px-3 py-1 bg-white/20 hover:bg-white/30 border border-white/50 text-white font-black rounded-lg text-sm whitespace-nowrap"
+                        >
+                            {missedCloseDate} 店休
+                        </button>
+                        <button
+                            onClick={() => navigate('/cash-drawer')}
+                            className="px-3 py-1 bg-white text-amber-700 font-black rounded-lg text-sm whitespace-nowrap"
+                        >
+                            前往關帳
+                        </button>
+                    </div>
+                </div>
+            )}
+            <div className="flex-1 min-h-0 grid grid-rows-2 gap-4 p-4">
             {isLoading && Object.keys(tableStatuses).length === 0 ? (
                 <div className="h-full w-full flex items-center justify-center">
                     <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
@@ -658,7 +795,17 @@ const TableManagementPage = () => {
                     </div>
                 </>
             )}
+            </div>
 
+            <HolidayPickerModal
+                isOpen={showHolidayPicker}
+                startDate={missedCloseDateKey}
+                endDate={holidayEndDate}
+                maxDate={yesterdayKey}
+                onChangeEndDate={v => setHolidayEndDate(v > yesterdayKey ? yesterdayKey : v)}
+                onConfirm={handleConfirmHoliday}
+                onCancel={() => setShowHolidayPicker(false)}
+            />
             <PaidClearModal
                 target={paidClearTarget}
                 onConfirm={handleConfirmPaidClear}

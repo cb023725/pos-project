@@ -243,6 +243,17 @@ const CashDrawerPage = () => {
         return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
     }, [periodStart]);
 
+    // ── 關帳單「營業日期」──────────────────────────────────────────────────────
+    // 預設帶入 periodStart 的日期（多數情況正確，例如延後跨日關帳）；
+    // 但若這次關帳其實是「今天正常關帳，只是順便帶了一筆前一天打烊後的零星交易」，
+    // 系統無法自動分辨，需要手動改成實際的營業日
+    const toDateInputValue = (ts) => {
+        const d = new Date(ts);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+    const [businessDate, setBusinessDate] = useState(() => toDateInputValue(periodStart));
+    useEffect(() => { setBusinessDate(toDateInputValue(periodStart)); }, [periodStart]);
+
     // ── 發票 ──────────────────────────────────────────────────────────────────
     const [invoices, setInvoices] = useState([]);
     const [abandonedOrders, setAbandonedOrders] = useState([]);
@@ -552,7 +563,9 @@ const CashDrawerPage = () => {
         const closeData = {
             periodStart,
             periodEnd,
-            // 營業日期用 periodEnd（關帳當日，非跨日）
+            // 印單上的營業日期：預設帶 periodStart（會計期間起點），可在關帳前手動調整
+            // （例如：這次關帳其實是隔天的正常關帳，只是順便帶了前一天打烊後的零星交易）
+            businessDate:  businessDate,
             activeCount:   activeInvoices.length,
             invoiceRange:  makeInvoiceRange(activeInvoices),   // '#-00014763～#-00014765'
             voidedCount:   voidedInvoices.length,
@@ -604,6 +617,20 @@ const CashDrawerPage = () => {
                         <p className="text-xs text-gray-400 font-bold mt-0.5">
                             本期區間：{periodStartLabel} 起至今
                         </p>
+                        <div className="flex items-center gap-1.5 mt-1.5">
+                            <span className="text-xs font-bold text-gray-500">關帳單營業日期</span>
+                            <input
+                                type="date"
+                                value={businessDate}
+                                max={toDateInputValue(Date.now())}
+                                onChange={e => {
+                                    const todayStr = toDateInputValue(Date.now());
+                                    setBusinessDate(e.target.value > todayStr ? todayStr : e.target.value);
+                                }}
+                                disabled={isClosed}
+                                className="text-xs font-black text-gray-800 bg-white border border-gray-300 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-[#4A9A7A]/40 disabled:bg-gray-100 disabled:text-gray-400"
+                            />
+                        </div>
                     </div>
                     <button
                         onClick={() => setPinModal({ purpose: 'drawer' })}
