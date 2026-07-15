@@ -1519,6 +1519,7 @@ app.post('/api/orders/new', async (req, res) => {
         timestamp: od.timestamp ? new Date(od.timestamp).toISOString() : now,
         send_time: od.sendTime || null,
         updated_at: now,
+        special_notes: od.specialNotes || [],
     };
     const { data, error } = await supabase.from('orders').insert(row).select().single();
     if (error) return res.status(500).json({ error: error.message });
@@ -1562,6 +1563,7 @@ app.patch('/api/orders/:id', async (req, res) => {
     if (b.needsUtensils !== undefined) updates.needs_utensils = b.needsUtensils;
     if (b.pickupTime    !== undefined) updates.pickup_time   = b.pickupTime;
     if (b.customerId    !== undefined) updates.customer_id   = b.customerId;
+    if (b.specialNotes  !== undefined) updates.special_notes = b.specialNotes;
     const { data, error } = await supabase.from('orders').update(updates).eq('id', req.params.id).select().single();
     if (error) return res.status(500).json({ error: error.message });
     // 同步桌位
@@ -1886,6 +1888,7 @@ function orderToCamel(r) {
         date: r.order_date, timestamp: r.timestamp ? new Date(r.timestamp).getTime() : null,
         sendTime: r.send_time ? Number(r.send_time) : null,
         finishTime: r.finish_time ? Number(r.finish_time) : null,
+        specialNotes: r.special_notes || [],
     };
 }
 function invoiceToCamel(r) {

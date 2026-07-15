@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS orders (
     finish_time     TEXT,
     order_date      TIMESTAMPTZ,
     timestamp       TIMESTAMPTZ DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ DEFAULT NOW()
+    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+    special_notes   JSONB DEFAULT '[]'
 );
 
 -- ================================================================

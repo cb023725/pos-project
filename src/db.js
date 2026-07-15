@@ -153,6 +153,21 @@ export async function saveQuickTags(tags) {
     return api('POST', '/api/settings/quick_tags', { value: JSON.stringify(tags) });
 }
 
+// ── 訂單特殊備註快速標籤 ─────────────────────────────────────────────────────
+export const DEFAULT_SPECIAL_NOTE_TAGS = ['需要收據', '自備蛋糕', '借冰箱', '攜帶外食'];
+
+export async function getSpecialNoteTags() {
+    try {
+        const { value } = await api('GET', '/api/settings/special_note_tags');
+        if (value) return JSON.parse(value);
+    } catch {}
+    return DEFAULT_SPECIAL_NOTE_TAGS;
+}
+
+export async function saveSpecialNoteTags(tags) {
+    return api('POST', '/api/settings/special_note_tags', { value: JSON.stringify(tags) });
+}
+
 // ── 通用 app_settings 讀寫 ────────────────────────────────────────────────
 export async function getSettingValue(key, defaultValue = null) {
     try {
@@ -288,7 +303,7 @@ export async function getOrderById(orderId, invoiceId = null) {
 export async function createNewOrder(orderData) {
     return api('POST', '/api/orders/new', orderData);
 }
-export async function updateOrderStatus({ orderId, newStatus, newItems, subTotal, total, sendTime, finishTime, customerCount, customerName, customerPhone, needsUtensils, pickupTime, customerId }) {
+export async function updateOrderStatus({ orderId, newStatus, newItems, subTotal, total, sendTime, finishTime, customerCount, customerName, customerPhone, needsUtensils, pickupTime, customerId, specialNotes }) {
     if (!orderId || !newStatus) return false;
     const updates = { status: newStatus };
     if (newItems    !== undefined) { updates.items = newItems; updates.subTotal = subTotal; updates.total = total; }
@@ -300,6 +315,7 @@ export async function updateOrderStatus({ orderId, newStatus, newItems, subTotal
     if (needsUtensils !== undefined) updates.needsUtensils = needsUtensils;
     if (pickupTime    !== undefined) updates.pickupTime    = pickupTime;
     if (customerId    !== undefined) updates.customerId    = customerId;
+    if (specialNotes  !== undefined) updates.specialNotes  = specialNotes;
     await api('PATCH', `/api/orders/${orderId}`, updates);
     return true;
 }

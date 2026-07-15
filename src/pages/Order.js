@@ -20,6 +20,9 @@ import {
     getRemarkGroups,
     getCategorySettings,
     DEFAULT_CATEGORY_SETTINGS,
+    getSpecialNoteTags,
+    saveSpecialNoteTags,
+    DEFAULT_SPECIAL_NOTE_TAGS,
 } from '../db';
 
 // ----------------------------------------------------------------------
@@ -708,6 +711,135 @@ const ItemChangeModal = ({ isOpen, onClose, onDiscard }) => {
     );
 };
 
+// 訂單層級特殊備註（跟餐點無關的提醒事項，例如需要收據、自備蛋糕）
+const SpecialNoteModal = ({ isOpen, notes, tags, onToggleTag, onAddCustom, onRemove, onManageTags, onClose }) => {
+    const [input, setInput] = useState('');
+    if (!isOpen) return null;
+
+    const handleAdd = () => {
+        const v = input.trim();
+        if (!v) return;
+        onAddCustom(v);
+        setInput('');
+    };
+
+    const availableTags = tags.filter(t => !notes.includes(t));
+
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                <div className="p-4 border-b flex items-center justify-between flex-shrink-0">
+                    <h3 className="font-black text-lg text-gray-800">特殊備註</h3>
+                    <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                </div>
+                <div className="p-4 overflow-y-auto space-y-4">
+                    <div>
+                        <div className="text-xs font-bold text-gray-400 mb-1.5">目前備註</div>
+                        {notes.length === 0 ? (
+                            <p className="text-sm text-gray-400">尚未新增備註</p>
+                        ) : (
+                            <div className="flex flex-wrap gap-1.5">
+                                {notes.map((n, i) => (
+                                    <span key={i} className="flex items-center gap-1 text-sm font-bold text-amber-800 bg-amber-100 border border-amber-300 rounded-full pl-2.5 pr-1.5 py-1">
+                                        {n}
+                                        <button onClick={() => onRemove(n)} className="w-4 h-4 flex items-center justify-center rounded-full hover:bg-amber-200 text-amber-700">
+                                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M6 18L18 6M6 6l12 12" /></svg>
+                                        </button>
+                                    </span>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {availableTags.length > 0 && (
+                        <div>
+                            <div className="text-xs font-bold text-gray-400 mb-1.5">快速新增</div>
+                            <div className="flex flex-wrap gap-1.5">
+                                {availableTags.map(t => (
+                                    <button key={t} onClick={() => onToggleTag(t)}
+                                        className="text-sm font-bold text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1">
+                                        + {t}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    <div>
+                        <div className="text-xs font-bold text-gray-400 mb-1.5">自訂備註</div>
+                        <div className="flex gap-2">
+                            <input
+                                className="flex-1 p-2 border rounded-xl font-bold text-sm outline-none focus:ring-2 focus:ring-amber-200"
+                                placeholder="輸入內容"
+                                value={input}
+                                onChange={e => setInput(e.target.value)}
+                                onKeyDown={e => e.key === 'Enter' && handleAdd()}
+                            />
+                            <button onClick={handleAdd} className="px-4 py-2 bg-amber-500 text-white rounded-xl font-black text-sm hover:bg-amber-600">新增</button>
+                        </div>
+                    </div>
+                </div>
+                <div className="p-3 border-t flex-shrink-0">
+                    <button onClick={onManageTags} className="text-xs font-bold text-gray-400 hover:text-gray-600">
+                        管理快速標籤 →
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// 特殊備註快速標籤管理（增刪、儲存到 app_settings）
+const SpecialNoteTagManagerModal = ({ isOpen, tags, onSave, onClose }) => {
+    const [items, setItems] = useState([]);
+    const [input, setInput] = useState('');
+
+    useEffect(() => { if (isOpen) setItems([...tags]); }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    if (!isOpen) return null;
+
+    const handleAdd = () => {
+        const v = input.trim();
+        if (!v || items.includes(v)) return;
+        setItems([...items, v]);
+        setInput('');
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5">
+                <h3 className="font-black text-lg text-gray-800 mb-3">管理快速標籤</h3>
+                <div className="space-y-2 mb-4 max-h-56 overflow-y-auto">
+                    {items.map((tag, idx) => (
+                        <div key={idx} className="flex items-center gap-2">
+                            <span className="flex-1 font-bold text-gray-700 text-sm">{tag}</span>
+                            <button onClick={() => setItems(items.filter((_, i) => i !== idx))}
+                                className="px-3 py-1 bg-red-100 text-red-600 rounded-lg font-bold text-xs hover:bg-red-200">刪除</button>
+                        </div>
+                    ))}
+                    {items.length === 0 && <p className="text-gray-400 text-sm text-center py-4">尚無標籤</p>}
+                </div>
+                <div className="flex gap-2 mb-4">
+                    <input
+                        className="flex-1 p-2 border rounded-xl font-bold text-sm outline-none focus:ring-2 focus:ring-amber-200"
+                        placeholder="新增標籤"
+                        value={input}
+                        onChange={e => setInput(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && handleAdd()}
+                    />
+                    <button onClick={handleAdd} className="px-4 py-2 bg-amber-500 text-white rounded-xl font-black text-sm hover:bg-amber-600">新增</button>
+                </div>
+                <div className="flex gap-2">
+                    <button onClick={() => onSave(items)} className="flex-1 py-2 bg-amber-500 text-white rounded-xl font-black hover:bg-amber-600">儲存</button>
+                    <button onClick={onClose} className="flex-1 py-2 bg-gray-200 rounded-xl font-black hover:bg-gray-300">取消</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const AbandonOrderModal = ({ isOpen, tableNumber, onConfirm, onCancel }) => {
     const navigate = useNavigate();
     const [consumeChoice, setConsumeChoice] = useState(null);
@@ -1113,6 +1245,7 @@ const OrderPage = () => {
     const [needsUtensils, setNeedsUtensils] = useState(true);
     const [pickupTime, setPickupTime] = useState(() => Date.now() + 20 * 60000);
     const [customerSuggestions, setCustomerSuggestions] = useState([]);
+    const [specialNotes, setSpecialNotes] = useState([]); // 訂單層級特殊備註（跟餐點無關，例如需要收據、自備蛋糕）
 
     // 請在您的 const [customerCount, setCustomerCount] = useState(...) 下方加入：
     const [originalCustomerCount, setOriginalCustomerCount] = useState(
@@ -1122,6 +1255,7 @@ const OrderPage = () => {
     const [originalPickupTime, setOriginalPickupTime] = useState(() => Date.now() + 20 * 60000);
     const [originalCustomerName,  setOriginalCustomerName]  = useState('');
     const [originalCustomerPhone, setOriginalCustomerPhone] = useState('');
+    const [originalSpecialNotes,  setOriginalSpecialNotes]  = useState([]);
 
     const [originalItems, setOriginalItems] = useState([]);
 
@@ -1144,6 +1278,8 @@ const OrderPage = () => {
     const [showClearModal,  setShowClearModal]  = useState(false);
     const [showClearUnpaidModal, setShowClearUnpaidModal] = useState(false);
     const [showItemChangeModal, setShowItemChangeModal] = useState(false); // 返回時偵測到餐點異動，需先確認點餐/結帳
+    const [showSpecialNoteModal, setShowSpecialNoteModal] = useState(false);
+    const [showNoteTagManager, setShowNoteTagManager] = useState(false);
     const [partialConfirmItems, setPartialConfirmItems] = useState(null); // 分開結帳確認 modal
     const [isPartialCheckoutMode, setIsPartialCheckoutMode] = useState(false);
     const [selectedItemsForCheckout, setSelectedItemsForCheckout] = useState([]); // 部分結帳時選中的項目 internalId
@@ -1202,15 +1338,17 @@ const OrderPage = () => {
     // 庫存品項（for 即時庫存驗證，與 menuItems 分開存放）
     const [invItems, setInvItems] = useState([]);
     const [categorySettings, setCategorySettings] = useState(DEFAULT_CATEGORY_SETTINGS);
+    const [specialNoteTags, setSpecialNoteTags] = useState(DEFAULT_SPECIAL_NOTE_TAGS);
 
     // --- 資料載入邏輯 ---
     const loadMenuData = useCallback(async () => {
         try {
-            const [items, rg, invs, catSettings] = await Promise.all([
+            const [items, rg, invs, catSettings, noteTags] = await Promise.all([
                 getMenuItems(),
                 getRemarkGroups(),
                 getInventoryItems(),
                 getCategorySettings(),
+                getSpecialNoteTags(),
             ]);
             // 依 name+category 去重（保留 sortOrder 最小的），防止 DB 重複品項干擾點餐頁
             const deduped = [];
@@ -1224,6 +1362,7 @@ const OrderPage = () => {
             setRemarkGroups(rg);
             setInvItems(invs);
             setCategorySettings(catSettings);
+            setSpecialNoteTags(noteTags);
         } catch (e) { console.error(e); }
     }, []);
 
@@ -1305,9 +1444,11 @@ const OrderPage = () => {
             return;
         }
         const applicable = getApplicableRemarkGroups(item);
-        if (applicable.length === 0) return; // 無備註群組 → 不開彈窗
+        // 外帶單且無備註群組 → 不開彈窗（沒有備註可設定，也沒有「此份外帶」按鈕）
+        // 內用單即使無備註群組也要開彈窗，因為任何品項都可能被標記「此份外帶」
+        if (applicable.length === 0 && isTakeout) return;
         setPendingRemarkItem({ item, applicableGroups: applicable, editingInternalId: item.internalId });
-    }, [isPartialCheckoutMode, getApplicableRemarkGroups, pendingRemarkItem]);
+    }, [isPartialCheckoutMode, getApplicableRemarkGroups, pendingRemarkItem, isTakeout]);
 
     // --- 備註即時儲存（每次勾選即觸發）---
     const handleRemarkToggle = useCallback((remarks) => {
@@ -1338,6 +1479,22 @@ const OrderPage = () => {
             payload: { internalId: pendingRemarkItem.editingInternalId, setIsDirty },
         });
     }, [pendingRemarkItem, dispatch]);
+
+    // 訂單層級特殊備註（跟品項無關）
+    const handleToggleNoteTag = useCallback((tag) => {
+        setSpecialNotes(prev => prev.includes(tag) ? prev.filter(n => n !== tag) : [...prev, tag]);
+    }, []);
+    const handleAddCustomNote = useCallback((text) => {
+        setSpecialNotes(prev => prev.includes(text) ? prev : [...prev, text]);
+    }, []);
+    const handleRemoveNote = useCallback((text) => {
+        setSpecialNotes(prev => prev.filter(n => n !== text));
+    }, []);
+    const handleSaveNoteTags = useCallback(async (tags) => {
+        setSpecialNoteTags(tags);
+        setShowNoteTagManager(false);
+        try { await saveSpecialNoteTags(tags); } catch (e) { console.error('儲存特殊備註標籤失敗:', e); }
+    }, []);
 
     const handleConfirmSoldOut = useCallback(async () => {
         if (!soldOutItem) return;
@@ -1392,6 +1549,10 @@ const OrderPage = () => {
                 if (openOrder.pickupTime) {
                     setPickupTime(openOrder.pickupTime);
                     setOriginalPickupTime(openOrder.pickupTime);
+                }
+                if (openOrder.specialNotes) {
+                    setSpecialNotes(openOrder.specialNotes);
+                    setOriginalSpecialNotes(openOrder.specialNotes);
                 }
 
                 setOriginalCustomerCount(isTakeout ? (openOrder.customerCount ?? 0) : (openOrder.customerCount || 1));
@@ -1464,6 +1625,7 @@ const OrderPage = () => {
             customerPhone: customerPhone,
             needsUtensils: needsUtensils,
             pickupTime: pickupTime,
+            specialNotes: specialNotes,
             // 🚨 重點：將帶有最新數量、isSent 註記、isPaid 狀態的 orderItems 列表傳入 DB 儲存
             items: orderItems.map(({ id, name, price, quantity, isSent, isServed, isPaid, sentBatch, isTakeoutPortion, category, internalId, sortOrder, remarks }) => ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, sentBatch: sentBatch || 0, isTakeoutPortion: !!isTakeoutPortion, category, internalId, sortOrder, remarks: remarks || [] })),
             subTotal: total, total, timestamp: new Date(openTimestamp).toISOString(),
@@ -1521,7 +1683,7 @@ const OrderPage = () => {
             console.error("Save Order Failed:", e);
             return false; 
         }
-    }, [openTimestamp, customerName, customerPhone, needsUtensils, pickupTime]);
+    }, [openTimestamp, customerName, customerPhone, needsUtensils, pickupTime, specialNotes]);
 
     const handleGoBack = async () => {
         if (isLoading) return;
@@ -1532,7 +1694,8 @@ const OrderPage = () => {
         const hasPickupChanged   = isTakeout && pickupTime !== originalPickupTime;
         const hasNameChanged     = isTakeout && customerName !== originalCustomerName;
         const hasPhoneChanged    = isTakeout && customerPhone !== originalCustomerPhone;
-        const hasMetaChanged     = hasCountChanged || hasUtensilsChanged || hasPickupChanged || hasNameChanged || hasPhoneChanged;
+        const hasNotesChanged    = JSON.stringify(specialNotes) !== JSON.stringify(originalSpecialNotes);
+        const hasMetaChanged     = hasCountChanged || hasUtensilsChanged || hasPickupChanged || hasNameChanged || hasPhoneChanged || hasNotesChanged;
 
         const isContentChanged  = JSON.stringify(currentOrder) !== JSON.stringify(originalItems);
         // 備註、外帶標記都比照人數一樣可以直接靜默儲存，不算「結構性異動」；
@@ -1565,11 +1728,12 @@ const OrderPage = () => {
                         pickupTime: isTakeout ? pickupTime : undefined,
                         customerName: isTakeout ? customerName : undefined,
                         customerPhone: isTakeout ? customerPhone : undefined,
+                        specialNotes,
                         sendTime,
                         finishTime,
                     });
-                } else if (currentOrder.length > 0 || (!isTakeout && hasCountChanged)) {
-                    // 有品項 → 建立新訂單；內用只改人數也建立（daily_order_no 恆為 null，不佔用流水號）
+                } else if (currentOrder.length > 0 || (!isTakeout && (hasCountChanged || hasNotesChanged))) {
+                    // 有品項 → 建立新訂單；內用只改人數/特殊備註也建立（daily_order_no 恆為 null，不佔用流水號）
                     // 外帶尚未點餐/結帳時不建立訂單（外帶建立訂單即派號，避免只填人數/顧客資料/餐具就佔用流水號）
                     const result = await createNewOrder({
                         table: tableNumber || '外帶',
@@ -1583,6 +1747,7 @@ const OrderPage = () => {
                         pickupTime: isTakeout ? pickupTime : undefined,
                         customerName: isTakeout ? customerName : undefined,
                         customerPhone: isTakeout ? customerPhone : undefined,
+                        specialNotes,
                     });
                     if (result?.id) setCurrentOrderId(result.id);
                 }
@@ -2079,6 +2244,7 @@ const handleChangeItemQuantity = (internalId, diff) => {
                             ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, sentBatch: sentBatch || 0, isTakeoutPortion: !!isTakeoutPortion, category, internalId, sortOrder, remarks: remarks || [] })),
                         customerCount, sendTime, finishTime,
                         customerName, customerPhone, needsUtensils, pickupTime,
+                        specialNotes,
                     });
                 }
                 await moveOrderToTable(currentOrderId, {
@@ -2146,7 +2312,7 @@ const handleChangeItemQuantity = (internalId, diff) => {
         } finally {
             setIsLoading(false);
         }
-    }, [tableNumber, currentOrderId, currentOrder, orderStatus, customerCount, sendTime, finishTime, customerName, customerPhone, needsUtensils, pickupTime, navigate, isTakeout, openTimestamp, dailyOrderNo]);
+    }, [tableNumber, currentOrderId, currentOrder, orderStatus, customerCount, sendTime, finishTime, customerName, customerPhone, needsUtensils, pickupTime, specialNotes, navigate, isTakeout, openTimestamp, dailyOrderNo]);
 
     const handleTableChange = async (event) => {
         const newTable = event.target.value;
@@ -2390,6 +2556,15 @@ const handleChangeItemQuantity = (internalId, diff) => {
                             </div>
 
                             <div className="flex items-center space-x-2 text-xs font-bold">
+                                <button
+                                    onClick={() => setShowSpecialNoteModal(true)}
+                                    className={`p-1 rounded-full transition-colors ${specialNotes.length > 0 ? 'bg-amber-400 text-red-700 hover:bg-amber-300' : 'text-white/70 hover:bg-white/10'}`}
+                                    title="特殊備註"
+                                >
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill={specialNotes.length > 0 ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                                    </svg>
+                                </button>
                                 <div className="flex flex-col text-right">
                                     <span className="text-[10px]">
                                         <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/70 mr-1" />
@@ -2561,6 +2736,8 @@ const handleChangeItemQuantity = (internalId, diff) => {
 
                                                 const hasItemRemarks = item.remarks && item.remarks.length > 0;
                                                 const hasApplicableGroups = remarkGroups.some(g => g.appliesTo && g.appliesTo.includes(item.id));
+                                                // 內用單即使無備註群組，也要能點開彈窗設定「此份外帶」
+                                                const isRowClickable = hasApplicableGroups || !isTakeout;
                                                 const isEditingThis = pendingRemarkItem?.editingInternalId === item.internalId;
                                                 const rowGroupIds = isOrderMerged ? (mergedGroupIds.get(mergeKey(item)) || [item.internalId]) : null;
                                                 const isRowSelected = isPartialCheckoutMode && (
@@ -2590,11 +2767,11 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                                             ${isUnsent ? 'border-amber-200' : ''}
                                                             ${isPartialCheckoutMode
                                                                 ? (isRowSelected ? 'border-orange-500 bg-orange-50 ring-2 ring-orange-500 cursor-pointer' : 'hover:bg-gray-100 cursor-pointer')
-                                                                : (hasApplicableGroups ? `cursor-pointer ${isEditingThis ? 'border-blue-400 bg-blue-50 ring-2 ring-blue-300' : 'hover:bg-amber-50 hover:border-amber-200'}` : '')
+                                                                : (isRowClickable ? `cursor-pointer ${isEditingThis ? 'border-blue-400 bg-blue-50 ring-2 ring-blue-300' : 'hover:bg-amber-50 hover:border-amber-200'}` : '')
                                                             }`}
                                                         onClick={isPartialCheckoutMode
                                                             ? () => handleItemClick(item, rowGroupIds)
-                                                            : (hasApplicableGroups ? () => handleCartItemClick(item) : undefined)
+                                                            : (isRowClickable ? () => handleCartItemClick(item) : undefined)
                                                         }
                                                     >
                                                         {/* 1. 出餐圓圈（手動記錄是否已出餐給客人）；尚未送單的品項改顯示提醒圖示，不可切換出餐 */}
@@ -2680,6 +2857,8 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                             lastPaidBatch = batch;
 
                                             const hasApplicableGroups = remarkGroups.some(g => g.appliesTo && g.appliesTo.includes(item.id));
+                                            // 內用單即使無備註群組，也要能點開彈窗設定「此份外帶」（此份外帶隨時可切換，不受已結帳限制）
+                                            const isRowClickable = hasApplicableGroups || !isTakeout;
                                             const isEditingThis = pendingRemarkItem?.editingInternalId === item.internalId;
                                             const hasItemRemarks = item.remarks && item.remarks.length > 0;
 
@@ -2693,8 +2872,8 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                             <div
                                                 key={item.internalId}
                                                 className={`flex items-start justify-between p-2 border border-green-200 rounded-xl mb-1 bg-white shadow-sm transition-colors
-                                                    ${hasApplicableGroups ? `cursor-pointer ${isEditingThis ? 'border-blue-400 bg-blue-50 ring-2 ring-blue-300' : 'hover:bg-amber-50 hover:border-amber-200'}` : ''}`}
-                                                onClick={hasApplicableGroups ? () => handleCartItemClick(item) : undefined}
+                                                    ${isRowClickable ? `cursor-pointer ${isEditingThis ? 'border-blue-400 bg-blue-50 ring-2 ring-blue-300' : 'hover:bg-amber-50 hover:border-amber-200'}` : ''}`}
+                                                onClick={isRowClickable ? () => handleCartItemClick(item) : undefined}
                                             >
                                                 <div
                                                     className="w-5 h-5 mr-2 mt-0.5 flex-shrink-0 flex items-center justify-center cursor-pointer"
@@ -2922,6 +3101,23 @@ const handleChangeItemQuantity = (internalId, diff) => {
                 isOpen={showItemChangeModal}
                 onClose={() => setShowItemChangeModal(false)}
                 onDiscard={handleDiscardItemChanges}
+            />
+
+            <SpecialNoteModal
+                isOpen={showSpecialNoteModal}
+                notes={specialNotes}
+                tags={specialNoteTags}
+                onToggleTag={handleToggleNoteTag}
+                onAddCustom={handleAddCustomNote}
+                onRemove={handleRemoveNote}
+                onManageTags={() => setShowNoteTagManager(true)}
+                onClose={() => setShowSpecialNoteModal(false)}
+            />
+            <SpecialNoteTagManagerModal
+                isOpen={showNoteTagManager}
+                tags={specialNoteTags}
+                onSave={handleSaveNoteTags}
+                onClose={() => setShowNoteTagManager(false)}
             />
 
             <ClearUnpaidModal
