@@ -1470,8 +1470,9 @@ const OrderPage = () => {
                         sendTime,
                         finishTime,
                     });
-                } else if (currentOrder.length > 0 || hasCountChanged || hasNameChanged || hasPhoneChanged) {
-                    // 有品項 OR 人數/顧客資料有變動 → 建立新訂單（daily_order_no 恆為 null）
+                } else if (currentOrder.length > 0 || (!isTakeout && hasCountChanged)) {
+                    // 有品項 → 建立新訂單；內用只改人數也建立（daily_order_no 恆為 null，不佔用流水號）
+                    // 外帶尚未點餐/結帳時不建立訂單（外帶建立訂單即派號，避免只填人數/顧客資料/餐具就佔用流水號）
                     const result = await createNewOrder({
                         table: tableNumber || '外帶',
                         status: 'open',
