@@ -97,6 +97,11 @@ const formatOrderId = (id) => {
     return idString.length > 3 ? idString.slice(-3) : idString.padStart(3, '0');
 };
 
+// 出單批次：0 = 尚未送單（真正卡住、需要提醒的唯一狀態：未結帳且未送單）；正整數 = 第幾次出單。
+// 舊資料沒有 sentBatch 欄位時，只要 isSent 或 isPaid 任一為 true，都視為批次 1，
+// 避免已結帳/已送單的舊資料被誤判成「尚未送單」。
+const getSentBatch = (item) => item.sentBatch || (item.isSent || item.isPaid ? 1 : 0);
+
 const ACTION_TYPE = {
     SET_ORDER_AND_RICE: 'SET_ORDER_AND_RICE',
     SET_MENU: 'SET_MENU',
@@ -107,6 +112,7 @@ const ACTION_TYPE = {
     TOGGLE_ITEM_SENT: 'TOGGLE_ITEM_SENT',
     MARK_ITEMS_SENT: 'MARK_ITEMS_SENT',
     TOGGLE_ITEM_SERVED: 'TOGGLE_ITEM_SERVED',
+    MARK_ALL_SERVED: 'MARK_ALL_SERVED',
 };
 
 const initialOrderState = {
@@ -144,6 +150,7 @@ const orderReducer = (state, action) => {
                 isSent: false,
                 isServed: false,
                 isPaid: false,
+                sentBatch: 0,
                 stock: dbItem?.stock,
                 consumes: dbItem?.consumes,
                 category: dbItem?.category || '未分類',
@@ -185,13 +192,13 @@ const orderReducer = (state, action) => {
         }
         
         case ACTION_TYPE.MARK_ITEM_PAID: {
-            const { itemIds } = action.payload;
-            const updatedOrder = state.currentOrder.map(item =>
-                itemIds.includes(item.internalId)
-                    // 僅標記 isPaid: true，保持 isSent 的現有狀態 (作為註記)
-                    ? { ...item, isPaid: true } 
-                    : item
-            );
+            const { itemIds, batch } = action.payload;
+            const updatedOrder = state.currentOrder.map(item => {
+                if (!itemIds.includes(item.internalId)) return item;
+                // 結帳視為出單：若品項尚未有出單批次（直接點餐+結帳的快速單），結帳當下補派
+                const needsBatch = getSentBatch(item) === 0;
+                return { ...item, isPaid: true, isSent: true, sentBatch: needsBatch && batch ? batch : item.sentBatch };
+            });
             
             // 此處不需設置 setIsDirty(true)，因為 executeCheckout 成功後會統一設為 false
             return {
@@ -218,19 +225,25 @@ const orderReducer = (state, action) => {
         }
 
         case ACTION_TYPE.MARK_ITEMS_SENT: {
-            const { internalIds } = action.payload;
+            const { internalIds, batch } = action.payload;
             const idSet = new Set(internalIds);
             const updatedOrder = state.currentOrder.map(item =>
-                idSet.has(item.internalId) ? { ...item, isSent: true } : item
+                idSet.has(item.internalId) ? { ...item, isSent: true, sentBatch: batch } : item
             );
             return { ...state, currentOrder: updatedOrder };
         }
 
         case ACTION_TYPE.TOGGLE_ITEM_SERVED: {
-            const { internalId } = action.payload;
+            const { internalIds, value } = action.payload;
+            const idSet = new Set(internalIds);
             const updatedOrder = state.currentOrder.map(item =>
-                item.internalId === internalId ? { ...item, isServed: !item.isServed } : item
+                idSet.has(item.internalId) ? { ...item, isServed: value } : item
             );
+            return { ...state, currentOrder: updatedOrder };
+        }
+
+        case ACTION_TYPE.MARK_ALL_SERVED: {
+            const updatedOrder = state.currentOrder.map(item => ({ ...item, isServed: true }));
             return { ...state, currentOrder: updatedOrder };
         }
 
@@ -1281,6 +1294,7 @@ const OrderPage = () => {
                     isSent: !!item.isSent,
                     isServed: !!item.isServed,
                     isPaid: !!item.isPaid,
+                    sentBatch: getSentBatch(item),
                     internalId: item.internalId || Math.random().toString(36).substr(2, 9),
                     sortOrder: item.sortOrder
                 }));
@@ -1370,7 +1384,7 @@ const OrderPage = () => {
             needsUtensils: needsUtensils,
             pickupTime: pickupTime,
             // 🚨 重點：將帶有最新數量、isSent 註記、isPaid 狀態的 orderItems 列表傳入 DB 儲存
-            items: orderItems.map(({ id, name, price, quantity, isSent, isServed, isPaid, category, internalId, sortOrder, remarks }) => ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, category, internalId, sortOrder, remarks: remarks || [] })),
+            items: orderItems.map(({ id, name, price, quantity, isSent, isServed, isPaid, sentBatch, category, internalId, sortOrder, remarks }) => ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, sentBatch: sentBatch || 0, category, internalId, sortOrder, remarks: remarks || [] })),
             subTotal: total, total, timestamp: new Date(openTimestamp).toISOString(),
             status: status || 'new', sendTime: currentSendTime, finishTime: currentFinishTime,
         };
@@ -1454,8 +1468,8 @@ const OrderPage = () => {
             // 任何變動（品項/人數/備註/設定）→ 統一靜默儲存，不派 dailyOrderNo
             setIsLoading(true);
             try {
-                const itemsToSave = currentOrder.map(({ id, name, price, quantity, isSent, isPaid, category, internalId, sortOrder, remarks }) =>
-                    ({ id, name, price, quantity, isSent: !!isSent, isPaid: !!isPaid, category, internalId, sortOrder, remarks: remarks || [] })
+                const itemsToSave = currentOrder.map(({ id, name, price, quantity, isSent, isPaid, sentBatch, category, internalId, sortOrder, remarks }) =>
+                    ({ id, name, price, quantity, isSent: !!isSent, isPaid: !!isPaid, sentBatch: sentBatch || 0, category, internalId, sortOrder, remarks: remarks || [] })
                 );
                 if (currentOrderId) {
                     await updateOrderStatus({
@@ -1557,10 +1571,12 @@ const handleConfirmOrder = async () => {
             const sentIds = newItems.map(i => i.internalId);
             const kitchenItems = newItems.filter(i => catPrintMap[i.category] !== false);
             const idSet = new Set(sentIds);
+            // 出單批次：本次送出的品項統一歸為新的一批（出單1、出單2...）
+            const nextSentBatch = currentOrder.reduce((max, i) => Math.max(max, getSentBatch(i)), 0) + 1;
 
             // 將新品項標記為 isSent:true，直接存進 DB（避免 race condition）
             const orderWithSent = currentOrder.map(i =>
-                idSet.has(i.internalId) ? { ...i, isSent: true } : i
+                idSet.has(i.internalId) ? { ...i, isSent: true, sentBatch: nextSentBatch } : i
             );
 
             // 首次送單：assignOrderNo（若已有 currentOrderId 且無 dailyOrderNo）與 saveOrderBeforeNavigate 同時執行
@@ -1593,7 +1609,7 @@ const handleConfirmOrder = async () => {
 
                 // 立即更新本地 reducer 狀態
                 if (sentIds.length > 0) {
-                    dispatch({ type: ACTION_TYPE.MARK_ITEMS_SENT, payload: { internalIds: sentIds } });
+                    dispatch({ type: ACTION_TYPE.MARK_ITEMS_SENT, payload: { internalIds: sentIds, batch: nextSentBatch } });
                 }
                 setOriginalItems(orderWithSent);
                 setIsDirty(false);
@@ -1702,11 +1718,23 @@ const handleConfirmOrder = async () => {
             const totalToPay = itemsToCheckout.reduce((sum, item) => sum + item.price * item.quantity, 0);
             
             const itemIds = itemsToCheckout.map(i => i.internalId);
-            
+
+            // 出單批次補派：跳過送單、直接點餐+結帳的品項，結帳當下視為出單
+            // （廚房單也會在下方 unsentItems 邏輯中補印），一併補派批次號，
+            // 避免已結帳清單裡卡在「尚未送單」。
+            const existingMaxBatch = currentOrder.reduce((max, i) => Math.max(max, getSentBatch(i)), 0);
+            let checkoutBatch = null;
+
             // 1. 🚨 計算本次結帳後，訂單在 DB 中應有的最終狀態列表。
             const updatedOrderForDb = currentOrder.map(item => {
                 if (itemIds.includes(item.internalId)) {
-                    return { ...item, isPaid: true }; 
+                    const needsBatch = getSentBatch(item) === 0;
+                    if (needsBatch && checkoutBatch === null) checkoutBatch = existingMaxBatch + 1;
+                    return {
+                        ...item, isPaid: true,
+                        isSent: true,
+                        sentBatch: needsBatch ? checkoutBatch : item.sentBatch,
+                    };
                 }
                 return item;
             });
@@ -1812,7 +1840,7 @@ const handleConfirmOrder = async () => {
             // 6. 【前端狀態更新】只有在 DB 操作 100% 成功後，才 dispatch 到 Reducer
             dispatch({
                 type: ACTION_TYPE.MARK_ITEM_PAID,
-                payload: { itemIds } 
+                payload: { itemIds, batch: checkoutBatch }
             });
 
             // 6. 更新前端狀態並導航
@@ -1960,8 +1988,8 @@ const handleChangeItemQuantity = (internalId, diff) => {
                     await updateOrderStatus({
                         orderId: currentOrderId,
                         newStatus: ['new', 'open'].includes(orderStatus) ? 'open' : orderStatus,
-                        newItems: currentOrder.map(({ id, name, price, quantity, isSent, isServed, isPaid, category, internalId, sortOrder, remarks }) =>
-                            ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, category, internalId, sortOrder, remarks: remarks || [] })),
+                        newItems: currentOrder.map(({ id, name, price, quantity, isSent, isServed, isPaid, sentBatch, category, internalId, sortOrder, remarks }) =>
+                            ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, sentBatch: sentBatch || 0, category, internalId, sortOrder, remarks: remarks || [] })),
                         customerCount, sendTime, finishTime,
                         customerName, customerPhone, needsUtensils, pickupTime,
                     });
@@ -2149,22 +2177,41 @@ const handleChangeItemQuantity = (internalId, diff) => {
     // 點擊 isSent 圖示，切換送出註記並存 DB
     // handleToggleItemSent 已移除 UI 觸發，isSent 由系統自動管理（廚房單印出時設定）
 
-    const handleToggleItemServed = useCallback(async (item) => {
+    // groupIds：合併顯示模式下，同一列可能代表多筆真實品項（同菜色+備註+批次），
+    // 切換時要一起同步，不能只改到其中一筆，否則會跟 TableManagement/合併顯示的勾選狀態對不上
+    const handleToggleItemServed = useCallback(async (item, groupIds) => {
         if (isLoading || !currentOrderId) return;
+        const ids = groupIds && groupIds.length > 0 ? groupIds : [item.internalId];
+        const idSet = new Set(ids);
         const newIsServed = !item.isServed;
-        dispatch({ type: ACTION_TYPE.TOGGLE_ITEM_SERVED, payload: { internalId: item.internalId } });
+        dispatch({ type: ACTION_TYPE.TOGGLE_ITEM_SERVED, payload: { internalIds: ids, value: newIsServed } });
         setOriginalItems(prev => prev.map(i =>
-            i.internalId === item.internalId ? { ...i, isServed: newIsServed } : i
+            idSet.has(i.internalId) ? { ...i, isServed: newIsServed } : i
         ));
         try {
             const updatedItems = currentOrder.map(i =>
-                i.internalId === item.internalId ? { ...i, isServed: newIsServed } : i
-            ).map(({ id, name, price, quantity, isSent, isServed, isPaid, category, internalId, sortOrder, remarks }) =>
-                ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, category, internalId, sortOrder, remarks: remarks || [] })
+                idSet.has(i.internalId) ? { ...i, isServed: newIsServed } : i
+            ).map(({ id, name, price, quantity, isSent, isServed, isPaid, sentBatch, category, internalId, sortOrder, remarks }) =>
+                ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, sentBatch: sentBatch || 0, category, internalId, sortOrder, remarks: remarks || [] })
             );
             await updateOrderStatus({ orderId: currentOrderId, newStatus: orderStatus, newItems: updatedItems });
         } catch (e) {
             console.error('更新 isServed 失敗：', e);
+        }
+    }, [isLoading, currentOrderId, currentOrder, orderStatus, dispatch]);
+
+    // 全部出餐完成：一次將本單所有品項標記為已出餐
+    const handleMarkAllServed = useCallback(async () => {
+        if (isLoading || !currentOrderId) return;
+        dispatch({ type: ACTION_TYPE.MARK_ALL_SERVED });
+        setOriginalItems(prev => prev.map(i => ({ ...i, isServed: true })));
+        try {
+            const updatedItems = currentOrder.map(({ id, name, price, quantity, isSent, isPaid, sentBatch, category, internalId, sortOrder, remarks }) =>
+                ({ id, name, price, quantity, isSent: !!isSent, isServed: true, isPaid: !!isPaid, sentBatch: sentBatch || 0, category, internalId, sortOrder, remarks: remarks || [] })
+            );
+            await updateOrderStatus({ orderId: currentOrderId, newStatus: orderStatus, newItems: updatedItems });
+        } catch (e) {
+            console.error('全部出餐更新失敗：', e);
         }
     }, [isLoading, currentOrderId, currentOrder, orderStatus, dispatch]);
 
@@ -2276,8 +2323,18 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                     <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2H7a2 2 0 00-2 2v2M7 7a2 2 0 012-2h6a2 2 0 012 2v2H7V7z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
                                     <span className="text-base">{dailyOrderNo ? String(dailyOrderNo).padStart(3, '0') : '---'}</span>
                                 </div>
-                                <div className="text-right pr-1">
+                                <div className="flex items-center gap-2">
                                     <span>商品總數 {totalItems}</span>
+                                    {!isPartialCheckoutMode && currentOrderId
+                                        && currentOrder.some(i => !i.isServed)
+                                        && !currentOrder.some(i => getSentBatch(i) === 0) && (
+                                        <button
+                                            onClick={handleMarkAllServed}
+                                            className="text-[11px] font-bold text-white bg-white/20 hover:bg-white/30 border border-white/40 rounded px-1.5 py-0.5"
+                                        >
+                                            全部出餐完成
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -2314,10 +2371,10 @@ const handleChangeItemQuantity = (internalId, diff) => {
                             <>
                                 {/* 未結帳清單 */}
                                 {unpaidItems.length > 0 && (() => {
-                                    // 合併鍵：id + 排序後的備註，相同則合併數量
+                                    // 合併鍵：id + 排序後的備註 + 出單批次，相同才合併數量（不同批次不合併，避免混淆出單狀態）
                                     const remarkKey = (item) =>
                                         JSON.stringify((item.remarks || []).slice().sort());
-                                    const mergeKey = (item) => `${item.id}:::${remarkKey(item)}`;
+                                    const mergeKey = (item) => `${item.id}:::${remarkKey(item)}:::${getSentBatch(item)}`;
 
                                     // 新點的在上、先點的在下：反轉後處理
                                     const reversedUnpaid = [...unpaidItems].reverse();
@@ -2332,9 +2389,11 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                             if (!mergedGroupIds.has(k)) mergedGroupIds.set(k, []);
                                             mergedGroupIds.get(k).push(item.internalId);
                                             if (map.has(k)) {
-                                                map.get(k).quantity += item.quantity;
+                                                const existing = map.get(k);
+                                                existing.quantity += item.quantity;
+                                                existing.isServed = existing.isServed && !!item.isServed;
                                             } else {
-                                                const clone = { ...item };
+                                                const clone = { ...item, isServed: !!item.isServed };
                                                 map.set(k, clone);
                                                 order.push(clone);
                                             }
@@ -2343,6 +2402,11 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                     } else {
                                         displayRows = reversedUnpaid;
                                     }
+
+                                    // 依出單批次排序：尚未送單在最上面，接著是最新批次，最舊批次在最下面
+                                    const batchRank = (item) => (getSentBatch(item) === 0 ? Infinity : getSentBatch(item));
+                                    displayRows = displayRows.slice().sort((a, b) => batchRank(b) - batchRank(a));
+                                    let lastBatch; // 偵測批次邊界，插入分組標題
 
                                     return (
                                         <div className="mb-3">
@@ -2379,8 +2443,13 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                                 </div>
                                             </div>
 
-                                            {/* 品項列表 */}
-                                            {displayRows.map(item => {
+                                            {/* 品項列表（依出單批次分組：尚未送單 → 出單N（新）→ 出單1（舊）） */}
+                                            {displayRows.flatMap(item => {
+                                                const batch = getSentBatch(item);
+                                                const isUnsent = batch === 0;
+                                                const showHeader = batch !== lastBatch;
+                                                lastBatch = batch;
+
                                                 const hasItemRemarks = item.remarks && item.remarks.length > 0;
                                                 const hasApplicableGroups = remarkGroups.some(g => g.appliesTo && g.appliesTo.includes(item.id));
                                                 const isEditingThis = pendingRemarkItem?.editingInternalId === item.internalId;
@@ -2390,10 +2459,26 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                                         ? rowGroupIds.some(id => selectedItemsForCheckout.includes(id))
                                                         : selectedItemsForCheckout.includes(item.internalId)
                                                 );
-                                                return (
+
+                                                const header = showHeader && (
+                                                    <div
+                                                        key={`batch-${batch}`}
+                                                        className={`flex items-center gap-1 text-[10px] font-black mt-2 mb-1 first:mt-0 px-1 ${isUnsent ? 'text-amber-600' : 'text-gray-400'}`}
+                                                    >
+                                                        {isUnsent && (
+                                                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                                                <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>
+                                                            </svg>
+                                                        )}
+                                                        {isUnsent ? '尚未送單' : `出單 ${batch}`}
+                                                    </div>
+                                                );
+
+                                                const row = (
                                                     <div
                                                         key={item.internalId}
                                                         className={`flex items-center justify-between ${isPartialCheckoutMode ? 'p-3' : 'p-2'} border rounded-xl mb-0.5 bg-white shadow-sm transition-colors
+                                                            ${isUnsent ? 'border-amber-200' : ''}
                                                             ${isPartialCheckoutMode
                                                                 ? (isRowSelected ? 'border-orange-500 bg-orange-50 ring-2 ring-orange-500 cursor-pointer' : 'hover:bg-gray-100 cursor-pointer')
                                                                 : (hasApplicableGroups ? `cursor-pointer ${isEditingThis ? 'border-blue-400 bg-blue-50 ring-2 ring-blue-300' : 'hover:bg-amber-50 hover:border-amber-200'}` : '')
@@ -2403,15 +2488,17 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                                             : (hasApplicableGroups ? () => handleCartItemClick(item) : undefined)
                                                         }
                                                     >
-                                                        {/* 1. 出餐圓圈（手動記錄是否已出餐給客人） */}
+                                                        {/* 1. 出餐圓圈（手動記錄是否已出餐給客人）；尚未送單的品項改顯示提醒圖示，不可切換出餐 */}
                                                         <div
                                                             className="w-5 h-5 mr-2 flex-shrink-0 flex items-center justify-center cursor-pointer"
-                                                            onClick={(e) => { e.stopPropagation(); if (!isPartialCheckoutMode) handleToggleItemServed(item); }}
+                                                            onClick={(e) => { e.stopPropagation(); if (!isPartialCheckoutMode && !isUnsent) handleToggleItemServed(item, rowGroupIds); }}
                                                         >
                                                             {isPartialCheckoutMode ? (
                                                                 isRowSelected
                                                                     ? <svg className="w-full h-full text-orange-600" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
                                                                     : <div className="w-full h-full rounded-full border-2 border-gray-400" />
+                                                            ) : isUnsent ? (
+                                                                <svg className="w-full h-full text-amber-500" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l2.5 2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                                                             ) : (
                                                                 item.isServed
                                                                     ? <svg className="w-full h-full text-green-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
@@ -2453,13 +2540,20 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                                         </div>
                                                     </div>
                                                 );
+
+                                                return header ? [header, row] : [row];
                                             })}
                                         </div>
                                     );
                                 })()}
 
-                                {/* 已結帳分組 */}
-                                {paidItems.length > 0 && (
+                                {/* 已結帳分組（依出單批次分組，同未結帳） */}
+                                {paidItems.length > 0 && (() => {
+                                    const batchRank = (item) => (getSentBatch(item) === 0 ? Infinity : getSentBatch(item));
+                                    const sortedPaid = [...paidItems].reverse().sort((a, b) => batchRank(b) - batchRank(a));
+                                    let lastPaidBatch;
+
+                                    return (
                                     <div className="mb-3 opacity-80">
                                         <div className="text-xs font-black text-green-600 mb-1 flex items-center justify-between border-b pb-0.5 px-1">
                                             <div className='flex items-center'>
@@ -2468,11 +2562,22 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                             </div>
                                             <span className="text-base font-black pr-2">${formatCurrency(paidTotal)}</span>
                                         </div>
-                                        {paidItems.map(item => {
+                                        {sortedPaid.flatMap(item => {
+                                            const batch = getSentBatch(item);
+                                            const showHeader = batch !== lastPaidBatch;
+                                            lastPaidBatch = batch;
+
                                             const hasApplicableGroups = remarkGroups.some(g => g.appliesTo && g.appliesTo.includes(item.id));
                                             const isEditingThis = pendingRemarkItem?.editingInternalId === item.internalId;
                                             const hasItemRemarks = item.remarks && item.remarks.length > 0;
-                                            return (
+
+                                            const header = showHeader && (
+                                                <div key={`paid-batch-${batch}`} className="text-[10px] font-black mt-2 mb-1 first:mt-0 px-1 text-gray-400">
+                                                    出單 {batch}
+                                                </div>
+                                            );
+
+                                            const row = (
                                             <div
                                                 key={item.internalId}
                                                 className={`flex items-start justify-between p-2 border border-green-200 rounded-xl mb-1 bg-white shadow-sm transition-colors
@@ -2508,9 +2613,12 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                                 </div>
                                             </div>
                                             );
+
+                                            return header ? [header, row] : [row];
                                         })}
                                     </div>
-                                )}
+                                    );
+                                })()}
                             </>
                         )}
                     </div>

@@ -462,15 +462,18 @@ const TableManagementPage = () => {
         });
     }, [navigate]);
     
-    const handleToggleItemSentOnTable = useCallback(async (tableId, orderId, itemId, currentIsServed) => {
+    // itemIds：合併顯示時同一列可能代表多筆真實品項（同菜色+備註），需要一起同步切換
+    const handleToggleItemSentOnTable = useCallback(async (tableId, orderId, itemIds, currentIsServed) => {
         if (!orderId || !tableId) return;
         const currentData = tableStatusesRef.current[tableId];
         const order = currentData?.orders?.find(o => o.orderId === orderId);
         if (!order) return;
+        const idList = Array.isArray(itemIds) ? itemIds : [itemIds];
+        const idSet = new Set(idList);
 
         const newItems = order.items.map(item => {
             const itemUniqueId = item.internalId || item.id;
-            return (itemUniqueId === itemId) ? { ...item, isServed: !currentIsServed } : item;
+            return idSet.has(itemUniqueId) ? { ...item, isServed: !currentIsServed } : item;
         });
 
         // Optimistic update：立即更新本地 state，不等待 API

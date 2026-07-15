@@ -29,7 +29,7 @@ const mapOrderStatus = (status) => {
     switch (status) {
         case 'open': return { color: 'bg-yellow-400', borderColor: 'border-yellow-400', dotColor: 'bg-yellow-400' };
         case 'served': return { color: 'bg-[#2FB8B8]', borderColor: 'border-[#2FB8B8]', dotColor: 'bg-[#2FB8B8]' };
-        case 'paid': return { color: 'bg-[#5A7D85]', borderColor: 'border-[#5A7D85]', dotColor: 'bg-[#5A7D85]' };
+        case 'paid': return { color: 'bg-[#6888A8]', borderColor: 'border-[#6888A8]', dotColor: 'bg-[#6888A8]' };
         default: return { color: 'bg-gray-200', borderColor: 'border-gray-100', dotColor: 'bg-gray-300' };
     }
 };
@@ -41,6 +41,7 @@ const TableCard = ({
     handleResetTable,
     onMoveRequest,
     onMergeRequest,
+    onMoveToTakeout,
     isLoading,
 }) => {
     const { id: tableId, orders = [] } = tableData;
@@ -146,6 +147,12 @@ const TableCard = ({
         if (!isLoading && currentOrder && onMergeRequest) onMergeRequest(tableId, currentOrder, orders);
     };
 
+    const handleMoveToTakeoutFromGear = (e) => {
+        e.stopPropagation();
+        setIsGearOpen(false);
+        if (!isLoading && currentOrder && onMoveToTakeout) onMoveToTakeout(tableId, currentOrder);
+    };
+
     return (
         <div
             className={`rounded-2xl shadow-lg overflow-hidden flex flex-col transition-all border-2 h-full bg-white
@@ -225,18 +232,26 @@ const TableCard = ({
                                     (() => {
                                         const displayItems = [];
                                         const mergedMap = new Map();
+                                        const groupIdsMap = new Map(); // key → [internalId, ...]
                                         for (const item of order.items) {
                                             const rKey = JSON.stringify((item.remarks || []).slice().sort());
                                             const key = `${item.id}:::${rKey}`;
+                                            if (!groupIdsMap.has(key)) groupIdsMap.set(key, []);
+                                            groupIdsMap.get(key).push(item.internalId || item.id);
                                             if (mergedMap.has(key)) {
-                                                mergedMap.get(key).quantity += item.quantity;
+                                                const existing = mergedMap.get(key);
+                                                existing.quantity += item.quantity;
+                                                existing.isServed = existing.isServed && !!item.isServed;
                                             } else {
-                                                const clone = { ...item };
+                                                const clone = { ...item, isServed: !!item.isServed };
                                                 mergedMap.set(key, clone);
                                                 displayItems.push(clone);
                                             }
                                         }
-                                        return displayItems.map((item, itemIdx) => (
+                                        return displayItems.map((item, itemIdx) => {
+                                            const rKey = JSON.stringify((item.remarks || []).slice().sort());
+                                            const groupIds = groupIdsMap.get(`${item.id}:::${rKey}`) || [item.internalId || item.id];
+                                            return (
                                             <div key={item.internalId || item.id || itemIdx} className="group py-0.5" onClick={(e) => e.stopPropagation()}>
                                                 <div className="flex items-center justify-between">
                                                     <label className="flex items-center flex-grow cursor-pointer min-w-0">
@@ -244,7 +259,7 @@ const TableCard = ({
                                                             type="checkbox"
                                                             checked={!!item.isServed}
                                                             disabled={isLoading}
-                                                            onChange={() => handleToggleItemSentOnTable(tableId, order.orderId, item.internalId || item.id, !!item.isServed)}
+                                                            onChange={() => handleToggleItemSentOnTable(tableId, order.orderId, groupIds, !!item.isServed)}
                                                             className="w-5 h-5 rounded border-2 border-gray-300 text-green-600 cursor-pointer flex-shrink-0"
                                                         />
                                                         <span className={`ml-1.5 text-base font-bold truncate ${item.isServed ? 'text-gray-300 line-through' : 'text-gray-700'}`}>{item.name}</span>
@@ -259,7 +274,8 @@ const TableCard = ({
                                                     </div>
                                                 )}
                                             </div>
-                                        ));
+                                            );
+                                        });
                                     })()
                                 ) : (
                                     <div className="h-full flex flex-col items-center justify-center rounded-xl border p-4 text-red-400 bg-red-50 border-red-100">
@@ -286,13 +302,13 @@ const TableCard = ({
                         onClick={handleActionButtonClick}
                         disabled={isLoading}
                         className={`w-full py-2 text-white font-black rounded-xl shadow-lg active:scale-95 transition-all
-                            ${effectiveStatus === 'paid' ? 'bg-[#5A7D85]' : (effectiveStatus === 'served' ? 'bg-[#2FB8B8]' : 'bg-yellow-600')}`}
+                            ${effectiveStatus === 'paid' ? 'bg-[#6888A8]' : (effectiveStatus === 'served' ? 'bg-[#2FB8B8]' : 'bg-yellow-600')}`}
                     >
-                        {effectiveStatus === 'paid' ? '確認離開 (清桌)' : effectiveStatus === 'served' ? '尚未結帳 (去結帳)' : '繼續點餐'}
+                        {effectiveStatus === 'paid' ? '確認離開' : effectiveStatus === 'served' ? '尚未結帳' : '繼續點餐'}
                     </button>
                 ) : (
                     <button onClick={goToOrder} disabled={isLoading} className="w-full py-2 bg-blue-600 text-white font-black rounded-xl shadow-lg active:scale-95 transition-all">
-                        開桌 / 點餐
+                        開桌
                     </button>
                 )}
             </div>
@@ -304,7 +320,7 @@ const TableCard = ({
                     style={{ position: 'fixed', top: gearMenuPos.top, left: gearMenuPos.left, zIndex: 9999 }}
                     className="bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden min-w-[110px]"
                 >
-                    <button onClick={handleAddOrderFromGear} className="w-full flex items-center gap-2 px-3 py-2.5 text-sm font-bold text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors whitespace-nowrap">
+                    <button onClick={handleAddOrderFromGear} className="w-full flex items-center gap-2 px-3 py-2.5 text-sm font-bold text-gray-700 hover:bg-[#4A9A7A]/10 hover:text-[#4A9A7A] transition-colors whitespace-nowrap">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                         新增訂單
                     </button>
@@ -312,6 +328,12 @@ const TableCard = ({
                         <button onClick={handleMoveFromGear} className="w-full flex items-center gap-2 px-3 py-2.5 text-sm font-bold text-gray-700 hover:bg-amber-50 hover:text-amber-700 transition-colors whitespace-nowrap border-t border-gray-100">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 9l4-4 4 4"/><path d="M9 5v14"/><path d="M19 15l-4 4-4-4"/><path d="M15 19V5"/></svg>
                             換桌
+                        </button>
+                    )}
+                    {orders.length > 0 && currentOrder && onMoveToTakeout && (
+                        <button onClick={handleMoveToTakeoutFromGear} className="w-full flex items-center gap-2 px-3 py-2.5 text-sm font-bold text-gray-700 hover:bg-[#2FB8B8]/10 hover:text-[#2FB8B8] transition-colors whitespace-nowrap border-t border-gray-100">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
+                            換到外帶
                         </button>
                     )}
                     {orders.length > 1 && currentOrder?.orderId && (
