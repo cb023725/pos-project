@@ -1468,8 +1468,8 @@ const OrderPage = () => {
             // 任何變動（品項/人數/備註/設定）→ 統一靜默儲存，不派 dailyOrderNo
             setIsLoading(true);
             try {
-                const itemsToSave = currentOrder.map(({ id, name, price, quantity, isSent, isPaid, sentBatch, category, internalId, sortOrder, remarks }) =>
-                    ({ id, name, price, quantity, isSent: !!isSent, isPaid: !!isPaid, sentBatch: sentBatch || 0, category, internalId, sortOrder, remarks: remarks || [] })
+                const itemsToSave = currentOrder.map(({ id, name, price, quantity, isSent, isServed, isPaid, sentBatch, category, internalId, sortOrder, remarks }) =>
+                    ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, sentBatch: sentBatch || 0, category, internalId, sortOrder, remarks: remarks || [] })
                 );
                 if (currentOrderId) {
                     await updateOrderStatus({
@@ -2324,7 +2324,6 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                     <span className="text-base">{dailyOrderNo ? String(dailyOrderNo).padStart(3, '0') : '---'}</span>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                    <span>商品總數 {totalItems}</span>
                                     {!isPartialCheckoutMode && currentOrderId
                                         && currentOrder.some(i => !i.isServed)
                                         && !currentOrder.some(i => getSentBatch(i) === 0) && (
@@ -2335,6 +2334,7 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                             全部出餐完成
                                         </button>
                                     )}
+                                    <span>商品總數 {totalItems}</span>
                                 </div>
                             </div>
                         </div>
