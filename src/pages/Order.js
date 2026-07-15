@@ -113,6 +113,7 @@ const ACTION_TYPE = {
     MARK_ITEMS_SENT: 'MARK_ITEMS_SENT',
     TOGGLE_ITEM_SERVED: 'TOGGLE_ITEM_SERVED',
     MARK_ALL_SERVED: 'MARK_ALL_SERVED',
+    CONVERT_TO_SINGLE: 'CONVERT_TO_SINGLE',
 };
 
 const initialOrderState = {
@@ -244,6 +245,27 @@ const orderReducer = (state, action) => {
 
         case ACTION_TYPE.MARK_ALL_SERVED: {
             const updatedOrder = state.currentOrder.map(item => ({ ...item, isServed: true }));
+            return { ...state, currentOrder: updatedOrder };
+        }
+
+        case ACTION_TYPE.CONVERT_TO_SINGLE: {
+            const { internalId, dbItem, setIsDirty } = action.payload;
+            const updatedOrder = state.currentOrder.map(item => {
+                if (item.internalId !== internalId) return item;
+                return {
+                    ...item,
+                    id: dbItem.id,
+                    name: dbItem.name,
+                    price: dbItem.price,
+                    printName: dbItem.printName,
+                    sortOrder: dbItem.sortOrder,
+                    category: dbItem.category,
+                    stock: dbItem.stock,
+                    consumes: dbItem.consumes,
+                    remarks: [], // 單點的可選備註群組可能跟主餐不同，轉換後重新選擇
+                };
+            });
+            if (setIsDirty) setIsDirty(true);
             return { ...state, currentOrder: updatedOrder };
         }
 
@@ -917,7 +939,7 @@ const RemarkBadges = ({ remarks }) => {
 };
 
 // ─── 註記選擇 Modal（即時儲存，無確認按鈕，再點品項即關閉） ──────────────
-const RemarkSelectionModal = ({ item, groups, initialRemarks, onToggle, onCancel }) => {
+const RemarkSelectionModal = ({ item, groups, initialRemarks, onToggle, onCancel, menuItems, onConvertToSingle }) => {
     const [selections, setSelections] = useState({});
 
     // 初始化：從現有備註還原選擇狀態
@@ -936,6 +958,13 @@ const RemarkSelectionModal = ({ item, groups, initialRemarks, onToggle, onCancel
     }, [item]); // eslint-disable-line react-hooks/exhaustive-deps
 
     if (!item) return null;
+
+    // 主餐「此份單點」：只在點餐中（尚未送單、尚未結帳）才能改，減少點餐摩擦力；
+    // 已出單/已結帳的品項代表已經進入廚房或已成交，不應該再讓它悄悄變身
+    // id 規則為主餐 id + '1'，找不到對應單點品項就不顯示按鈕
+    const singleItem = item.category === '主餐' && menuItems && getSentBatch(item) === 0
+        ? menuItems.find(m => m.id === item.id + '1')
+        : null;
 
     const sortedGroups = sortRemarkGroups(groups);
 
@@ -972,7 +1001,17 @@ const RemarkSelectionModal = ({ item, groups, initialRemarks, onToggle, onCancel
                 <div className="p-4 border-b flex items-center justify-between flex-shrink-0">
                     <div>
                         <div className="text-xs text-gray-500 mb-0.5">備註設定・即時儲存・再點品項關閉</div>
-                        <div className="font-black text-xl text-gray-800">{item.name}</div>
+                        <div className="flex items-center gap-2">
+                            <span className="font-black text-xl text-gray-800">{item.name}</span>
+                            {singleItem && (
+                                <button
+                                    onClick={() => onConvertToSingle(singleItem)}
+                                    className="text-xs font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 border border-orange-300 rounded-lg px-2 py-1 whitespace-nowrap"
+                                >
+                                    此份單點 (${singleItem.price})
+                                </button>
+                            )}
+                        </div>
                     </div>
                     <button onClick={onCancel} className="w-9 h-9 flex items-center justify-center rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600">
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1257,6 +1296,16 @@ const OrderPage = () => {
     }, [pendingRemarkItem, setIsDirty]);
 
     const handleRemarkCancel = useCallback(() => setPendingRemarkItem(null), []);
+
+    // 主餐備註區「此份單點」：把這一行換成對應的單點品項（id 規則為主餐 id + '1'）
+    const handleConvertToSingle = useCallback((dbItem) => {
+        if (!pendingRemarkItem?.editingInternalId) return;
+        dispatch({
+            type: ACTION_TYPE.CONVERT_TO_SINGLE,
+            payload: { internalId: pendingRemarkItem.editingInternalId, dbItem, setIsDirty },
+        });
+        setPendingRemarkItem(null);
+    }, [pendingRemarkItem, dispatch]);
 
 
     const handleConfirmSoldOut = useCallback(async () => {
@@ -2876,6 +2925,8 @@ const handleChangeItemQuantity = (internalId, diff) => {
                 initialRemarks={pendingRemarkItem?.item?.remarks || []}
                 onToggle={handleRemarkToggle}
                 onCancel={handleRemarkCancel}
+                menuItems={menuItems}
+                onConvertToSingle={handleConvertToSingle}
             />
 
             {/* 換桌衝突處理 Modal */}
