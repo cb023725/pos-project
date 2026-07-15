@@ -101,7 +101,7 @@ const PinModal = ({ title, onSuccess, onCancel }) => {
                     {[0, 1, 2, 3].map(i => (
                         <div key={i} className={`w-5 h-5 rounded-full border-2 transition-all duration-100
                             ${i < pin.length
-                                ? (shake ? 'bg-red-500 border-red-500' : 'bg-blue-600 border-blue-600')
+                                ? (shake ? 'bg-red-500 border-red-500' : 'bg-[#4A9A7A] border-[#4A9A7A]')
                                 : 'bg-white border-gray-300'}`} />
                     ))}
                 </div>
@@ -219,6 +219,180 @@ const TagManagerModal = ({ type, tags, onSave, onClose }) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 折扣/退款 Modal
+// ─────────────────────────────────────────────────────────────────────────────
+const AdjustmentModal = ({ invoices, getDisplayInvNum, onConfirm, onCancel }) => {
+    const [search, setSearch]               = useState('');
+    const [selectedInvoice, setSelectedInvoice] = useState(null);
+    const [selectedItems, setSelectedItems] = useState([]);
+    const [reasonPreset, setReasonPreset]   = useState('出餐錯誤');
+    const [reasonNote, setReasonNote]       = useState('');
+    const [amount, setAmount]               = useState('');
+    const [sign, setSign]                   = useState(-1); // -1=退款, +1=補差價
+    const [step, setStep]                   = useState(1);
+    const [submitting, setSubmitting]       = useState(false);
+
+    React.useEffect(() => {
+        setSign(reasonPreset === '補差價' ? 1 : -1);
+    }, [reasonPreset]);
+
+    const fmtTime = (ts) => {
+        const d = new Date(ts);
+        return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    };
+
+    const sortedInvoices = React.useMemo(() =>
+        [...invoices].filter(i => i.status === '已開立')
+            .sort((a, b) => new Date(b.paymentTime) - new Date(a.paymentTime)),
+        [invoices]);
+
+    const filteredInvoices = React.useMemo(() => {
+        if (!search) return sortedInvoices.slice(0, 20);
+        const s = search.toLowerCase();
+        return sortedInvoices.filter(inv =>
+            getDisplayInvNum(inv.id).toLowerCase().includes(s) ||
+            (inv.itemsSnapshot || []).some(i => i.name?.includes(s))
+        ).slice(0, 20);
+    }, [sortedInvoices, search, getDisplayInvNum]);
+
+    const toggleItem = (item) => {
+        const key = item.name + item.price;
+        setSelectedItems(prev =>
+            prev.find(i => i.name + i.price === key)
+                ? prev.filter(i => i.name + i.price !== key)
+                : [...prev, item]
+        );
+    };
+
+    const handleConfirm = async () => {
+        const abs = parseFloat(amount);
+        if (!selectedInvoice || selectedItems.length === 0 || isNaN(abs) || abs === 0) return;
+        const finalAmount = sign * Math.abs(abs);
+        setSubmitting(true);
+        try {
+            await onConfirm({
+                originalInvoiceId: selectedInvoice.id,
+                reasonPreset,
+                reasonNote: reasonNote.trim() || null,
+                amount: finalAmount,
+                affectedItems: selectedItems,
+                invoiceRef: getDisplayInvNum(selectedInvoice.id),
+            });
+        } finally { setSubmitting(false); }
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm font-sans">
+                <div className="p-5 border-b">
+                    <h3 className="text-xl font-black text-gray-900">新增折扣 / 退款</h3>
+                    <p className="text-xs text-gray-400 mt-0.5">{step === 1 ? '選擇關聯發票' : '填寫調整資訊'}</p>
+                </div>
+
+                {step === 1 ? (
+                    <div className="p-4 space-y-3">
+                        <input type="text" placeholder="搜尋發票號碼或品項…"
+                            value={search} onChange={e => setSearch(e.target.value)}
+                            className="w-full p-2.5 border-2 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-[#4A9A7A]/30"
+                            autoFocus />
+                        <div className="max-h-64 overflow-y-auto space-y-1">
+                            {filteredInvoices.map(inv => (
+                                <button key={inv.id}
+                                    onClick={() => { setSelectedInvoice(inv); setSelectedItems([]); setStep(2); }}
+                                    className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-[#4A9A7A]/5 border transition-colors">
+                                    <div className="font-black text-sm text-gray-800">{getDisplayInvNum(inv.id)}</div>
+                                    <div className="text-xs text-gray-500">
+                                        {fmtTime(inv.paymentTime)} ・ ${(inv.amount||0).toLocaleString()} ・ {(inv.itemsSnapshot||[]).map(i=>i.name).join('、')}
+                                    </div>
+                                </button>
+                            ))}
+                            {filteredInvoices.length === 0 && <p className="text-center text-gray-400 text-sm py-4">查無發票</p>}
+                        </div>
+                        <button onClick={onCancel} className="w-full py-3 rounded-xl bg-gray-100 font-bold text-gray-600 hover:bg-gray-200">取消</button>
+                    </div>
+                ) : (
+                    <div className="p-4 space-y-4">
+                        <div className="bg-gray-50 rounded-xl p-3 text-sm">
+                            <span className="font-black text-gray-700">{getDisplayInvNum(selectedInvoice.id)}</span>
+                            <span className="text-gray-400 ml-2">{fmtTime(selectedInvoice.paymentTime)} ・ ${(selectedInvoice.amount||0).toLocaleString()}</span>
+                        </div>
+
+                        <div>
+                            <p className="text-xs font-black text-gray-500 uppercase tracking-wider mb-2">受影響品項（必選）</p>
+                            <div className="space-y-1 max-h-36 overflow-y-auto">
+                                {(selectedInvoice.itemsSnapshot || []).map((item, idx) => {
+                                    const key     = item.name + item.price;
+                                    const checked = !!selectedItems.find(i => i.name + i.price === key);
+                                    return (
+                                        <label key={idx} className={`flex items-center gap-3 px-3 py-2 rounded-xl cursor-pointer border transition-colors ${checked ? 'bg-[#4A9A7A]/10 border-[#4A9A7A]/30' : 'hover:bg-gray-50 border-transparent'}`}>
+                                            <input type="checkbox" checked={checked} onChange={() => toggleItem(item)} className="w-4 h-4" />
+                                            <span className="text-sm font-bold text-gray-800">{item.name}</span>
+                                            <span className="text-xs text-gray-400 ml-auto">${item.price} × {item.quantity||1}</span>
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        <div>
+                            <p className="text-xs font-black text-gray-500 uppercase tracking-wider mb-2">原因</p>
+                            <div className="flex flex-wrap gap-2 mb-2">
+                                {['出餐錯誤','餐點問題','補差價','其他'].map(p => (
+                                    <button key={p} onClick={() => setReasonPreset(p)}
+                                        className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-colors ${reasonPreset === p ? 'bg-[#4A9A7A] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                                        {p}
+                                    </button>
+                                ))}
+                            </div>
+                            <input type="text" placeholder="補充說明（選填）" value={reasonNote}
+                                onChange={e => setReasonNote(e.target.value)}
+                                className="w-full p-2.5 border-2 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#4A9A7A]/30" />
+                        </div>
+
+                        <div>
+                            <p className="text-xs font-black text-gray-500 uppercase tracking-wider mb-2">方向</p>
+                            <div className="flex gap-2 mb-3">
+                                <button onClick={() => setSign(-1)}
+                                    className={`flex-1 py-2 rounded-xl text-sm font-black transition-colors ${sign === -1 ? 'bg-red-500 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+                                    退款（−）
+                                </button>
+                                <button onClick={() => setSign(1)}
+                                    className={`flex-1 py-2 rounded-xl text-sm font-black transition-colors ${sign === 1 ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+                                    補差價（+）
+                                </button>
+                            </div>
+                            <input type="number" inputMode="numeric" min="0" placeholder="100"
+                                value={amount} onChange={e => setAmount(e.target.value.replace('-', ''))}
+                                onFocus={e => e.target.select()}
+                                className="w-full p-3 text-2xl font-black text-center border-2 rounded-xl outline-none focus:ring-2 focus:ring-[#4A9A7A]/30" />
+                            {amount && parseFloat(amount) > 0 && (
+                                <p className={`text-center text-sm font-black mt-1 ${sign === -1 ? 'text-red-500' : 'text-green-600'}`}>
+                                    最終金額：{sign === -1 ? '−' : '+'}${Math.abs(parseFloat(amount))}
+                                </p>
+                            )}
+                        </div>
+
+                        <div className="flex gap-3 pt-1">
+                            <button onClick={() => setStep(1)} className="flex-1 py-3 rounded-xl bg-gray-100 font-bold text-gray-600 hover:bg-gray-200">上一步</button>
+                            <button
+                                disabled={submitting || selectedItems.length === 0 || !amount || parseFloat(amount) === 0}
+                                onClick={handleConfirm}
+                                className={`flex-1 py-3 rounded-xl font-black text-white transition-colors ${
+                                    submitting || selectedItems.length === 0 || !amount || parseFloat(amount) === 0
+                                        ? 'bg-gray-300 cursor-not-allowed'
+                                        : sign === -1 ? 'bg-red-500 hover:bg-red-600' : 'bg-green-600 hover:bg-green-700'
+                                }`}>
+                                {submitting ? '處理中…' : sign === -1 ? '確認退款' : '確認補差價'}
+                            </button>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 主頁面
 // ─────────────────────────────────────────────────────────────────────────────
 const CashDrawerPage = () => {
@@ -281,6 +455,10 @@ const CashDrawerPage = () => {
     const [editReserveOpen, setEditReserveOpen]   = useState(false);
     const [editReserveInput, setEditReserveInput] = useState('');
 
+    // ── 折扣/退款 ─────────────────────────────────────────────────────────────
+    const [adjustments, setAdjustments]           = useState([]);
+    const [adjModalOpen, setAdjModalOpen]         = useState(false);
+
     // ── 密碼 Modal ────────────────────────────────────────────────────────────
     // purpose: null | 'drawer' | 'edit-reserve'
     const [pinModal, setPinModal] = useState(null);
@@ -310,16 +488,18 @@ const CashDrawerPage = () => {
         setIsLoading(true);
         try {
             const since = getLastCloseTime() || (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
-            const [invData, cats, tags, reserveRaw, txRaw, abandonedData] = await Promise.all([
+            const [invData, cats, tags, reserveRaw, txRaw, abandonedData, adjData] = await Promise.all([
                 getInvoices(),
                 getCategorySettings(),
                 getQuickTags(),
                 getSettingValue('reserve_amount', null),
                 getSettingValue('pending_transactions', null),
                 getAbandonedOrders(since),
+                fetch(`${BACKEND_URL}/api/adjustments?since=${since}`).then(r => r.json()).catch(() => []),
             ]);
             setInvoices(invData);
             setAbandonedOrders(abandonedData || []);
+            setAdjustments(Array.isArray(adjData) ? adjData : []);
             setCatSettings(cats);
             setQuickTags(tags);
             if (reserveRaw !== null) setReserveAmount(parseInt(reserveRaw, 10));
@@ -425,14 +605,20 @@ const CashDrawerPage = () => {
         }, { income: 0, expense: 0, nonCash: 0 }),
         [transactions]);
 
+    // ── helper：發票顯示號碼（傳遞給 AdjustmentModal 用）────────────────────
+    const getDisplayInvNum = useCallback((invId) => getDisplayInvoiceNum(invId, invoices), [invoices]);
+
     // ── 計算 ──────────────────────────────────────────────────────────────────
     const cashTotal = useMemo(() =>
         Object.entries(denominations).reduce((s, [v, c]) => s + Number(v) * c, 0),
         [denominations]);
 
-    // 現金應有 = 零用金 + 毛營業額 + 臨時收入 - 臨時支出 - 非現金 - 現金作廢
+    const adjustmentTotal = useMemo(() =>
+        adjustments.reduce((s, a) => s + (a.amount || 0), 0), [adjustments]);
+
+    // 現金應有 = 零用金 + 毛營業額 + 臨時收入 - 臨時支出 - 非現金 - 現金作廢 + 調整（退款為負）
     const expectedCash = reserveAmount + periodGrossSales + summary.income
-                       - summary.expense - summary.nonCash - periodVoided;
+                       - summary.expense - summary.nonCash - periodVoided + adjustmentTotal;
     const diff         = cashTotal - expectedCash;
     const finalReserve = cashTotal - withdrawalAmount;
     const canComplete  = diff === 0 || (diff !== 0 && discrepancyNote.trim().length > 0);
@@ -586,6 +772,10 @@ const CashDrawerPage = () => {
             ],
             incomes:  transactions.filter(t => t.type === 'income') .map(t => ({ note: t.note, amount: t.amount })),
             cancelledItems,
+            adjustments: adjustments.map(a => ({
+                ...a,
+                invoiceRef: getDisplayInvNum(a.originalInvoiceId),
+            })),
         };
         localStorage.setItem(CLOSE_REPORT_KEY, JSON.stringify(closeData));
 
@@ -637,7 +827,7 @@ const CashDrawerPage = () => {
                         className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold shadow transition-colors
                             ${drawerMsg === 'ok'   ? 'bg-green-600 text-white'
                             : drawerMsg === 'fail' ? 'bg-red-500 text-white'
-                            : 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800'}`}
+                            : 'bg-[#4A9A7A] text-white hover:bg-[#3A8A6A] active:bg-[#2A7A5A]'}`}
                     >
                         {drawerMsg === 'ok' ? (
                             <>✓ 已開啟</>
@@ -661,6 +851,56 @@ const CashDrawerPage = () => {
 
                     {/* ── 左側：收支表單 + 明細 ────────────────────────── */}
                     <div className="lg:col-span-8 space-y-6">
+
+                        {/* 折扣/退款 */}
+                        <div className="bg-white rounded-2xl p-4 border-l-4 border-red-500 shadow-sm">
+                            <div className="flex justify-between items-center mb-3">
+                                <h3 className="text-gray-500 text-lg font-black uppercase tracking-widest">折扣 / 退款</h3>
+                                <button
+                                    onClick={() => setAdjModalOpen(true)}
+                                    className="px-4 py-2 bg-red-500 text-white text-sm font-black rounded-xl hover:bg-red-600 active:scale-95 transition-all">
+                                    + 新增
+                                </button>
+                            </div>
+                            {adjustments.length === 0 ? (
+                                <p className="text-sm text-gray-300 font-bold text-center py-2">本期無折扣/退款記錄</p>
+                            ) : (
+                                <div className="space-y-2">
+                                    {adjustments.map(adj => {
+                                        const fmtTime = (ts) => { const d = new Date(ts); return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; };
+                                        return (
+                                            <div key={adj.id} className="flex items-center justify-between p-3 bg-red-50 rounded-xl">
+                                                <div>
+                                                    <div className="text-sm font-black text-gray-700">
+                                                        {getDisplayInvNum(adj.originalInvoiceId)} ・ {adj.reasonPreset}
+                                                        {adj.reasonNote && <span className="text-gray-400 font-bold">（{adj.reasonNote}）</span>}
+                                                    </div>
+                                                    <div className="text-xs text-gray-400">{fmtTime(adj.createdAt)} ・ {(adj.affectedItems || []).map(i => i.name).join('、')}</div>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <span className={`font-black text-base ${adj.amount < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                                                        {adj.amount > 0 ? '+' : ''}${fmt(adj.amount)}
+                                                    </span>
+                                                    <button
+                                                        onClick={async () => {
+                                                            if (!window.confirm('確定刪除這筆調整記錄？')) return;
+                                                            await fetch(`${BACKEND_URL}/api/adjustments/${adj.id}`, { method: 'DELETE' });
+                                                            setAdjustments(prev => prev.filter(a => a.id !== adj.id));
+                                                        }}
+                                                        className="text-gray-300 hover:text-red-400 transition-colors text-lg font-bold">×</button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                    <div className="flex justify-between items-center pt-2 border-t font-black text-sm text-gray-700">
+                                        <span>合計</span>
+                                        <span className={adjustmentTotal < 0 ? 'text-red-600' : 'text-green-600'}>
+                                            {adjustmentTotal > 0 ? '+' : ''}${fmt(adjustmentTotal)}
+                                        </span>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
 
                         {/* 新增臨時收支 */}
                         <div className="bg-white rounded-2xl p-4 border-l-4 border-amber-700 shadow-sm">
@@ -807,7 +1047,7 @@ const CashDrawerPage = () => {
                                         <input
                                             ref={el => inputRefs.current[val] = el}
                                             type="number" inputMode="numeric" pattern="[0-9]*"
-                                            className="w-24 p-2 bg-gray-50 rounded-xl text-center text-xl font-black outline-none focus:bg-blue-50 focus:ring-2 focus:ring-blue-100 transition-all"
+                                            className="w-24 p-2 bg-gray-50 rounded-xl text-center text-xl font-black outline-none focus:bg-[#4A9A7A]/5 focus:ring-2 focus:ring-[#4A9A7A]/20 transition-all"
                                             value={denominations[val] || ''}
                                             onChange={e => setDenominations({ ...denominations, [val]: parseInt(e.target.value) || 0 })}
                                             onFocus={e => e.target.select()}
@@ -904,6 +1144,16 @@ const CashDrawerPage = () => {
                                         <span className="text-xs text-gray-500 font-mono">-${fmt(periodVoided)}</span>
                                     </div>
                                 )}
+
+                                {/* 折扣/退款 */}
+                                {adjustmentTotal !== 0 && (
+                                    <div className="flex justify-between items-center py-0.5">
+                                        <span className="text-xs text-gray-400">折扣/退款</span>
+                                        <span className={`text-xs font-mono font-black ${adjustmentTotal < 0 ? 'text-red-500' : 'text-green-600'}`}>
+                                            {adjustmentTotal > 0 ? '+' : ''}${fmt(adjustmentTotal)}
+                                        </span>
+                                    </div>
+                                )}
                             </div>
 
                             {/* 對帳損益 */}
@@ -930,7 +1180,7 @@ const CashDrawerPage = () => {
                                         value={withdrawalAmount || ''}
                                         onChange={e => setWithdrawalAmount(parseInt(e.target.value) || 0)}
                                         onFocus={e => e.target.select()}
-                                        className="w-28 p-1 bg-white border rounded-xl text-right text-sm font-black text-blue-600 outline-none" />
+                                        className="w-28 p-1 bg-white border rounded-xl text-right text-sm font-black text-[#4A9A7A] outline-none" />
                                 </div>
                                 <div className="flex justify-between items-center pt-2 border-t">
                                     <span className="font-black text-gray-800">下期零用金</span>
@@ -947,7 +1197,7 @@ const CashDrawerPage = () => {
                                         ${isClosed
                                             ? 'bg-green-600 text-white hover:bg-green-700'
                                             : canComplete
-                                                ? 'bg-blue-600 text-white hover:bg-blue-700'
+                                                ? 'bg-[#4A9A7A] text-white hover:bg-[#3A8A6A]'
                                                 : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
                                 >
                                     <span>{isClosed ? '本期已關帳 ✓' : '確認完成關帳 + 列印'}</span>
@@ -983,6 +1233,37 @@ const CashDrawerPage = () => {
                 </div>
             </div>
 
+            {/* ── 折扣/退款 Modal ──────────────────────────────────────────────── */}
+            {adjModalOpen && (
+                <AdjustmentModal
+                    invoices={invoices}
+                    getDisplayInvNum={getDisplayInvNum}
+                    onConfirm={async (payload) => {
+                        try {
+                            const bodyStr = JSON.stringify(payload);
+                            console.log('[adjustment] POST payload:', bodyStr);
+                            const res = await fetch(`${BACKEND_URL}/api/adjustments`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: bodyStr,
+                            });
+                            console.log('[adjustment] response status:', res.status);
+                            const text = await res.text();
+                            console.log('[adjustment] response text:', text);
+                            let json;
+                            try { json = JSON.parse(text); } catch (_) { json = {}; }
+                            if (!res.ok) { alert('建立失敗：' + (json?.error || res.status + ' ' + text)); return; }
+                            setAdjustments(prev => [...prev, json]);
+                            setAdjModalOpen(false);
+                        } catch (err) {
+                            console.error('[adjustment] fetch error:', err);
+                            alert('網路錯誤：' + err.message);
+                        }
+                    }}
+                    onCancel={() => setAdjModalOpen(false)}
+                />
+            )}
+
             {/* ── 密碼 Modal ──────────────────────────────────────────────────── */}
             {pinModal && (
                 <PinModal
@@ -1004,7 +1285,7 @@ const CashDrawerPage = () => {
                             onChange={e => setEditReserveInput(e.target.value)}
                             onFocus={e => e.target.select()}
                             autoFocus
-                            className="w-full p-3 text-2xl font-black text-center border-2 rounded-xl outline-none focus:ring-2 focus:ring-blue-200 mb-4"
+                            className="w-full p-3 text-2xl font-black text-center border-2 rounded-xl outline-none focus:ring-2 focus:ring-[#4A9A7A]/30 mb-4"
                         />
                         <div className="flex gap-3">
                             <button onClick={() => setEditReserveOpen(false)}
