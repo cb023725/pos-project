@@ -17,3 +17,12 @@ code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
 }
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  15% { transform: translateX(-8px); }
+  35% { transform: translateX(8px); }
+  55% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+.pin-shake { animation: shake 0.45s ease-in-out; }

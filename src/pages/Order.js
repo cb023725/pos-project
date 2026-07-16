@@ -433,7 +433,7 @@ const SoldOutModal = ({ item, onConfirm, onCancel }) => {
 };
 
 // --- 結帳選項 Modal ---
-const CheckoutOptionModal = ({ isOpen, onClose, onFullCheckout, onStartPartialCheckout, onPrintKitchen, onPrintCustomer, isAllPaid }) => {
+const CheckoutOptionModal = ({ isOpen, onClose, onFullCheckout, onStartPartialCheckout, onPrintKitchen, onPrintCustomer, onOpenDrawer, drawerMsg, isAllPaid }) => {
     if (!isOpen) return null;
     return (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
@@ -455,16 +455,98 @@ const CheckoutOptionModal = ({ isOpen, onClose, onFullCheckout, onStartPartialCh
                         </>
                     )}
                     <div className="flex gap-2">
-                        <button onClick={onPrintKitchen} className="flex-1 py-3 rounded-xl bg-[#4A9A7A] text-white font-black text-sm">
+                        <button onClick={onPrintKitchen} className="flex-1 py-3 rounded-xl bg-[#7A7FA8] text-white font-black text-sm">
                             印廚房單
                         </button>
-                        <button onClick={onPrintCustomer} className="flex-1 py-3 rounded-xl bg-[#3A8A6A] text-white font-black text-sm">
+                        <button onClick={onPrintCustomer} className="flex-1 py-3 rounded-xl bg-[#9C8AA5] text-white font-black text-sm">
                             印顧客單
                         </button>
                     </div>
+                    <button
+                        onClick={onOpenDrawer}
+                        className={`flex items-center justify-center gap-2 py-3 rounded-xl font-black text-sm transition-colors
+                            ${drawerMsg === 'ok'   ? 'bg-green-600 text-white'
+                            : drawerMsg === 'fail' ? 'bg-red-500 text-white'
+                            : 'bg-gray-700 text-white hover:bg-gray-800'}`}
+                    >
+                        {drawerMsg === 'ok' ? '✓ 已開啟' : drawerMsg === 'fail' ? '✕ 開啟失敗' : (
+                            <>
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-4 0v2"/><circle cx="12" cy="14" r="2"/>
+                                </svg>
+                                開錢櫃
+                            </>
+                        )}
+                    </button>
                     <button onClick={onClose} className="py-2 rounded-xl bg-gray-200 text-gray-700 font-bold">
                         取消
                     </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// --- 開錢櫃快捷 PIN Modal（固定密碼 0000，與關帳頁自己的密碼分開）---
+const DRAWER_PIN = '0000';
+const DrawerPinModal = ({ isOpen, onSuccess, onCancel }) => {
+    const [pin, setPin] = useState('');
+    const [shake, setShake] = useState(false);
+
+    useEffect(() => { if (isOpen) { setPin(''); setShake(false); } }, [isOpen]);
+
+    if (!isOpen) return null;
+
+    const verify = (p) => {
+        if (p === DRAWER_PIN) {
+            onSuccess();
+        } else {
+            setShake(true);
+            setPin('');
+            setTimeout(() => setShake(false), 500);
+        }
+    };
+
+    const handleNum = (n) => {
+        if (shake) return;
+        const next = pin + n;
+        if (next.length > 4) return;
+        setPin(next);
+        if (next.length === 4) setTimeout(() => verify(next), 80);
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center">
+            <div className="bg-white p-6 rounded-2xl shadow-2xl w-72 font-sans relative">
+                <button
+                    onClick={onCancel}
+                    className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors text-lg leading-none"
+                >✕</button>
+
+                <h3 className="text-lg font-black mb-5 text-center text-gray-800 pr-6">請輸入密碼以開啟錢櫃</h3>
+
+                <div className={`flex justify-center gap-4 mb-6 ${shake ? 'pin-shake' : ''}`}>
+                    {[0, 1, 2, 3].map(i => (
+                        <div key={i} className={`w-5 h-5 rounded-full border-2 transition-all duration-100
+                            ${i < pin.length
+                                ? (shake ? 'bg-red-500 border-red-500' : 'bg-[#4A9A7A] border-[#4A9A7A]')
+                                : 'bg-white border-gray-300'}`} />
+                    ))}
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                    {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => (
+                        <button key={n} onClick={() => handleNum(String(n))}
+                            className="py-4 rounded-xl bg-gray-100 font-black text-xl hover:bg-gray-200 active:scale-95 transition-all">
+                            {n}
+                        </button>
+                    ))}
+                    <button onClick={() => setPin(p => p.slice(0, -1))}
+                        className="py-4 rounded-xl bg-yellow-100 text-yellow-700 font-black hover:bg-yellow-200 active:scale-95 transition-all">⌫</button>
+                    <button onClick={() => handleNum('0')}
+                        className="py-4 rounded-xl bg-gray-100 font-black text-xl hover:bg-gray-200 active:scale-95 transition-all">0</button>
+                    <button onClick={() => setPin('')}
+                        className="py-4 rounded-xl bg-red-100 text-red-500 font-black hover:bg-red-200 active:scale-95 transition-all">清空</button>
                 </div>
             </div>
         </div>
@@ -1271,6 +1353,8 @@ const OrderPage = () => {
     const [quantityTarget, setQuantityTarget] = useState(null); // 用於 QuantityPadModal
 
     const [isCheckoutOptionModalOpen, setIsCheckoutOptionModalOpen] = useState(false);
+    const [showDrawerPin, setShowDrawerPin] = useState(false);
+    const [drawerMsg, setDrawerMsg] = useState(null); // null | 'ok' | 'fail'
     const [checkoutResult, setCheckoutResult] = useState(null); // { total, isPartial, navigateTo }
     const [tableChangeConflict, setTableChangeConflict] = useState(null); // { pendingTable, targetOrders }
     const [showTablePicker, setShowTablePicker] = useState(false);
@@ -1953,6 +2037,16 @@ const handleConfirmOrder = async () => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ...buildPrintBaseData(), printMode: 'customer' }),
         }).catch(e => console.warn(`印顧客單失敗：${e.message}`));
+    };
+
+    // 結帳選項裡的開錢櫃快捷鍵：密碼正確才實際開啟，不影響結帳選項本身的其他操作
+    const handleOpenDrawerClick = () => setShowDrawerPin(true);
+
+    const handleDrawerPinSuccess = async () => {
+        setShowDrawerPin(false);
+        const ok = await openCashDrawer();
+        setDrawerMsg(ok ? 'ok' : 'fail');
+        setTimeout(() => setDrawerMsg(null), ok ? 2000 : 3000);
     };
 
     const executeCheckout = async (itemsToCheckout, isPartial = false) => {
@@ -3072,7 +3166,14 @@ const handleChangeItemQuantity = (internalId, diff) => {
                 onStartPartialCheckout={handleStartPartialCheckout}
                 onPrintKitchen={handlePrintKitchen}
                 onPrintCustomer={handlePrintCustomer}
+                onOpenDrawer={handleOpenDrawerClick}
+                drawerMsg={drawerMsg}
                 isAllPaid={unpaidItems.length === 0}
+            />
+            <DrawerPinModal
+                isOpen={showDrawerPin}
+                onSuccess={handleDrawerPinSuccess}
+                onCancel={() => setShowDrawerPin(false)}
             />
 
 
