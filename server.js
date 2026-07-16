@@ -44,6 +44,17 @@ const PRINTER_IP   = process.env.PRINTER_IP   || '192.168.0.104';
 const PRINTER_PORT = Number(process.env.PRINTER_PORT) || 9100;
 const CUPS_PRINTER = process.env.CUPS_PRINTER  || '_192_168_0_104';
 
+// 印表機是單一連線裝置：開錢櫃走原始 TCP（不經過 CUPS），列印走 CUPS lp。
+// 兩邊各自獨立發起連線，若不同桌的列印/開錢櫃請求時間點重疊（例如出餐尖峰時段），
+// 會同時搶佔印表機同一個連線埠，造成連線被拒或延遲重試 → 印單「有時很慢」。
+// 因此所有印表機操作（開錢櫃 + 列印）一律排入同一個佇列序列執行，避免自家請求互搶連線。
+let printQueueTail = Promise.resolve();
+function withPrinterQueue(task) {
+    const run = printQueueTail.then(task, task);
+    printQueueTail = run.then(() => {}, () => {});
+    return run;
+}
+
 // 58mm 紙寬，但 Star MCprint3 CUPS 驅動可列印寬度為 48mm
 const MM          = 2.8346;
 const PAGE_W      = Math.round(48 * MM);    // ≈ 136pt（驅動 printable width）
@@ -81,44 +92,55 @@ function printRateLimit(req, res, next) {
     next();
 }
 
-// ----------------------------------------------------
-// 【現金抽屜】POST /api/cash-drawer
-// ----------------------------------------------------
-app.post('/api/cash-drawer', printRateLimit, (req, res) => {
-    console.log('--- 收到開錢箱請求 ---');
-    const client = new net.Socket();
-
-    client.connect(PRINTER_PORT, PRINTER_IP, () => {
-        console.log('✅ TCP 連線成功，發送開錢箱指令...');
-        try {
+// 開錢櫃：印表機 WiFi 閒置一段時間後偶爾會休眠，喚醒要數秒才回應連線，
+// 若不設連線逾時，會在 withPrinterQueue 佇列裡卡住整批列印請求，因此設定固定逾時、逾時就放棄。
+const DRAWER_CONNECT_TIMEOUT_MS = 4000;
+function kickCashDrawer() {
+    return new Promise((resolve) => {
+        const client = new net.Socket();
+        let settled = false;
+        const finish = (success, message) => {
+            if (settled) return;
+            settled = true;
+            client.destroy();
+            resolve({ success, message });
+        };
+        client.setTimeout(DRAWER_CONNECT_TIMEOUT_MS, () => {
+            console.warn(`開錢櫃連線逾時（${DRAWER_CONNECT_TIMEOUT_MS}ms），略過`);
+            finish(false, '連線逾時');
+        });
+        client.connect(PRINTER_PORT, PRINTER_IP, () => {
+            console.log('✅ TCP 連線成功，發送開錢箱指令...');
             // Star MCprint3 StarPRNT 開錢櫃指令
             // BEL (0x07) 為最直接的 DK1 開啟脈衝，不加 ESC @ 或 ESC i 避免干擾
             const cmd = Buffer.from([0x07]);
             client.write(cmd, (err) => {
                 client.end();
                 if (err) {
-                    console.error('寫入錯誤：', err.message);
-                    if (!res.headersSent)
-                        return res.status(500).json({ success: false, message: `TCP 寫入失敗: ${err.message}` });
-                    return;
+                    console.error('開錢櫃寫入錯誤：', err.message);
+                    return finish(false, `TCP 寫入失敗: ${err.message}`);
                 }
                 console.log('開錢箱指令發送完成。');
-                if (!res.headersSent)
-                    res.json({ success: true, message: '開錢箱指令已成功發送' });
+                finish(true, '開錢箱指令已成功發送');
             });
-        } catch (e) {
-            client.destroy();
-            if (!res.headersSent)
-                res.status(500).json({ success: false, message: `後端錯誤: ${e.message}` });
-        }
+        });
+        client.on('close', () => console.log('開錢箱 TCP 連線關閉'));
+        client.on('error', (err) => {
+            console.error('❌ 開錢櫃連線錯誤：', err.message);
+            finish(false, `無法連線印表機: ${err.message}`);
+        });
     });
+}
 
-    client.on('close', () => console.log('開錢箱 TCP 連線關閉'));
-    client.on('error', (err) => {
-        console.error('❌ 連線錯誤：', err.message);
-        if (!res.headersSent)
-            res.status(500).json({ success: false, message: `無法連線印表機: ${err.message}` });
-        client.destroy();
+// ----------------------------------------------------
+// 【現金抽屜】POST /api/cash-drawer
+// ----------------------------------------------------
+app.post('/api/cash-drawer', printRateLimit, (req, res) => {
+    console.log('--- 收到開錢箱請求 ---');
+    withPrinterQueue(() => kickCashDrawer()).then(({ success, message }) => {
+        if (res.headersSent) return;
+        if (success) res.json({ success: true, message });
+        else res.status(500).json({ success: false, message });
     });
 });
 
@@ -1074,22 +1096,13 @@ app.post('/print', printRateLimit, async (req, res) => {
     // 立即回應前端，印表在背景執行（避免前端等待印表完成才解鎖）
     res.json({ status: '列印請求已送出' });
 
-    // 背景非同步執行印表與開錢櫃
-    (async () => {
+    // 背景非同步執行印表與開錢櫃；排入印表機佇列，避免與其他桌的列印/開錢櫃請求搶連線
+    withPrinterQueue(async () => {
         try {
             // 開錢櫃（僅結帳顧客聯才開，且在印單前執行）
+            // 注意：已在 withPrinterQueue 佇列內，直接呼叫、不再重複排隊，否則會自我鎖死
             if (openDrawer) {
-                await new Promise((resolve) => {
-                    const client = new net.Socket();
-                    client.connect(PRINTER_PORT, PRINTER_IP, () => {
-                        const cmd = Buffer.from([0x07]);
-                        client.write(cmd, () => { client.end(); resolve(); });
-                    });
-                    client.on('error', (e) => {
-                        console.warn('開錢櫃失敗：', e.message);
-                        resolve();
-                    });
-                });
+                await kickCashDrawer();
                 console.log('開錢櫃指令已發送');
             }
 
@@ -1117,7 +1130,7 @@ app.post('/print', printRateLimit, async (req, res) => {
         } catch (e) {
             console.error('🔴 列印錯誤：', e);
         }
-    })();
+    });
 });
 
 // ----------------------------------------------------
@@ -1133,7 +1146,7 @@ app.post('/print-close', printRateLimit, async (req, res) => {
     try {
         const f = path.join(os.tmpdir(), `close_${Date.now()}.pdf`);
         const h = await buildCloseReportPDF(data, f);
-        await printPDF(f, h);
+        await withPrinterQueue(() => printPDF(f, h));
         console.log('關帳單已送出');
         res.json({ status: '列印請求已送出' });
     } catch (e) {
