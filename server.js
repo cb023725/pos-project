@@ -1506,8 +1506,10 @@ async function computeNextDailyOrderNo() {
     if (storedCloseOrderId > 0) {
         maxNo = await maxNoAfter(supabase.from('orders').select('daily_order_no').gt('id', storedCloseOrderId));
     } else if (lastCloseTs) {
+        // lastCloseTs 來自 app_settings（TEXT 欄位），是字串化的毫秒時間戳；
+        // new Date(字串) 會被當日期格式解析而非時間戳，導致 Invalid Date，必須先轉數字
         const { data: before } = await supabase.from('orders').select('id')
-            .lt('timestamp', new Date(lastCloseTs).toISOString()).order('id', { ascending: false }).limit(1);
+            .lt('timestamp', new Date(Number(lastCloseTs)).toISOString()).order('id', { ascending: false }).limit(1);
         const lastId = before?.[0]?.id || 0;
         maxNo = await maxNoAfter(supabase.from('orders').select('daily_order_no').gt('id', lastId));
     } else {
