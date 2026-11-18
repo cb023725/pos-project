@@ -1283,7 +1283,7 @@ app.post('/api/tables/:tableNumber/reset', async (req, res) => {
     const { consumeInventory = false } = req.body || {};
     // 優先使用 body 傳入的 orderId（外帶棄單需要），否則從 tables 表查
     let ord = null;
-    if (req.body.orderId) {
+    if (req.body?.orderId) {
         const { data } = await supabase.from('orders').select('*').eq('id', req.body.orderId).single();
         ord = data;
     } else {
