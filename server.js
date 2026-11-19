@@ -10,6 +10,7 @@ const os         = require('os');
 const fs         = require('fs');
 const { execFile } = require('child_process');
 const PDFDocument  = require('pdfkit');
+const archiver     = require('archiver');
 const { createClient } = require('@supabase/supabase-js');
 
 // Supabase 連線（service_role，只在 server 端使用）
@@ -33,6 +34,108 @@ async function fetchAllRows(buildQuery) {
     }
     return all;
 }
+
+// ── 分析資料匯出用的共用工具 ──────────────────────────────────────────────
+function toCSV(rows, cols) {
+    if (!cols) cols = rows.length ? Object.keys(rows[0]) : [];
+    const esc = (v) => {
+        if (v === null || v === undefined) return '';
+        if (typeof v === 'object') v = JSON.stringify(v);
+        const s = String(v);
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [cols.join(',')];
+    rows.forEach(r => lines.push(cols.map(c => esc(r[c])).join(',')));
+    return lines.join('\n');
+}
+function twDateStr(isoString) {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(isoString));
+}
+function twMinuteOfDay(isoString) {
+    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date(isoString));
+    const h = parseInt(parts.find(p => p.type === 'hour').value, 10);
+    const m = parseInt(parts.find(p => p.type === 'minute').value, 10);
+    return h * 60 + m;
+}
+function twWeekday(dateStr) {
+    return ['日', '一', '二', '三', '四', '五', '六'][new Date(dateStr + 'T12:00:00+08:00').getDay()];
+}
+function toDisplayCategory(cat) {
+    if (cat === '主餐' || cat === '單點') return '主餐';
+    if (cat === '飲品' || cat === '飲料') return '飲品';
+    if (cat === '冷凍包') return '冷凍包';
+    return '小點';
+}
+const DATA_DICTIONARY_MD = `# 咕咕義小餐館 營運資料字典
+
+同一份定義給四個地方共用（POS 報表、Vercel 儀表板、週報/月報、這份匯出），AI 分析時請一律依此解讀，不要用其他假設重算。
+
+## 基本規則
+
+- **營業日**：以發票 \`payment_time\`（結帳時間）轉換成台灣時區後的日期為準。
+- **餐期**：以訂單 \`timestamp\`（開單時間，台灣時區）判斷，15:45 前算午餐、15:45（含）後算晚餐。
+- **一張訂單**：至少有一張狀態為「已開立」的發票之 \`orders.id\`。分次結帳時一張訂單會對應多張發票，一律以 order_id 去重。
+- **來客數**：每張訂單只取一次 \`orders.customer_count\`（不是把各張發票的人數加總）。只買冷凍包的訂單不算來客（這類訂單人數通常是 0）。
+- **營業額（net_revenue）**：實收 = 有效發票 total 合計（折扣前）＋ 當期歸屬的折扣/退款（adjustments，依「原發票的營業日」歸屬，不是調整建立日）。
+- **冷凍包**：品項 category = "冷凍包"。冷凍包營收另外計算，不算在「餐點實收」內。
+- **餐點實收（meal_net_revenue）**：有效發票品項金額（排除冷凍包，用發票當時的 price × quantity，不是現在的菜單價）＋ 歸屬的折扣/退款。
+- **客單價**：餐點實收 ÷ 來客數。
+- **is_open**：依店休日曆（store_calendar）判斷當天該餐期是否正常營業；沒有紀錄 = 正常營業。跟「有沒有客人」是兩回事——店休是 is_open=false，開店但剛好沒客人是 is_open=true 但營業額/來客數為 0，分析平日/假日日均時請排除 is_open=false 的列，不要跟零銷售的日子混在一起。
+
+## meal_period_sessions.csv — 一列 = 一個營業日 × 餐期
+
+| 欄位 | 說明 |
+| --- | --- |
+| business_date | 營業日（YYYY-MM-DD） |
+| weekday | 星期（日/一/二/三/四/五/六） |
+| day_type | 平日 / 假日（僅以週六週日判斷，不含國定假日調整） |
+| meal_period | lunch / dinner |
+| is_open | 該餐期是否正常營業（見上方說明） |
+| dine_in_orders / takeout_orders | 內用 / 外帶訂單數 |
+| customers | 來客數（排除純冷凍包訂單） |
+| dine_in_customers | 內用來客數 |
+| net_revenue | 實收營業額（含冷凍包） |
+| meal_net_revenue | 餐點實收（不含冷凍包，客單價分子） |
+| frozen_revenue | 冷凍包營收 |
+
+## order_items.csv — 一列 = 一個品項行
+
+| 欄位 | 說明 |
+| --- | --- |
+| order_id | 訂單編號 |
+| business_date / meal_period | 同上方定義 |
+| order_type | 內用 / 外帶 |
+| menu_item_id / item_name | 品項代碼與名稱 |
+| display_category | 主餐 / 小點 / 飲品 / 冷凍包（簡化分類） |
+| unit_price / quantity | 單價、數量（發票當時的價格） |
+| line_revenue | 該品項原價小計（折扣前，unit_price × quantity） |
+
+## orders_fact.csv — 一列 = 一張訂單
+
+| 欄位 | 說明 |
+| --- | --- |
+| order_id | 訂單編號 |
+| business_date / meal_period | 同上方定義 |
+| opened_at | 開單時間（ISO 時間戳） |
+| order_type | 內用 / 外帶 |
+| table_number | 桌號（外帶為空） |
+| customer_count | 訂單人數 |
+| net_revenue / meal_net_revenue / frozen_revenue | 同上方定義，此為該訂單的金額 |
+| meal_item_qty | 該訂單非冷凍包品項的總份數 |
+
+## external_events.csv — 手動紀錄，一列 = 一個外部事件
+
+| 欄位 | 說明 |
+| --- | --- |
+| date | 事件日期 |
+| change | 變動內容（例如：廣告設定變更、菜單調價、營業時間變動） |
+| note | 備註 |
+
+## 刻意不提供
+
+- \`customers\` 整張表、\`orders.customer_name\`、\`customer_phone\`、\`customer_id\`、\`special_notes\`、\`pickup_time\`、品項 \`remarks\`、\`adjustments.reason_note\`、\`customers.email\` — 一律排除個資。
+- 逐張發票明細、作廢/棄單數、\`has_*\` 旗標 — 可由 sessions 彙總得出，不重複提供。
+`;
 
 const app  = express();
 const PORT = IS_DEV ? 3001 : 3000;
@@ -1486,6 +1589,113 @@ app.get('/api/report/sessions', async (req, res) => {
         grossRevenue: r.gross_revenue, adjustmentAmount: r.adjustment_amount,
         netRevenue: r.net_revenue, frozenRevenue: r.frozen_revenue, mealNetRevenue: r.meal_net_revenue,
     })));
+});
+// 下載分析資料：meal_period_sessions / order_items / orders_fact / external_events + 資料字典，打包成 zip
+// 不含個資（customers 表、顧客姓名電話email、備註等一律排除）
+app.get('/api/report/analysis-export', async (req, res) => {
+    const { start, end } = req.query;
+    if (!start || !end) return res.status(400).json({ error: 'start 和 end 為必填（YYYY-MM-DD）' });
+    try {
+        const startISO = new Date(start + 'T00:00:00+08:00').toISOString();
+        const endISO   = new Date(new Date(end + 'T00:00:00+08:00').getTime() + 86400000).toISOString();
+
+        const [{ data: sessionRows, error: sessErr }, { data: calRows }, invoices] = await Promise.all([
+            supabase.rpc('report_sessions', { p_start: start, p_end: end }),
+            supabase.from('store_calendar').select('*').gte('date', start).lte('date', end),
+            fetchAllRows(() => supabase.from('invoices').select('*').eq('status', '已開立')
+                .gte('payment_time', startISO).lt('payment_time', endISO)),
+        ]);
+        if (sessErr) return res.status(500).json({ error: sessErr.message });
+
+        const orderIds = [...new Set(invoices.map(i => i.order_id).filter(Boolean))];
+        const invoiceIds = invoices.map(i => i.id);
+        const [orders, adjustments, eventsRow] = await Promise.all([
+            orderIds.length ? fetchAllRows(() => supabase.from('orders').select('*').in('id', orderIds)) : [],
+            invoiceIds.length ? fetchAllRows(() => supabase.from('adjustments').select('*').in('original_invoice_id', invoiceIds)) : [],
+            supabase.from('app_settings').select('value').eq('key', 'external_events').single(),
+        ]);
+        const orderMap = new Map(orders.map(o => [o.id, o]));
+        const adjByInvoice = new Map();
+        adjustments.forEach(a => adjByInvoice.set(a.original_invoice_id, (adjByInvoice.get(a.original_invoice_id) || 0) + (a.amount || 0)));
+
+        // 依訂單彙總發票（business_date 以最早一張發票的 payment_time 為準，與 RPC 一致）
+        const byOrder = new Map();
+        invoices.forEach(inv => {
+            const oid = inv.order_id;
+            if (!byOrder.has(oid)) byOrder.set(oid, []);
+            byOrder.get(oid).push(inv);
+        });
+
+        const ordersFactRows = [];
+        const orderItemRows = [];
+        byOrder.forEach((invs, oid) => {
+            const order = orderMap.get(oid);
+            if (!order) return;
+            const earliestPayment = invs.reduce((min, i) => (i.payment_time < min ? i.payment_time : min), invs[0].payment_time);
+            const businessDate = twDateStr(earliestPayment);
+            const mealPeriod = twMinuteOfDay(order.timestamp) < 15 * 60 + 45 ? 'lunch' : 'dinner';
+
+            let grossRevenue = 0, adjAmount = 0, mealRevenue = 0, frozenRevenue = 0, mealItemQty = 0;
+            invs.forEach(inv => {
+                grossRevenue += inv.total || 0;
+                adjAmount += adjByInvoice.get(inv.id) || 0;
+                (inv.items_snapshot || []).forEach(item => {
+                    const rev = (item.price || 0) * (item.quantity || 1);
+                    const isFrozen = item.category === '冷凍包';
+                    if (isFrozen) frozenRevenue += rev;
+                    else { mealRevenue += rev; mealItemQty += (item.quantity || 1); }
+                    orderItemRows.push({
+                        order_id: oid, business_date: businessDate, meal_period: mealPeriod,
+                        order_type: order.order_type, menu_item_id: item.id, item_name: item.name,
+                        display_category: toDisplayCategory(item.category), unit_price: item.price,
+                        quantity: item.quantity, line_revenue: rev,
+                    });
+                });
+            });
+
+            ordersFactRows.push({
+                order_id: oid, business_date: businessDate, meal_period: mealPeriod,
+                opened_at: order.timestamp, order_type: order.order_type, table_number: order.table_number || '',
+                customer_count: order.customer_count,
+                net_revenue: grossRevenue + adjAmount, meal_net_revenue: mealRevenue + adjAmount,
+                frozen_revenue: frozenRevenue, meal_item_qty: mealItemQty,
+            });
+        });
+
+        const calMap = new Map((calRows || []).map(r => [r.date, { lunchOpen: r.lunch_open, dinnerOpen: r.dinner_open }]));
+        const sessionCsvRows = (sessionRows || []).map(r => {
+            const cal = calMap.get(r.business_date);
+            const isOpen = r.meal_period === 'lunch' ? (cal ? cal.lunchOpen : true) : (cal ? cal.dinnerOpen : true);
+            const wd = twWeekday(r.business_date);
+            return {
+                business_date: r.business_date, weekday: wd, day_type: (wd === '六' || wd === '日') ? '假日' : '平日',
+                meal_period: r.meal_period, is_open: isOpen,
+                dine_in_orders: r.dine_in_orders, dine_in_customers: r.dine_in_customers,
+                takeout_orders: r.takeout_orders, customers: r.customers,
+                net_revenue: r.net_revenue, meal_net_revenue: r.meal_net_revenue, frozen_revenue: r.frozen_revenue,
+            };
+        });
+
+        let events = [];
+        try { events = eventsRow?.data?.value ? JSON.parse(eventsRow.data.value) : []; } catch {}
+        events = events.filter(e => e.date >= start && e.date <= end);
+
+        const fileLabel = `${start.replace(/-/g, '')}-${end.replace(/-/g, '')}`;
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="gugu_analysis_${fileLabel}.zip"`);
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        archive.on('error', (err) => { if (!res.headersSent) res.status(500).json({ error: err.message }); });
+        archive.pipe(res);
+        archive.append(toCSV(sessionCsvRows, ['business_date', 'weekday', 'day_type', 'meal_period', 'is_open', 'dine_in_orders', 'dine_in_customers', 'takeout_orders', 'customers', 'net_revenue', 'meal_net_revenue', 'frozen_revenue']), { name: 'meal_period_sessions.csv' });
+        archive.append(toCSV(orderItemRows, ['order_id', 'business_date', 'meal_period', 'order_type', 'menu_item_id', 'item_name', 'display_category', 'unit_price', 'quantity', 'line_revenue']), { name: 'order_items.csv' });
+        archive.append(toCSV(ordersFactRows, ['order_id', 'business_date', 'meal_period', 'opened_at', 'order_type', 'table_number', 'customer_count', 'net_revenue', 'meal_net_revenue', 'frozen_revenue', 'meal_item_qty']), { name: 'orders_fact.csv' });
+        archive.append(toCSV(events, ['date', 'change', 'note']), { name: 'external_events.csv' });
+        archive.append(DATA_DICTIONARY_MD, { name: 'DATA_DICTIONARY.md' });
+        await archive.finalize();
+    } catch (e) {
+        if (!res.headersSent) res.status(500).json({ error: e.message });
+        else res.end();
+    }
 });
 app.get('/api/orders/:id', async (req, res) => {
     const { id } = req.params;

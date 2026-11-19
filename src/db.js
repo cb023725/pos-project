@@ -191,6 +191,20 @@ export async function deleteStoreCalendarDay(date) {
     return api('DELETE', `/api/store-calendar/${date}`);
 }
 
+// ── 外部事件紀錄（手動：廣告設定變更、菜單調價、營業時間變動…）──────────────
+export async function getExternalEvents() {
+    const raw = await getSettingValue('external_events', null);
+    try { return raw ? JSON.parse(raw) : []; } catch { return []; }
+}
+export async function saveExternalEvents(events) {
+    return saveSettingValue('external_events', JSON.stringify(events));
+}
+
+// ── 下載分析資料（CSV + 資料字典 zip）────────────────────────────────────
+export function downloadAnalysisExport(start, end) {
+    window.location.href = `/api/report/analysis-export?start=${start}&end=${end}`;
+}
+
 // ── 庫存異動紀錄 ──────────────────────────────────────────────
 export async function getInventoryLogs(itemId) {
     const params = itemId ? `?item_id=${encodeURIComponent(itemId)}` : '';

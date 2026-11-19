@@ -1,6 +1,6 @@
 // src/pages/Settings.js
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { getStoreCalendar, saveStoreCalendarDay, deleteStoreCalendarDay } from '../db';
+import { getStoreCalendar, saveStoreCalendarDay, deleteStoreCalendarDay, getExternalEvents, saveExternalEvents } from '../db';
 
 const pad2 = (n) => String(n).padStart(2, '0');
 const toDateKey = (y, m, d) => `${y}-${pad2(m + 1)}-${pad2(d)}`;
@@ -231,11 +231,125 @@ const StoreCalendarCard = () => {
     );
 };
 
+// 外部事件紀錄：廣告設定變更、菜單調價、營業時間變動…讓 AI 分析時知道業績變化的外部原因
+const ExternalEventsCard = () => {
+    const [events, setEvents] = useState([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
+    const [form, setForm] = useState({ date: todayKey(), change: '', note: '' });
+
+    const load = useCallback(async () => {
+        setIsLoading(true);
+        try {
+            const rows = await getExternalEvents();
+            setEvents(rows.sort((a, b) => b.date.localeCompare(a.date)));
+        } finally {
+            setIsLoading(false);
+        }
+    }, []);
+
+    useEffect(() => { load(); }, [load]);
+
+    const handleAdd = async () => {
+        if (!form.date || !form.change.trim()) { alert('日期與變動內容為必填'); return; }
+        setSaving(true);
+        try {
+            const next = [...events, { ...form, change: form.change.trim() }];
+            await saveExternalEvents(next);
+            setForm({ date: todayKey(), change: '', note: '' });
+            await load();
+        } catch (e) {
+            alert('儲存失敗：' + e.message);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const handleDelete = async (idx) => {
+        const target = events[idx];
+        if (!window.confirm(`確定刪除「${target.date} ${target.change}」這筆紀錄？`)) return;
+        try {
+            const next = events.filter((_, i) => i !== idx);
+            await saveExternalEvents(next);
+            await load();
+        } catch (e) {
+            alert('刪除失敗：' + e.message);
+        }
+    };
+
+    return (
+        <div className="bg-white rounded-2xl shadow p-6">
+            <h2 className="text-xl font-black text-gray-800 mb-1">外部事件紀錄</h2>
+            <p className="text-sm text-gray-400 mb-5">記錄廣告設定變更、菜單調價、營業時間變動等，讓 AI 分析業績變化時能對照外部原因。</p>
+
+            <div className="border border-gray-200 rounded-xl p-4 bg-gray-50 mb-6">
+                <div className="flex flex-wrap items-end gap-4">
+                    <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-1">日期</label>
+                        <input
+                            type="date"
+                            value={form.date}
+                            onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
+                            className="border border-gray-300 rounded-lg px-3 py-2 text-base"
+                        />
+                    </div>
+                    <div className="flex-1 min-w-[140px]">
+                        <label className="block text-xs font-bold text-gray-500 mb-1">變動內容</label>
+                        <input
+                            type="text"
+                            value={form.change}
+                            onChange={e => setForm(f => ({ ...f, change: e.target.value }))}
+                            placeholder="例如：廣告設定變更、菜單調價"
+                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base"
+                        />
+                    </div>
+                    <div className="flex-1 min-w-[140px]">
+                        <label className="block text-xs font-bold text-gray-500 mb-1">備註（選填）</label>
+                        <input
+                            type="text"
+                            value={form.note}
+                            onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
+                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base"
+                        />
+                    </div>
+                    <button
+                        onClick={handleAdd}
+                        disabled={saving}
+                        className="bg-[#4A9A7A] text-white font-bold px-5 py-2.5 rounded-lg hover:opacity-90 disabled:opacity-50"
+                    >
+                        {saving ? '儲存中…' : '新增'}
+                    </button>
+                </div>
+            </div>
+
+            {isLoading ? (
+                <div className="text-center text-gray-400 py-8">載入中…</div>
+            ) : events.length === 0 ? (
+                <p className="text-gray-400 text-sm py-4">尚未記錄任何事件</p>
+            ) : (
+                <div className="divide-y divide-gray-100">
+                    {events.map((e, idx) => (
+                        <div key={`${e.date}-${idx}`} className="flex items-center justify-between py-3">
+                            <div>
+                                <span className="font-bold text-gray-700">{e.date}</span>
+                                <span className="ml-2 text-gray-700">{e.change}</span>
+                                {e.note && <span className="ml-2 text-sm text-gray-400">{e.note}</span>}
+                            </div>
+                            <button onClick={() => handleDelete(idx)} className="text-sm font-bold text-red-500 hover:underline">刪除</button>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
 const SettingsPage = () => (
     <div className="p-5 font-sans bg-gray-50 min-h-full">
         <h1 className="text-2xl font-black text-gray-900 mb-5">設定</h1>
         <div className="max-w-3xl space-y-5">
             <StoreCalendarCard />
+            <ExternalEventsCard />
         </div>
     </div>
 );

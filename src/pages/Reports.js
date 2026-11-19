@@ -5,7 +5,7 @@ import {
     XAxis, YAxis, CartesianGrid,
     Tooltip, ResponsiveContainer,
 } from 'recharts';
-import { getReportOrders, getCategorySettings, getReportSessions, getStoreCalendar } from '../db';
+import { getReportOrders, getCategorySettings, getReportSessions, getStoreCalendar, downloadAnalysisExport } from '../db';
 
 const formatCurrency = (n) => Math.round(n || 0).toLocaleString('en-US');
 
@@ -170,6 +170,53 @@ const DateRangeBar = ({ startDate, endDate, onStart, onEnd }) => {
                     >{s.label}</button>
                 ))}
             </div>
+        </div>
+    );
+};
+
+// ----------------------------------------------------------------------
+// 下載分析資料（給 AI 分析用，只放 WebPOS，不放公開的 Vercel 頁面）
+// ----------------------------------------------------------------------
+const ANALYSIS_START_DEFAULT = '2026-06-01'; // 5/22 以前資料不完整，固定從這天起算
+const AnalysisExportButton = () => {
+    const [open, setOpen] = useState(false);
+    const [start, setStart] = useState(ANALYSIS_START_DEFAULT);
+    const [end, setEnd] = useState(today());
+
+    return (
+        <div className="relative">
+            <button
+                onClick={() => setOpen(v => !v)}
+                className="flex items-center gap-1.5 bg-white border border-gray-200 rounded-xl px-4 py-2 shadow-sm text-sm font-bold text-gray-600 hover:bg-gray-50"
+            >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" />
+                </svg>
+                下載分析資料
+            </button>
+            {open && (
+                <div className="absolute right-0 mt-2 z-20 bg-white border border-gray-200 rounded-xl shadow-lg p-4 w-72">
+                    <p className="text-xs text-gray-400 mb-3">匯出給 AI 分析用的 CSV（不含個資），選擇期間後下載。</p>
+                    <div className="space-y-2 mb-3">
+                        <label className="block">
+                            <span className="text-xs font-bold text-gray-500">起始日期</span>
+                            <input type="date" value={start} onChange={e => setStart(e.target.value)}
+                                className="w-full mt-1 border border-gray-300 rounded-lg px-2 py-1.5 text-sm" />
+                        </label>
+                        <label className="block">
+                            <span className="text-xs font-bold text-gray-500">結束日期</span>
+                            <input type="date" value={end} onChange={e => setEnd(e.target.value)}
+                                className="w-full mt-1 border border-gray-300 rounded-lg px-2 py-1.5 text-sm" />
+                        </label>
+                    </div>
+                    <button
+                        onClick={() => { downloadAnalysisExport(start, end); setOpen(false); }}
+                        className="w-full bg-[#4A9A7A] text-white font-bold py-2 rounded-lg hover:opacity-90"
+                    >
+                        下載 zip
+                    </button>
+                </div>
+            )}
         </div>
     );
 };
@@ -1350,7 +1397,10 @@ const ReportPage = () => {
         <div className="p-5 font-sans bg-gray-50 min-h-full">
             <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
                 <h1 className="text-2xl font-black text-gray-900">營業報表</h1>
-                <DateRangeBar startDate={startDate} endDate={endDate} onStart={setStartDate} onEnd={setEndDate} />
+                <div className="flex items-center gap-3">
+                    <DateRangeBar startDate={startDate} endDate={endDate} onStart={setStartDate} onEnd={setEndDate} />
+                    <AnalysisExportButton />
+                </div>
             </div>
 
             <div className="flex gap-1 bg-gray-200 p-1 rounded-xl mb-5 w-fit">
