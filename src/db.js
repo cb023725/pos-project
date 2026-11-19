@@ -356,6 +356,10 @@ export async function updateOrderStatus({ orderId, newStatus, newItems, subTotal
     await api('PATCH', `/api/orders/${orderId}`, updates);
     return true;
 }
+// 新客／舊客標記：開單時預設新客，可隨時切換（結帳前後都可以）
+export async function setOrderNewGroup(orderId, isNewGroup) {
+    return api('PATCH', `/api/orders/${orderId}`, { isNewGroup });
+}
 export async function assignOrderNo(orderId) {
     if (!orderId) return null;
     const result = await api('POST', `/api/orders/${orderId}/assign-no`, {});

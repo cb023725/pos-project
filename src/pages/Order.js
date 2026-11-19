@@ -7,6 +7,7 @@ import {
     getActiveOrders,
     createNewOrder,
     updateOrderStatus,
+    setOrderNewGroup,
     completeOrderAndReport,
     assignOrderNo,
     occupyTableWithoutOrder,
@@ -1328,6 +1329,7 @@ const OrderPage = () => {
     const [pickupTime, setPickupTime] = useState(() => Date.now() + 20 * 60000);
     const [customerSuggestions, setCustomerSuggestions] = useState([]);
     const [specialNotes, setSpecialNotes] = useState([]); // 訂單層級特殊備註（跟餐點無關，例如需要收據、自備蛋糕）
+    const [isNewGroup, setIsNewGroup] = useState(true); // 新客／舊客：開單預設新客，隨時可切換（獨立即時儲存，不走靜默儲存批次）
 
     // 請在您的 const [customerCount, setCustomerCount] = useState(...) 下方加入：
     const [originalCustomerCount, setOriginalCustomerCount] = useState(
@@ -1638,6 +1640,8 @@ const OrderPage = () => {
                     setSpecialNotes(openOrder.specialNotes);
                     setOriginalSpecialNotes(openOrder.specialNotes);
                 }
+                // isNewGroup 為 null／undefined（未標記）時畫面上先顯示「新客」，但不會因此覆寫資料庫的未標記狀態
+                setIsNewGroup(openOrder.isNewGroup === false ? false : true);
 
                 setOriginalCustomerCount(isTakeout ? (openOrder.customerCount ?? 0) : (openOrder.customerCount || 1));
 
@@ -1710,6 +1714,7 @@ const OrderPage = () => {
             needsUtensils: needsUtensils,
             pickupTime: pickupTime,
             specialNotes: specialNotes,
+            isNewGroup: isNewGroup, // 訂單建立前就切換過的話，建立當下一併帶入（已存在的訂單則由切換時立即儲存，這裡的值會被忽略）
             // 🚨 重點：將帶有最新數量、isSent 註記、isPaid 狀態的 orderItems 列表傳入 DB 儲存
             items: orderItems.map(({ id, name, price, quantity, isSent, isServed, isPaid, sentBatch, isTakeoutPortion, category, internalId, sortOrder, remarks }) => ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, sentBatch: sentBatch || 0, isTakeoutPortion: !!isTakeoutPortion, category, internalId, sortOrder, remarks: remarks || [] })),
             subTotal: total, total, timestamp: new Date(openTimestamp).toISOString(),
@@ -1767,7 +1772,7 @@ const OrderPage = () => {
             console.error("Save Order Failed:", e);
             return false; 
         }
-    }, [openTimestamp, customerName, customerPhone, needsUtensils, pickupTime, specialNotes]);
+    }, [openTimestamp, customerName, customerPhone, needsUtensils, pickupTime, specialNotes, isNewGroup]);
 
     const handleGoBack = async () => {
         if (isLoading) return;
@@ -1832,6 +1837,7 @@ const OrderPage = () => {
                         customerName: isTakeout ? customerName : undefined,
                         customerPhone: isTakeout ? customerPhone : undefined,
                         specialNotes,
+                        isNewGroup,
                     });
                     if (result?.id) setCurrentOrderId(result.id);
                 }
@@ -2483,6 +2489,15 @@ const handleChangeItemQuantity = (internalId, diff) => {
         setCustomerCount(newCount);
     };
 
+    // 新客／舊客：立即儲存，不等靜默儲存批次（訂單還沒建立時先存在本地，建立訂單時一併帶入）
+    const handleToggleNewGroup = async (value) => {
+        setIsNewGroup(value);
+        if (currentOrderId) {
+            try { await setOrderNewGroup(currentOrderId, value); }
+            catch (e) { console.error('更新新客/舊客標記失敗:', e); }
+        }
+    };
+
     const handleQuantitySave = (newQty) => {
         if (quantityTarget.type === 'item') {
             const currentItem = currentOrder.find(i => i.internalId === quantityTarget.internalId);
@@ -2647,6 +2662,22 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                         </div>
                                     )}
                                 </div>
+
+                                {tableNumber !== '' && (
+                                    <div className="flex items-center bg-white/20 p-0.5 rounded-full" title="新客／舊客，隨時可切換">
+                                        {[{ v: true, label: '新客' }, { v: false, label: '舊客' }].map(opt => (
+                                            <button
+                                                key={String(opt.v)}
+                                                onClick={() => handleToggleNewGroup(opt.v)}
+                                                className={`text-[11px] font-black px-2 py-0.5 rounded-full transition-colors ${
+                                                    isNewGroup === opt.v ? 'bg-white text-red-600' : 'text-white/70 hover:text-white'
+                                                }`}
+                                            >
+                                                {opt.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
 
                             <div className="flex items-center space-x-2 text-xs font-bold">

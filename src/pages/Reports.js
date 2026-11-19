@@ -645,6 +645,30 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
         return { lunch, dinner };
     }, [turnaways, startDate, endDate]);
 
+    // 新客／舊客統計：全天／午餐／晚餐固定三欄並列，不受時段篩選影響（10.2 節規格）
+    const newReturningStats = useMemo(() => {
+        const mk = () => ({ newGroups: 0, newCustomers: 0, returningGroups: 0, returningCustomers: 0, unmarkedGroups: 0, totalCustomers: 0 });
+        const all = mk(), lunch = mk(), dinner = mk();
+        sessionsByDate.forEach((day, date) => {
+            if (startDate && date < startDate) return;
+            if (endDate   && date > endDate)   return;
+            ['lunch', 'dinner'].forEach(mp => {
+                const r = day[mp];
+                if (!r) return;
+                const slot = mp === 'lunch' ? lunch : dinner;
+                [slot, all].forEach(acc => {
+                    acc.newGroups          += r.newGroups || 0;
+                    acc.newCustomers       += r.newCustomers || 0;
+                    acc.returningGroups    += r.returningGroups || 0;
+                    acc.returningCustomers += r.returningCustomers || 0;
+                    acc.unmarkedGroups     += r.unmarkedGroups || 0;
+                    acc.totalCustomers     += r.customers || 0;
+                });
+            });
+        });
+        return { all, lunch, dinner };
+    }, [sessionsByDate, startDate, endDate]);
+
     // 平日 vs 假日日均統計（餐點實收 ÷ 來客，與其他 KPI 同一來源）
     // 日均的分母＝實際有營業的日曆日（依 store_calendar 排除全天店休），
     // 而不是「有銷售紀錄的日子」——避免把店休跟沒客人混在一起（店休不計入天數，開店但沒客人仍計入、算 $0）
@@ -842,6 +866,40 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
                         </div>
                     </div>
                 ))}
+            </div>
+
+            {/* 新客 / 舊客 */}
+            <div className="bg-white rounded-xl shadow overflow-hidden">
+                <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+                    <h3 className="font-black text-gray-800">新客 / 舊客</h3>
+                    {newReturningStats.all.unmarkedGroups > 0 && (
+                        <span className="text-xs font-bold text-amber-500">未標記 {newReturningStats.all.unmarkedGroups} 組</span>
+                    )}
+                </div>
+                <table className="w-full text-sm">
+                    <thead className="bg-gray-50">
+                        <tr>
+                            <th className="pl-5 pr-3 py-3 text-left text-xs font-bold text-gray-400 w-28"></th>
+                            <th className="px-4 py-3 text-center text-xs font-bold text-gray-600">全天</th>
+                            <th className="px-4 py-3 text-center text-xs font-bold text-gray-600">午餐</th>
+                            <th className="px-4 py-3 text-center text-xs font-bold text-gray-600">晚餐</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                        {[
+                            { label: '新客人數／組數', get: g => (g.newCustomers > 0 || g.newGroups > 0) ? `${g.newCustomers} 人／${g.newGroups} 組` : '—' },
+                            { label: '舊客人數／組數', get: g => (g.returningCustomers > 0 || g.returningGroups > 0) ? `${g.returningCustomers} 人／${g.returningGroups} 組` : '—' },
+                            { label: '新客比例',       get: g => (g.newCustomers > 0 || g.returningCustomers > 0) ? `${Math.round(g.newCustomers / g.totalCustomers * 100)}%` : '—' },
+                        ].map(r => (
+                            <tr key={r.label} className="hover:bg-gray-50">
+                                <td className="pl-5 pr-3 py-3.5 text-xs font-bold text-gray-500">{r.label}</td>
+                                <td className="px-4 py-3.5 text-center font-black text-gray-800">{r.get(newReturningStats.all)}</td>
+                                <td className="px-4 py-3.5 text-center text-gray-700">{r.get(newReturningStats.lunch)}</td>
+                                <td className="px-4 py-3.5 text-center text-gray-700">{r.get(newReturningStats.dinner)}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
             </div>
 
             {/* 平日 vs 假日 */}

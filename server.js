@@ -1477,10 +1477,15 @@ app.post('/api/orders/:id/move-table', async (req, res) => {
             const mergedCount = (dstOrder.customer_count || 0) + (srcOrder.customer_count || 0);
             // 跨桌併桌：記錄所有實際佔用的桌子（例如記 A7，實際坐 A6+A7），供座位使用率分析用
             const tablesUsed = [...new Set([...(dstOrder.tables_used || []), dstOrder.table_number, srcOrder.table_number].filter(Boolean))];
+            // 新舊客：任一張是舊客，合併後就是舊客；否則沿用已標記的那一邊，都沒標記則維持未標記
+            const mergedIsNewGroup = (srcOrder.is_new_group === false || dstOrder.is_new_group === false)
+                ? false
+                : (dstOrder.is_new_group ?? srcOrder.is_new_group ?? null);
 
             await supabase.from('orders').update({
                 items: mergedItems, total: newTotal, sub_total: newTotal,
                 customer_count: mergedCount, updated_at: now, tables_used: tablesUsed,
+                is_new_group: mergedIsNewGroup,
             }).eq('id', mergeWithOrderId);
 
             // 合併棄單用獨立 'merged' 狀態，與真正棄單（'abandoned'）區隔
@@ -1590,6 +1595,10 @@ app.get('/api/report/sessions', async (req, res) => {
         businessDate: r.business_date, mealPeriod: r.meal_period,
         orders: r.orders, dineInOrders: r.dine_in_orders, takeoutOrders: r.takeout_orders,
         customers: r.customers, dineInCustomers: r.dine_in_customers,
+        totalGroups: r.total_groups,
+        newGroups: r.new_groups, newCustomers: r.new_customers,
+        returningGroups: r.returning_groups, returningCustomers: r.returning_customers,
+        unmarkedGroups: r.unmarked_groups, unmarkedCustomers: r.unmarked_customers,
         grossRevenue: r.gross_revenue, adjustmentAmount: r.adjustment_amount,
         netRevenue: r.net_revenue, frozenRevenue: r.frozen_revenue, mealNetRevenue: r.meal_net_revenue,
     })));
@@ -1767,6 +1776,8 @@ app.post('/api/orders/new', async (req, res) => {
         send_time: od.sendTime || null,
         updated_at: now,
         special_notes: od.specialNotes || [],
+        // 新客／舊客：開單時預設新客（沒印象就視為新客），可隨時切換
+        is_new_group: od.isNewGroup !== undefined ? od.isNewGroup : true,
     };
     const { data, error } = await supabase.from('orders').insert(row).select().single();
     if (error) return res.status(500).json({ error: error.message });
@@ -1811,6 +1822,7 @@ app.patch('/api/orders/:id', async (req, res) => {
     if (b.pickupTime    !== undefined) updates.pickup_time   = b.pickupTime;
     if (b.customerId    !== undefined) updates.customer_id   = b.customerId;
     if (b.specialNotes  !== undefined) updates.special_notes = b.specialNotes;
+    if (b.isNewGroup    !== undefined) updates.is_new_group  = b.isNewGroup;
     const { data, error } = await supabase.from('orders').update(updates).eq('id', req.params.id).select().single();
     if (error) return res.status(500).json({ error: error.message });
     // 同步桌位
@@ -2192,6 +2204,7 @@ function orderToCamel(r) {
         specialNotes: r.special_notes || [],
         clearedAt: r.cleared_at ? new Date(r.cleared_at).getTime() : null,
         tablesUsed: r.tables_used || [],
+        isNewGroup: r.is_new_group,
     };
 }
 function invoiceToCamel(r) {
