@@ -1463,6 +1463,7 @@ app.get('/api/orders/report', async (req, res) => {
             dailyOrderNo: inv.daily_order_no || o?.daily_order_no,
             invoiceNumber: inv.invoice_number,
             timestamp: new Date(inv.payment_time).getTime(),
+            openedAt: o?.timestamp ? new Date(o.timestamp).getTime() : null,
             total: inv.total || inv.amount,
             items: inv.items_snapshot || [],
             table: o?.table_number || inv.table_name || '外帶',
@@ -1471,6 +1472,20 @@ app.get('/api/orders/report', async (req, res) => {
             orderType: o?.order_type || inv.order_type || (inv.table_name === '外帶' ? '外帶' : '內用'),
         };
     }));
+});
+// 彙總報表資料（午/晚各一列），不含個資；四個地方的「營業額」「客單價」都以此為準
+app.get('/api/report/sessions', async (req, res) => {
+    const { start, end } = req.query;
+    if (!start || !end) return res.status(400).json({ error: 'start 和 end 為必填（YYYY-MM-DD）' });
+    const { data, error } = await supabase.rpc('report_sessions', { p_start: start, p_end: end });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json((data||[]).map(r => ({
+        businessDate: r.business_date, mealPeriod: r.meal_period,
+        orders: r.orders, dineInOrders: r.dine_in_orders, takeoutOrders: r.takeout_orders,
+        customers: r.customers, dineInCustomers: r.dine_in_customers,
+        grossRevenue: r.gross_revenue, adjustmentAmount: r.adjustment_amount,
+        netRevenue: r.net_revenue, frozenRevenue: r.frozen_revenue, mealNetRevenue: r.meal_net_revenue,
+    })));
 });
 app.get('/api/orders/:id', async (req, res) => {
     const { id } = req.params;

@@ -1,11 +1,11 @@
 // src/pages/Reports.js
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
     ComposedChart, Line, Area, Bar,
     XAxis, YAxis, CartesianGrid,
     Tooltip, ResponsiveContainer,
 } from 'recharts';
-import { getReportOrders, getCategorySettings } from '../db';
+import { getReportOrders, getCategorySettings, getReportSessions } from '../db';
 
 const formatCurrency = (n) => Math.round(n || 0).toLocaleString('en-US');
 
@@ -275,7 +275,7 @@ const CHART_METRICS = [
     { key: 'avgSpend', label: '客單價', color: '#3878C8', isCurrency: true },
 ];
 
-const TrendChart = ({ filteredOrders, isSingleDay, nonRevenueCats }) => {
+const TrendChart = ({ filteredOrders, dailyRows, isSingleDay, nonRevenueCats }) => {
     const [activeMetric, setActiveMetric] = useState('combined');
 
     const chartData = useMemo(() => {
@@ -297,23 +297,10 @@ const TrendChart = ({ filteredOrders, isSingleDay, nonRevenueCats }) => {
             });
             return hours.map(r => ({ ...r, avgSpend: r.customers > 0 ? Math.round(r.revenue / r.customers) : 0 }));
         } else {
-            const map = new Map();
-            filteredOrders.forEach(o => {
-                const key = tsToDayTW(o.timestamp);
-                const ex = map.get(key) || { label: key, revenue: 0, customers: 0 };
-                let orderFrozen = 0;
-                (o.items || []).forEach(item => {
-                    if (nonRevenueCats.has(item.category)) orderFrozen += item.price * item.quantity;
-                });
-                ex.revenue   += o.total - orderFrozen;
-                ex.customers += o.adjustedCustomerCount || 0;
-                map.set(key, ex);
-            });
-            return Array.from(map.values())
-                .sort((a, b) => a.label.localeCompare(b.label))
-                .map(r => ({ ...r, avgSpend: r.customers > 0 ? Math.round(r.revenue / r.customers) : 0 }));
+            // dailyRows 已依 report_sessions RPC 彙總且按日期排序，與每日業績表同一來源
+            return dailyRows.map(r => ({ label: r.label, revenue: r.total, customers: r.customers, avgSpend: r.avgSpend }));
         }
-    }, [filteredOrders, isSingleDay, nonRevenueCats]);
+    }, [filteredOrders, dailyRows, isSingleDay, nonRevenueCats]);
 
     const isCombined = activeMetric === 'combined';
     const metric = CHART_METRICS.find(m => m.key === activeMetric);
@@ -422,19 +409,21 @@ const SUMMARY_SLOTS = [
     { key: 'lunch',  label: '中午' },
     { key: 'dinner', label: '晚上' },
 ];
+// 餐期分界：依開單時間（非結帳時間），15:45 前算午餐、之後算晚餐（與 report_sessions RPC 一致）
+const MEAL_SPLIT_MIN = 15 * 60 + 45;
 const applyTimeSlot = (orders, slot) => {
     if (slot === 'all') return orders;
     return orders.filter(o => {
-        const min = tsToMinOfDayTW(o.timestamp);
-        if (slot === 'lunch')  return min >= 11 * 60 && min <= 16 * 60;
-        if (slot === 'dinner') return min >  16 * 60 && min <= 22 * 60;
+        const min = tsToMinOfDayTW(o.openedAt ?? o.timestamp);
+        if (slot === 'lunch')  return min <  MEAL_SPLIT_MIN;
+        if (slot === 'dinner') return min >= MEAL_SPLIT_MIN;
         return true;
     });
 };
 
 const fmtMD = (dateStr) => dateStr ? dateStr.slice(5).replace('-', '/') : '';
 
-const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate, nonRevenueCats, catSettings, adjustments = [] }) => {
+const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate, nonRevenueCats, catSettings, adjustments = [], sessions = [] }) => {
     const [summarySlot, setSummarySlot] = useState('all');
     const [historyPage, setHistoryPage] = useState(1);
 
@@ -444,8 +433,52 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
     }, [filteredOrders, summarySlot]);
     const slotCompOrders = useMemo(() => applyTimeSlot(compOrders,     summarySlot), [compOrders,     summarySlot]);
 
+    // 用於類別設定（冷凍包等群組卡片的 include/showInKpi 設定），僅供 groupCards 使用
     const kpi     = useMemo(() => calcKpi(slotOrders,     catSettings), [slotOrders,     catSettings]);
     const prevKpi = useMemo(() => calcKpi(slotCompOrders, catSettings), [slotCompOrders, catSettings]);
+
+    // business_date -> { lunch: row, dinner: row }（report_sessions RPC 彙總資料）
+    const sessionsByDate = useMemo(() => {
+        const m = new Map();
+        sessions.forEach(r => {
+            const e = m.get(r.businessDate) || {};
+            e[r.mealPeriod] = r;
+            m.set(r.businessDate, e);
+        });
+        return m;
+    }, [sessions]);
+
+    // 期間內（依選定時段）彙總：營業額＝net_revenue、客單價分子＝meal_net_revenue（四個地方共用的算法）
+    const aggSessions = useCallback((startD, endD, slot) => {
+        let netRevenue = 0, mealNetRevenue = 0, frozenRevenue = 0, adjustmentAmount = 0;
+        let customers = 0, lunchNet = 0, dinnerNet = 0, lunchCust = 0, dinnerCust = 0, lunchMealNet = 0, dinnerMealNet = 0;
+        // startD/endD 為 undefined（例如沒有比較期間）時回傳全 0；空字串代表「全部」= 不限制範圍
+        if (startD === undefined || endD === undefined) {
+            return { total: 0, dineIn: 0, frozen: 0, customers: 0, adjustmentAmount: 0, day: 0, night: 0, avgSpend: 0, dayAvgSpend: 0, nightAvgSpend: 0 };
+        }
+        sessionsByDate.forEach((day, date) => {
+            if (startD && date < startD) return;
+            if (endD   && date > endD)   return;
+            ['lunch', 'dinner'].forEach(mp => {
+                if (slot !== 'all' && slot !== mp) return;
+                const r = day[mp];
+                if (!r) return;
+                netRevenue += r.netRevenue; mealNetRevenue += r.mealNetRevenue; frozenRevenue += r.frozenRevenue;
+                adjustmentAmount += r.adjustmentAmount; customers += r.customers;
+                if (mp === 'lunch') { lunchNet += r.netRevenue; lunchCust += r.customers; lunchMealNet += r.mealNetRevenue; }
+                else                { dinnerNet += r.netRevenue; dinnerCust += r.customers; dinnerMealNet += r.mealNetRevenue; }
+            });
+        });
+        return {
+            total: netRevenue, dineIn: mealNetRevenue, frozen: frozenRevenue, customers, adjustmentAmount,
+            day: lunchNet, night: dinnerNet,
+            avgSpend:      customers  > 0 ? Math.round(mealNetRevenue / customers)  : 0,
+            dayAvgSpend:   lunchCust  > 0 ? Math.round(lunchMealNet  / lunchCust)   : 0,
+            nightAvgSpend: dinnerCust > 0 ? Math.round(dinnerMealNet / dinnerCust)  : 0,
+        };
+    }, [sessionsByDate]);
+    const agg     = useMemo(() => aggSessions(startDate, endDate, summarySlot), [aggSessions, startDate, endDate, summarySlot]);
+    const prevAgg = useMemo(() => aggSessions(compPeriod?.start, compPeriod?.end, summarySlot), [aggSessions, compPeriod, summarySlot]);
 
     // 期間內的折扣/退款（以 createdAt 日期篩選）
     const periodAdj = useMemo(() => {
@@ -458,19 +491,21 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
     }, [adjustments, startDate, endDate]);
     const periodAdjTotal = useMemo(() => periodAdj.reduce((s, a) => s + (a.amount || 0), 0), [periodAdj]);
 
-    // 平日 vs 假日日均統計
+    // 平日 vs 假日日均統計（餐點實收 ÷ 來客，與其他 KPI 同一來源）
     const wwKpi = useMemo(() => {
         const dayMap = new Map();
-        slotOrders.forEach(o => {
-            const d = tsToDayTW(o.timestamp);
-            const ex = dayMap.get(d) || { date: d, revenue: 0, customers: 0 };
-            let orderNonRevenue = 0;
-            (o.items || []).forEach(item => {
-                if (nonRevenueCats.has(item.category)) orderNonRevenue += item.price * item.quantity;
+        sessionsByDate.forEach((day, date) => {
+            if (startDate && date < startDate) return;
+            if (endDate   && date > endDate)   return;
+            let revenue = 0, customers = 0;
+            ['lunch', 'dinner'].forEach(mp => {
+                if (summarySlot !== 'all' && summarySlot !== mp) return;
+                const r = day[mp];
+                if (!r) return;
+                revenue += r.mealNetRevenue; customers += r.customers;
             });
-            ex.revenue += o.total - orderNonRevenue;
-            ex.customers += o.adjustedCustomerCount || 0;
-            dayMap.set(d, ex);
+            if (revenue === 0 && customers === 0) return;
+            dayMap.set(date, { date, revenue, customers });
         });
         const weekdays = [], weekends = [];
         dayMap.forEach(day => {
@@ -489,7 +524,7 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
             };
         };
         return { weekday: calc(weekdays), weekend: calc(weekends) };
-    }, [slotOrders, nonRevenueCats]);
+    }, [sessionsByDate, startDate, endDate, summarySlot]);
 
     const isSingleDay = startDate && endDate && startDate === endDate;
 
@@ -519,34 +554,35 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
             .filter(r => CORE_HOURS.has(parseInt(r.label)) || r.total > 0);
     }, [slotOrders, nonRevenueCats, summarySlot]);
 
-    // Daily rows
+    // Daily rows — 營業額＝net_revenue、客單價＝meal_net_revenue÷來客（與 KPI 卡同一來源）
     const dailyRows = useMemo(() => {
         const dayMap = new Map();
-        slotOrders.forEach(o => {
-            const d = tsToDayTW(o.timestamp);
-            const ex = dayMap.get(d) || { label: d, total: 0, customers: 0 };
-            let orderFrozen = 0;
-            (o.items || []).forEach(item => {
-                if (nonRevenueCats.has(item.category)) orderFrozen += item.price * item.quantity;
+        sessionsByDate.forEach((day, date) => {
+            if (startDate && date < startDate) return;
+            if (endDate   && date > endDate)   return;
+            let total = 0, mealNet = 0, customers = 0;
+            ['lunch', 'dinner'].forEach(mp => {
+                if (summarySlot !== 'all' && summarySlot !== mp) return;
+                const r = day[mp];
+                if (!r) return;
+                total += r.netRevenue; mealNet += r.mealNetRevenue; customers += r.customers;
             });
-            ex.total     += o.total - orderFrozen;
-            ex.customers += o.adjustedCustomerCount || 0;
-            dayMap.set(d, ex);
+            dayMap.set(date, { label: date, total, mealNet, customers });
         });
         if (startDate && endDate) {
             let cur = startDate;
             while (cur <= endDate) {
-                if (!dayMap.has(cur)) dayMap.set(cur, { label: cur, total: 0, customers: 0 });
+                if (!dayMap.has(cur)) dayMap.set(cur, { label: cur, total: 0, mealNet: 0, customers: 0 });
                 cur = addDays(cur, 1);
             }
         }
         const rows = Array.from(dayMap.values()).map(r => ({
             ...r,
-            avgSpend: r.customers > 0 ? Math.round(r.total / r.customers) : 0,
+            avgSpend: r.customers > 0 ? Math.round(r.mealNet / r.customers) : 0,
             dayOfWeek: getDayOfWeek(r.label),
         }));
         return rows.sort((a, b) => a.label.localeCompare(b.label));
-    }, [slotOrders, startDate, endDate, nonRevenueCats]);
+    }, [sessionsByDate, startDate, endDate, summarySlot]);
 
     // Dynamic group KPI cards (one per non-'营業額' reportGroup)
     const GROUP_CARD_COLORS = [
@@ -555,12 +591,14 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
         { gradFrom: '#C09830', gradTo: '#DBC060', textColor: 'text-[#6A5010]' },
         { gradFrom: '#6890B0', gradTo: '#92AEC8', textColor: 'text-[#284868]' },
     ];
+    // 冷凍包用 RPC 的 frozenRevenue（已正確排除於餐點實收外）；若未來設定其他非營業額群組，沿用舊的 items 掃描數字
     const groupCards = Array.from(kpi.groupSalesMap.entries())
         .filter(([grp]) => kpi.groupShowKpi[grp] !== false)
-        .map(([grp, amt], idx) => {
+        .map(([grp, scannedAmt], idx) => {
+            const amt = grp === '冷凍包' ? agg.frozen : scannedAmt;
             const gc = GROUP_CARD_COLORS[idx % GROUP_CARD_COLORS.length];
             const include = kpi.groupInclude[grp] !== false;
-            const prevAmt = prevKpi.groupSalesMap?.get(grp) || 0;
+            const prevAmt = grp === '冷凍包' ? prevAgg.frozen : (prevKpi.groupSalesMap?.get(grp) || 0);
             return {
                 label: `${grp}收益`,
                 value: `$${formatCurrency(amt)}`,
@@ -571,37 +609,38 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
         });
 
     // KPI card definitions — all use flex-col so Delta always sits at the bottom
+    // 營業額／客單價一律取自 report_sessions RPC（net_revenue、meal_net_revenue÷customers），四個地方同一來源
     const kpiCards = [
         {
-            label: '總營收',   value: `$${formatCurrency(kpi.adjustedTotal + periodAdjTotal)}`,
+            label: '總營收',   value: `$${formatCurrency(agg.total)}`,
             gradFrom: '#4A9A7A', gradTo: '#78BBAA', textColor: 'text-[#1A5A45]',
             sub: <>
-                    {`白天 $${formatCurrency(kpi.day)}`}<br />{`晚上 $${formatCurrency(kpi.night)}`}
-                    {periodAdjTotal !== 0 && <><br /><span className="text-gray-400">含折扣調整 {periodAdjTotal > 0 ? '+' : '−'}${formatCurrency(Math.abs(periodAdjTotal))}</span></>}
+                    {`白天 $${formatCurrency(agg.day)}`}<br />{`晚上 $${formatCurrency(agg.night)}`}
+                    {agg.adjustmentAmount !== 0 && <><br /><span className="text-gray-400">含折扣調整 {agg.adjustmentAmount > 0 ? '+' : '−'}${formatCurrency(Math.abs(agg.adjustmentAmount))}</span></>}
                   </>,
-            delta: <Delta curr={kpi.adjustedTotal + periodAdjTotal} prev={prevKpi.adjustedTotal} isCurrency enabled={!!compPeriod} />,
+            delta: <Delta curr={agg.total} prev={prevAgg.total} isCurrency enabled={!!compPeriod} />,
         },
         {
-            label: '餐點營收', value: `$${formatCurrency(kpi.dineIn)}`,
+            label: '餐點營收', value: `$${formatCurrency(agg.dineIn)}`,
             gradFrom: '#D47856', gradTo: '#EAA07C', textColor: 'text-[#8A3A18]',
             sub: <>
-                    {`白天 $${formatCurrency(kpi.day)}`}<br />{`晚上 $${formatCurrency(kpi.night)}`}
-                    {periodAdjTotal !== 0 && <><br /><span className="text-orange-400">折扣 {periodAdjTotal > 0 ? '+' : '−'}${formatCurrency(Math.abs(periodAdjTotal))}</span></>}
+                    {`白天 $${formatCurrency(agg.day)}`}<br />{`晚上 $${formatCurrency(agg.night)}`}
+                    {agg.adjustmentAmount !== 0 && <><br /><span className="text-orange-400">折扣 {agg.adjustmentAmount > 0 ? '+' : '−'}${formatCurrency(Math.abs(agg.adjustmentAmount))}</span></>}
                   </>,
-            delta: <Delta curr={kpi.dineIn} prev={prevKpi.dineIn} isCurrency enabled={!!compPeriod} />,
+            delta: <Delta curr={agg.dineIn} prev={prevAgg.dineIn} isCurrency enabled={!!compPeriod} />,
         },
         ...groupCards,
         {
-            label: '來客數',   value: `${kpi.customers} 人`,
+            label: '來客數',   value: `${agg.customers} 人`,
             gradFrom: '#D0A830', gradTo: '#EAC860', textColor: 'text-[#7A5800]',
             sub: null,
-            delta: <Delta curr={kpi.customers} prev={prevKpi.customers} enabled={!!compPeriod} />,
+            delta: <Delta curr={agg.customers} prev={prevAgg.customers} enabled={!!compPeriod} />,
         },
         {
-            label: '客單價',   value: `$${formatCurrency(kpi.avgSpend)}`,
+            label: '客單價',   value: `$${formatCurrency(agg.avgSpend)}`,
             gradFrom: '#6888A8', gradTo: '#96AACC', textColor: 'text-[#2A4868]',
-            sub: <>{`白天 $${formatCurrency(kpi.dayAvgSpend)}`}<br />{`晚上 $${formatCurrency(kpi.nightAvgSpend)}`}</>,
-            delta: <Delta curr={kpi.avgSpend} prev={prevKpi.avgSpend} isCurrency enabled={!!compPeriod} />,
+            sub: <>{`白天 $${formatCurrency(agg.dayAvgSpend)}`}<br />{`晚上 $${formatCurrency(agg.nightAvgSpend)}`}</>,
+            delta: <Delta curr={agg.avgSpend} prev={prevAgg.avgSpend} isCurrency enabled={!!compPeriod} />,
         },
     ];
 
@@ -702,7 +741,7 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
             )}
 
             {/* Trend chart */}
-            <TrendChart filteredOrders={slotOrders} isSingleDay={isSingleDay} nonRevenueCats={nonRevenueCats} />
+            <TrendChart filteredOrders={slotOrders} dailyRows={dailyRows} isSingleDay={isSingleDay} nonRevenueCats={nonRevenueCats} />
 
             {/* Breakdown table */}
             <div className="bg-white rounded-xl shadow overflow-hidden">
@@ -878,15 +917,7 @@ const RankingTab = ({ filteredOrders, nonRevenueCats }) => {
     const [timeSlot,  setTimeSlot]  = useState('all');
     const [catFilter, setCatFilter] = useState('全部');
 
-    const slotOrders = useMemo(() => {
-        if (timeSlot === 'all') return filteredOrders;
-        return filteredOrders.filter(o => {
-            const min = tsToMinOfDayTW(o.timestamp);
-            if (timeSlot === 'lunch')  return min >= 11 * 60 && min <= 16 * 60;
-            if (timeSlot === 'dinner') return min >  16 * 60 && min <= 22 * 60;
-            return true;
-        });
-    }, [filteredOrders, timeSlot]);
+    const slotOrders = useMemo(() => applyTimeSlot(filteredOrders, timeSlot), [filteredOrders, timeSlot]);
 
     const { itemRank, catRank, groupRank } = useMemo(() => {
         const itemMap  = new Map();
@@ -1116,6 +1147,7 @@ const RankingTab = ({ filteredOrders, nonRevenueCats }) => {
 // ----------------------------------------------------------------------
 const ReportPage = () => {
     const [orders, setOrders]           = useState([]);
+    const [sessions, setSessions]       = useState([]);
     const [adjustments, setAdjustments] = useState([]);
     const [isLoading, setIsLoading]     = useState(true);
     const [tab, setTab]                 = useState('summary');
@@ -1134,13 +1166,15 @@ const ReportPage = () => {
     const loadOrders = async () => {
         setIsLoading(true);
         try {
-            const [raw, cats, adjData] = await Promise.all([
+            const [raw, cats, adjData, sessionRows] = await Promise.all([
                 getReportOrders(),
                 getCategorySettings(),
                 fetch('/api/adjustments').then(r => r.json()).catch(() => []),
+                getReportSessions('2023-01-01', today()).catch(() => []),
             ]);
             setAdjustments(Array.isArray(adjData) ? adjData : []);
             setCatSettings(cats);
+            setSessions(Array.isArray(sessionRows) ? sessionRows : []);
             const chronological = [...raw].sort((a, b) => a.timestamp - b.timestamp);
             const seen = new Map();
             const processed = chronological.map(order => {
@@ -1248,6 +1282,7 @@ const ReportPage = () => {
                     nonRevenueCats={nonRevenueCats}
                     catSettings={catSettings}
                     adjustments={adjustments}
+                    sessions={sessions}
                   />
                 : <RankingTab filteredOrders={filteredOrders} nonRevenueCats={nonRevenueCats} />
             }

@@ -342,6 +342,10 @@ export async function archiveTakeoutOrder(orderId) {
 export async function getReportOrders() {
     return api('GET', '/api/orders/report');
 }
+// 彙總報表資料（午/晚各一列），四個地方的「營業額」「客單價」共用的單一來源
+export async function getReportSessions(start, end) {
+    return api('GET', `/api/report/sessions?start=${start}&end=${end}`);
+}
 
 // ======================================================================
 // 發票
