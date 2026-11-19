@@ -76,6 +76,13 @@ const Icon = ({ name, className = 'w-5 h-5' }) => {
                 <circle cx="12" cy="12" r="3" strokeWidth="1.8" />
             </svg>
         ),
+        calendar: (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <rect x="3" y="5" width="18" height="16" rx="2" strokeWidth="1.8" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M3 9h18M8 3v4M16 3v4" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M8 13h2m4 0h2m-8 4h2m4 0h2" />
+            </svg>
+        ),
         hamburger: (
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
@@ -94,7 +101,7 @@ const navItems = [
     { name: '菜單',   path: '/menu',        icon: 'menu'       },
     { name: '註記',   path: '/remarks',     icon: 'remarks'    },
     { name: '顧客',   path: '/customers',   icon: 'customers'  },
-    { name: '設定',   path: '/settings',    icon: 'settings'   },
+    { name: '設定',   path: '/settings',    icon: 'calendar'   },
 ];
 
 const NavButton = ({ item, isExpanded, currentPath }) => {
@@ -104,7 +111,7 @@ const NavButton = ({ item, isExpanded, currentPath }) => {
             to={item.path}
             className={`flex items-center p-3 my-0.5 rounded-xl transition-all ${
                 isActive
-                    ? 'bg-teal-500 text-gray-900 font-semibold shadow-sm'
+                    ? 'bg-[#4A9A7A] text-white font-semibold shadow-sm'
                     : 'text-gray-300 hover:bg-gray-700 hover:text-white'
             } ${isExpanded ? 'w-full' : 'justify-center w-full'}`}
         >
@@ -152,7 +159,7 @@ const Sidebar = ({ isSidebarOpen, toggleSidebar }) => {
                 <Link
                     to={tableItem.path}
                     className={`flex items-center p-3 my-0.5 rounded-xl font-bold transition-all w-full ${
-                        isTableActive ? 'bg-teal-500 text-gray-900 shadow-sm' : 'text-gray-300 hover:bg-gray-700 hover:text-white'
+                        isTableActive ? 'bg-[#4A9A7A] text-white shadow-sm' : 'text-gray-300 hover:bg-gray-700 hover:text-white'
                     } ${isSidebarOpen ? 'justify-start' : 'justify-center'}`}
                 >
                     <Icon name="table" />

@@ -10,7 +10,8 @@ import {
     occupyTableWithoutOrder,
     moveOrderToTable,
     getSettingValue,
-    saveSettingValue,
+    getStoreCalendar,
+    saveStoreCalendarDay,
 } from '../db';
 
 import TableCard from '../components/TableCard';
@@ -329,22 +330,22 @@ const TableManagementPage = () => {
     // 每天結束後到當晚關帳前 lastCloseDate 本來就會是「昨天」，這是正常情況不算漏關
     const checkMissedClose = useCallback(async () => {
         try {
-            const [raw, holidaysRaw] = await Promise.all([
-                getSettingValue('last_close_time', null),
-                getSettingValue('store_holiday_dates', null),
-            ]);
+            const raw = await getSettingValue('last_close_time', null);
             if (!raw) { setMissedCloseDate(null); setMissedCloseDateKey(null); return; } // 從未關過帳，無從比對，不提醒
-            const holidays = new Set(holidaysRaw ? JSON.parse(holidaysRaw) : []);
             const lastClose = new Date(parseInt(raw, 10));
             const lastCloseDay = new Date(lastClose.getFullYear(), lastClose.getMonth(), lastClose.getDate());
             const today = new Date();
             const todayDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
 
+            // 全天店休（午晚都標記不營業）才算已標記，跳過漏關提醒
+            const calRows = await getStoreCalendar(toDateKey(lastCloseDay.getTime()), toDateKey(todayDay.getTime()));
+            const fullHolidays = new Set(calRows.filter(r => !r.lunchOpen && !r.dinnerOpen).map(r => r.date));
+
             // 從上次關帳隔天開始逐日檢查，跳過已標記店休的日期，找出第一個真正被漏掉的日期
             let cursor = new Date(lastCloseDay.getTime() + 86400000);
             while (cursor < todayDay) {
                 const key = toDateKey(cursor.getTime());
-                if (!holidays.has(key)) {
+                if (!fullHolidays.has(key)) {
                     setMissedCloseDate(`${cursor.getMonth() + 1}/${cursor.getDate()}`);
                     setMissedCloseDateKey(key);
                     return;
@@ -376,16 +377,17 @@ const TableManagementPage = () => {
     const handleConfirmHoliday = useCallback(async () => {
         if (!missedCloseDateKey || !holidayEndDate) return;
         try {
-            const holidaysRaw = await getSettingValue('store_holiday_dates', null);
-            const holidays = new Set(holidaysRaw ? JSON.parse(holidaysRaw) : []);
             let cursor = new Date(missedCloseDateKey + 'T00:00:00');
             const clampedEnd = holidayEndDate > yesterdayKey ? yesterdayKey : holidayEndDate;
             const end = new Date(clampedEnd + 'T00:00:00');
+            const days = [];
             while (cursor <= end) {
-                holidays.add(toDateKey(cursor.getTime()));
+                days.push(toDateKey(cursor.getTime()));
                 cursor = new Date(cursor.getTime() + 86400000);
             }
-            await saveSettingValue('store_holiday_dates', JSON.stringify(Array.from(holidays)));
+            await Promise.all(days.map(date =>
+                saveStoreCalendarDay(date, { lunchOpen: false, dinnerOpen: false, note: '店休' })
+            ));
             setShowHolidayPicker(false);
             await checkMissedClose();
         } catch (e) {

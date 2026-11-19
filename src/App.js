@@ -21,14 +21,9 @@ import CashDrawerPage from './pages/CashDrawer';
 import TakeoutPage from './pages/Takeout';
 import CustomerManagementPage from './pages/CustomerManagement';
 import RemarkManagementPage from './pages/RemarkManagement';
+import SettingsPage from './pages/Settings';
 
 import './index.css';
-
-// ----------------------------------------------------------------------
-// 未完成頁面占位
-// ----------------------------------------------------------------------
-const EmptyPage = ({ name }) => <h1 className="text-3xl font-bold pt-4">{name} - 🚧 施工中</h1>;
-const SettingsPage = () => <EmptyPage name="設定" />;
 
 /**
  * 內部路由包裝組件

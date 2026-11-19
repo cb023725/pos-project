@@ -5,7 +5,7 @@ import {
     XAxis, YAxis, CartesianGrid,
     Tooltip, ResponsiveContainer,
 } from 'recharts';
-import { getReportOrders, getCategorySettings, getReportSessions } from '../db';
+import { getReportOrders, getCategorySettings, getReportSessions, getStoreCalendar } from '../db';
 
 const formatCurrency = (n) => Math.round(n || 0).toLocaleString('en-US');
 
@@ -195,6 +195,8 @@ const SortBtn = ({ label, k, currentSort, setSort }) => {
 // shared breakdown table — column headers clickable for sort when showDay=true
 const BreakdownTable = ({ rows, labelHeader, showDay = false }) => {
     const [sort, setSort] = useState({ key: 'label', dir: 'asc' });
+    const [expandDayNight, setExpandDayNight] = useState(false); // 白天/晚上營業額預設收合在「營業額」裡
+    const [showClosed, setShowClosed] = useState(false);          // 預設隱藏店休日
 
     const sortedRows = useMemo(() => {
         if (!showDay) return rows;
@@ -204,63 +206,128 @@ const BreakdownTable = ({ rows, labelHeader, showDay = false }) => {
             else if (sort.key === 'total')     cmp = a.total - b.total;
             else if (sort.key === 'customers') cmp = a.customers - b.customers;
             else if (sort.key === 'avgSpend')  cmp = a.avgSpend - b.avgSpend;
+            else if (sort.key === 'dayRev')    cmp = a.dayRev - b.dayRev;
+            else if (sort.key === 'nightRev')  cmp = a.nightRev - b.nightRev;
+            else if (sort.key === 'frozen')    cmp = a.frozen - b.frozen;
+            else if (sort.key === 'weekday') {
+                cmp = DAY_ZH.indexOf(a.dayOfWeek) - DAY_ZH.indexOf(b.dayOfWeek);
+                // 同星期的日子依日期排在一起，方便比較同一星期不同週的表現差異
+                if (cmp === 0) cmp = a.label.localeCompare(b.label);
+            }
             return sort.dir === 'asc' ? cmp : -cmp;
         });
     }, [rows, sort, showDay]);
 
+    const closedCount = useMemo(() => showDay ? rows.filter(r => r.closed).length : 0, [rows, showDay]);
+    const visibleRows = useMemo(() => {
+        if (!showDay || showClosed) return sortedRows;
+        return sortedRows.filter(r => !r.closed);
+    }, [sortedRows, showDay, showClosed]);
+
     const toggle = (key) => setSort(prev =>
         prev.key === key
             ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
-            : { key, dir: key === 'label' ? 'asc' : 'desc' }
+            : { key, dir: (key === 'label' || key === 'weekday') ? 'asc' : 'desc' }
     );
     const icon = (key) => sort.key === key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : '';
-    const thCls = (key, align = 'left') =>
-        `px-4 py-2 text-${align} text-xs font-bold text-gray-500 cursor-pointer select-none hover:text-[#4A9A7A] transition-colors`;
+    const thCls = (key, align = 'left', px = 'px-4') =>
+        `${px} py-2 text-${align} text-xs font-bold text-gray-500 cursor-pointer select-none hover:text-[#4A9A7A] transition-colors`;
 
     // week separators only when sorted by date asc
     const useWeekSep = showDay && sort.key === 'label' && sort.dir === 'asc';
-    const colSpan = showDay ? 5 : 4;
+    const colSpan = showDay ? (6 + (expandDayNight ? 2 : 0)) : 4;
+    const money = (v) => v > 0 ? `$${formatCurrency(v)}` : (v < 0 ? `-$${formatCurrency(Math.abs(v))}` : '—');
 
     return (
-        <div className="overflow-x-auto">
+        <div>
+            {showDay && (
+                <div className="flex items-center justify-end gap-4 px-4 pt-3 pb-1">
+                    {closedCount > 0 && (
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                            <span className="text-xs font-bold text-gray-500">顯示店休日（{closedCount}）</span>
+                            <div
+                                onClick={() => setShowClosed(v => !v)}
+                                className={`relative w-9 h-5 rounded-full transition-colors ${showClosed ? 'bg-[#4A9A7A]' : 'bg-gray-300'}`}
+                            >
+                                <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${showClosed ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                            </div>
+                        </label>
+                    )}
+                </div>
+            )}
+            <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-100 text-sm">
                 <thead className="bg-gray-50">
                     <tr>
-                        <th onClick={() => showDay && toggle('label')} className={showDay ? thCls('label') + ' w-28' : 'px-4 py-2 text-left text-xs font-bold text-gray-500 w-28'}>
+                        <th onClick={() => showDay && toggle('label')} className={showDay ? thCls('label', 'left', 'px-2') + ' w-20' : 'px-4 py-2 text-left text-xs font-bold text-gray-500 w-28'}>
                             {labelHeader}{showDay && icon('label')}
                         </th>
-                        {showDay && <th className="px-3 py-2 text-center text-xs font-bold text-gray-500 w-14">星期</th>}
-                        <th onClick={() => showDay && toggle('total')}     className={showDay ? thCls('total', 'right') + ' w-32' : 'px-4 py-2 text-right text-xs font-bold text-gray-500 w-32'}>營業額{showDay && icon('total')}</th>
+                        {showDay && <th onClick={() => toggle('weekday')} className={thCls('weekday', 'center', 'px-1') + ' w-10'}>星期{icon('weekday')}</th>}
+                        <th onClick={() => showDay && toggle('total')}     className={showDay ? thCls('total', 'right') + ' w-32' : 'px-4 py-2 text-right text-xs font-bold text-gray-500 w-32'}>
+                            <span className="inline-flex items-center gap-1.5">
+                                {showDay && (
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); setExpandDayNight(v => !v); }}
+                                        title={expandDayNight ? '收合白天/晚上營業額' : '展開白天/晚上營業額'}
+                                        className="inline-flex items-center justify-center w-6 h-6 rounded border border-gray-300 text-gray-500 hover:border-[#4A9A7A] hover:text-[#4A9A7A] hover:bg-[#4A9A7A]/10 font-black text-base leading-none"
+                                    >
+                                        {expandDayNight ? '−' : '+'}
+                                    </button>
+                                )}
+                                營業額{showDay && icon('total')}
+                            </span>
+                        </th>
+                        {showDay && expandDayNight && <th onClick={() => toggle('dayRev')}   className={thCls('dayRev', 'right') + ' w-28'}>白天營業額{icon('dayRev')}</th>}
+                        {showDay && expandDayNight && <th onClick={() => toggle('nightRev')} className={thCls('nightRev', 'right') + ' w-28'}>晚上營業額{icon('nightRev')}</th>}
+                        {showDay && <th onClick={() => toggle('frozen')}   className={thCls('frozen', 'right') + ' w-28'}>冷凍包金額{icon('frozen')}</th>}
                         <th onClick={() => showDay && toggle('customers')} className={showDay ? thCls('customers', 'center') + ' w-20' : 'px-4 py-2 text-center text-xs font-bold text-gray-500 w-20'}>來客數{showDay && icon('customers')}</th>
                         <th onClick={() => showDay && toggle('avgSpend')}  className={showDay ? thCls('avgSpend', 'right') + ' w-24' : 'px-4 py-2 text-right text-xs font-bold text-gray-500 w-24'}>客單價{showDay && icon('avgSpend')}</th>
                     </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                    {sortedRows.length === 0 ? (
+                    {visibleRows.length === 0 ? (
                         <tr><td colSpan={colSpan} className="px-4 py-8 text-center text-gray-400">此日期區間無紀錄</td></tr>
-                    ) : sortedRows.flatMap((row, i) => {
+                    ) : visibleRows.flatMap((row, i) => {
                         const isWeekend  = showDay && (row.dayOfWeek === '六' || row.dayOfWeek === '日');
                         const isWeekStart = useWeekSep && row.dayOfWeek === '四' && i > 0;
-                        const prevRow = sortedRows[i - 1];
+                        const prevRow = visibleRows[i - 1];
                         const isHourGap = !showDay && i > 0 && prevRow &&
                             parseInt(row.label) - parseInt(prevRow.label) > 1;
+                        const closed = showDay && row.closed;
                         const rowEl = (
-                            <tr key={`r${i}`} className={`hover:bg-gray-50 ${row.total > 0 ? '' : 'opacity-40'} ${isWeekend ? 'bg-orange-50/50' : ''}`}>
-                                <td className="px-4 py-2 font-bold text-gray-700">{row.label}</td>
+                            <tr key={`r${i}`} className={`hover:bg-gray-50 ${row.total > 0 || closed ? '' : 'opacity-40'} ${isWeekend ? 'bg-orange-50/50' : ''}`}>
+                                <td className={`py-2 font-bold text-gray-700 ${showDay ? 'px-2 text-xs' : 'px-4'}`}>{row.label}</td>
                                 {showDay && (
-                                    <td className={`px-3 py-2 text-center text-xs font-bold ${isWeekend ? 'text-orange-400' : 'text-gray-400'}`}>週{row.dayOfWeek}</td>
+                                    <td className={`px-1 py-2 text-center text-xs font-bold ${isWeekend ? 'text-orange-400' : 'text-gray-400'}`}>週{row.dayOfWeek}</td>
                                 )}
-                                <td className={`px-4 py-2 text-right font-bold ${row.total > 0 ? 'text-gray-800' : 'text-gray-400'}`}>${formatCurrency(row.total)}</td>
-                                <td className={`px-4 py-2 text-center ${row.customers > 0 ? 'text-gray-700' : 'text-gray-400'}`}>{row.customers > 0 ? row.customers : '—'}</td>
-                                <td className={`px-4 py-2 text-right ${row.avgSpend > 0 ? 'text-gray-700' : 'text-gray-400'}`}>{row.avgSpend > 0 ? `$${formatCurrency(row.avgSpend)}` : '—'}</td>
+                                {closed ? (
+                                    <>
+                                        <td className="px-4 py-2 text-right font-bold text-gray-300">—</td>
+                                        {expandDayNight && <td className="px-4 py-2 text-right text-gray-300">—</td>}
+                                        {expandDayNight && <td className="px-4 py-2 text-right text-gray-300">—</td>}
+                                        <td className="px-4 py-2 text-right text-gray-300">—</td>
+                                        <td className="px-4 py-2 text-center text-gray-300">—</td>
+                                        <td className="px-4 py-2 text-right text-gray-300">—</td>
+                                    </>
+                                ) : (
+                                    <>
+                                        <td className={`px-4 py-2 text-right font-bold ${row.total > 0 ? 'text-gray-800' : 'text-gray-400'}`}>{money(row.total)}</td>
+                                        {expandDayNight && <td className={`px-4 py-2 text-right ${row.dayRev > 0 ? 'text-gray-600' : 'text-gray-400'}`}>{money(row.dayRev)}</td>}
+                                        {expandDayNight && <td className={`px-4 py-2 text-right ${row.nightRev > 0 ? 'text-gray-600' : 'text-gray-400'}`}>{money(row.nightRev)}</td>}
+                                        {showDay && <td className={`px-4 py-2 text-right font-bold ${row.frozen > 0 ? 'text-gray-800' : 'text-gray-400'}`}>{money(row.frozen)}</td>}
+                                        <td className={`px-4 py-2 text-center ${row.customers > 0 ? 'text-gray-700' : 'text-gray-400'}`}>{row.customers > 0 ? row.customers : '—'}</td>
+                                        <td className={`px-4 py-2 text-right ${row.avgSpend > 0 ? 'text-gray-700' : 'text-gray-400'}`}>{row.avgSpend > 0 ? `$${formatCurrency(row.avgSpend)}` : '—'}</td>
+                                    </>
+                                )}
                             </tr>
                         );
-                        if (isWeekStart) return [<tr key={`sep${i}`}><td colSpan={5} className="p-0 bg-gray-300 h-px" /></tr>, rowEl];
+                        if (isWeekStart) return [<tr key={`sep${i}`}><td colSpan={colSpan} className="p-0 bg-gray-300 h-px" /></tr>, rowEl];
                         if (isHourGap)  return [<tr key={`gap${i}`}><td colSpan={colSpan} className="p-0 bg-gray-200 h-px" /></tr>, rowEl];
                         return [rowEl];
                     })}
                 </tbody>
             </table>
+            </div>
         </div>
     );
 };
@@ -423,7 +490,7 @@ const applyTimeSlot = (orders, slot) => {
 
 const fmtMD = (dateStr) => dateStr ? dateStr.slice(5).replace('-', '/') : '';
 
-const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate, nonRevenueCats, catSettings, adjustments = [], sessions = [] }) => {
+const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate, nonRevenueCats, catSettings, adjustments = [], sessions = [], storeCalendar = [] }) => {
     const [summarySlot, setSummarySlot] = useState('all');
     const [historyPage, setHistoryPage] = useState(1);
 
@@ -448,13 +515,38 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
         return m;
     }, [sessions]);
 
+    // date -> { lunchOpen, dinnerOpen }；沒有紀錄的日子視為正常營業（兩者皆 true）
+    const storeCalendarMap = useMemo(() => {
+        const m = new Map();
+        storeCalendar.forEach(r => m.set(r.date, { lunchOpen: r.lunchOpen, dinnerOpen: r.dinnerOpen }));
+        return m;
+    }, [storeCalendar]);
+    const isFullyClosed = useCallback((date) => {
+        const cal = storeCalendarMap.get(date);
+        return !!cal && !cal.lunchOpen && !cal.dinnerOpen;
+    }, [storeCalendarMap]);
+    // 列出期間內每一個日曆日（不限於有銷售紀錄的日子），供「平日 vs 假日」日均計算排除店休日用
+    const enumDates = useCallback((startD, endD) => {
+        let s = startD, e = endD;
+        if (!s || !e) {
+            const keys = [...sessionsByDate.keys()];
+            if (!keys.length) return [];
+            s = keys.reduce((a, b) => (a < b ? a : b));
+            e = keys.reduce((a, b) => (a > b ? a : b));
+        }
+        const dates = [];
+        let cur = s;
+        while (cur <= e) { dates.push(cur); cur = addDays(cur, 1); }
+        return dates;
+    }, [sessionsByDate]);
+
     // 期間內（依選定時段）彙總：營業額＝net_revenue、客單價分子＝meal_net_revenue（四個地方共用的算法）
     const aggSessions = useCallback((startD, endD, slot) => {
         let netRevenue = 0, mealNetRevenue = 0, frozenRevenue = 0, adjustmentAmount = 0;
         let customers = 0, lunchNet = 0, dinnerNet = 0, lunchCust = 0, dinnerCust = 0, lunchMealNet = 0, dinnerMealNet = 0;
         // startD/endD 為 undefined（例如沒有比較期間）時回傳全 0；空字串代表「全部」= 不限制範圍
         if (startD === undefined || endD === undefined) {
-            return { total: 0, dineIn: 0, frozen: 0, customers: 0, adjustmentAmount: 0, day: 0, night: 0, avgSpend: 0, dayAvgSpend: 0, nightAvgSpend: 0 };
+            return { total: 0, dineIn: 0, frozen: 0, customers: 0, adjustmentAmount: 0, day: 0, night: 0, dayCustomers: 0, nightCustomers: 0, avgSpend: 0, dayAvgSpend: 0, nightAvgSpend: 0 };
         }
         sessionsByDate.forEach((day, date) => {
             if (startD && date < startD) return;
@@ -471,7 +563,7 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
         });
         return {
             total: netRevenue, dineIn: mealNetRevenue, frozen: frozenRevenue, customers, adjustmentAmount,
-            day: lunchNet, night: dinnerNet,
+            day: lunchNet, night: dinnerNet, dayCustomers: lunchCust, nightCustomers: dinnerCust,
             avgSpend:      customers  > 0 ? Math.round(mealNetRevenue / customers)  : 0,
             dayAvgSpend:   lunchCust  > 0 ? Math.round(lunchMealNet  / lunchCust)   : 0,
             nightAvgSpend: dinnerCust > 0 ? Math.round(dinnerMealNet / dinnerCust)  : 0,
@@ -492,11 +584,13 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
     const periodAdjTotal = useMemo(() => periodAdj.reduce((s, a) => s + (a.amount || 0), 0), [periodAdj]);
 
     // 平日 vs 假日日均統計（餐點實收 ÷ 來客，與其他 KPI 同一來源）
+    // 日均的分母＝實際有營業的日曆日（依 store_calendar 排除全天店休），
+    // 而不是「有銷售紀錄的日子」——避免把店休跟沒客人混在一起（店休不計入天數，開店但沒客人仍計入、算 $0）
     const wwKpi = useMemo(() => {
-        const dayMap = new Map();
-        sessionsByDate.forEach((day, date) => {
-            if (startDate && date < startDate) return;
-            if (endDate   && date > endDate)   return;
+        const weekdays = [], weekends = [];
+        enumDates(startDate, endDate).forEach(date => {
+            if (isFullyClosed(date)) return;
+            const day = sessionsByDate.get(date) || {};
             let revenue = 0, customers = 0;
             ['lunch', 'dinner'].forEach(mp => {
                 if (summarySlot !== 'all' && summarySlot !== mp) return;
@@ -504,13 +598,8 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
                 if (!r) return;
                 revenue += r.mealNetRevenue; customers += r.customers;
             });
-            if (revenue === 0 && customers === 0) return;
-            dayMap.set(date, { date, revenue, customers });
-        });
-        const weekdays = [], weekends = [];
-        dayMap.forEach(day => {
-            const dow = new Date(day.date + 'T12:00:00+08:00').getDay();
-            (dow === 0 || dow === 6 ? weekends : weekdays).push(day);
+            const dow = new Date(date + 'T12:00:00+08:00').getDay();
+            (dow === 0 || dow === 6 ? weekends : weekdays).push({ date, revenue, customers });
         });
         const calc = (arr) => {
             if (arr.length === 0) return { days: 0, avgRevenue: 0, avgCustomers: 0, avgSpend: 0 };
@@ -524,7 +613,7 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
             };
         };
         return { weekday: calc(weekdays), weekend: calc(weekends) };
-    }, [sessionsByDate, startDate, endDate, summarySlot]);
+    }, [sessionsByDate, enumDates, isFullyClosed, startDate, endDate, summarySlot]);
 
     const isSingleDay = startDate && endDate && startDate === endDate;
 
@@ -555,24 +644,27 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
     }, [slotOrders, nonRevenueCats, summarySlot]);
 
     // Daily rows — 營業額＝net_revenue、客單價＝meal_net_revenue÷來客（與 KPI 卡同一來源）
+    // dayRev/nightRev＝當日白天/晚上營業額；frozen＝冷凍包金額；closed＝依 store_calendar 全天店休
     const dailyRows = useMemo(() => {
         const dayMap = new Map();
+        const mk = (date) => ({ label: date, total: 0, mealNet: 0, customers: 0, dayRev: 0, nightRev: 0, frozen: 0 });
         sessionsByDate.forEach((day, date) => {
             if (startDate && date < startDate) return;
             if (endDate   && date > endDate)   return;
-            let total = 0, mealNet = 0, customers = 0;
+            const row = mk(date);
             ['lunch', 'dinner'].forEach(mp => {
                 if (summarySlot !== 'all' && summarySlot !== mp) return;
                 const r = day[mp];
                 if (!r) return;
-                total += r.netRevenue; mealNet += r.mealNetRevenue; customers += r.customers;
+                row.total += r.netRevenue; row.mealNet += r.mealNetRevenue; row.customers += r.customers; row.frozen += r.frozenRevenue;
+                if (mp === 'lunch') row.dayRev += r.netRevenue; else row.nightRev += r.netRevenue;
             });
-            dayMap.set(date, { label: date, total, mealNet, customers });
+            dayMap.set(date, row);
         });
         if (startDate && endDate) {
             let cur = startDate;
             while (cur <= endDate) {
-                if (!dayMap.has(cur)) dayMap.set(cur, { label: cur, total: 0, mealNet: 0, customers: 0 });
+                if (!dayMap.has(cur)) dayMap.set(cur, mk(cur));
                 cur = addDays(cur, 1);
             }
         }
@@ -580,9 +672,10 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
             ...r,
             avgSpend: r.customers > 0 ? Math.round(r.mealNet / r.customers) : 0,
             dayOfWeek: getDayOfWeek(r.label),
+            closed: isFullyClosed(r.label),
         }));
         return rows.sort((a, b) => a.label.localeCompare(b.label));
-    }, [sessionsByDate, startDate, endDate, summarySlot]);
+    }, [sessionsByDate, isFullyClosed, startDate, endDate, summarySlot]);
 
     // Dynamic group KPI cards (one per non-'营業額' reportGroup)
     const GROUP_CARD_COLORS = [
@@ -633,7 +726,7 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
         {
             label: '來客數',   value: `${agg.customers} 人`,
             gradFrom: '#D0A830', gradTo: '#EAC860', textColor: 'text-[#7A5800]',
-            sub: null,
+            sub: <>{`白天 ${agg.dayCustomers} 人`}<br />{`晚上 ${agg.nightCustomers} 人`}</>,
             delta: <Delta curr={agg.customers} prev={prevAgg.customers} enabled={!!compPeriod} />,
         },
         {
@@ -746,9 +839,7 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
             {/* Breakdown table */}
             <div className="bg-white rounded-xl shadow overflow-hidden">
                 <div className="px-5 py-3 border-b border-gray-100">
-                    <h3 className="font-black text-gray-800">{isSingleDay ? '每小時業績' : '每日業績'}
-                        {!isSingleDay && <span className="ml-2 text-xs font-normal text-gray-400">點擊欄位標題排序</span>}
-                    </h3>
+                    <h3 className="font-black text-gray-800">{isSingleDay ? '每小時業績' : '每日業績'}</h3>
                 </div>
                 <BreakdownTable rows={isSingleDay ? hourlyRows : dailyRows} labelHeader={isSingleDay ? '小時' : '日期'} showDay={!isSingleDay} />
             </div>
@@ -1148,6 +1239,7 @@ const RankingTab = ({ filteredOrders, nonRevenueCats }) => {
 const ReportPage = () => {
     const [orders, setOrders]           = useState([]);
     const [sessions, setSessions]       = useState([]);
+    const [storeCalendar, setStoreCalendar] = useState([]);
     const [adjustments, setAdjustments] = useState([]);
     const [isLoading, setIsLoading]     = useState(true);
     const [tab, setTab]                 = useState('summary');
@@ -1166,15 +1258,17 @@ const ReportPage = () => {
     const loadOrders = async () => {
         setIsLoading(true);
         try {
-            const [raw, cats, adjData, sessionRows] = await Promise.all([
+            const [raw, cats, adjData, sessionRows, calRows] = await Promise.all([
                 getReportOrders(),
                 getCategorySettings(),
                 fetch('/api/adjustments').then(r => r.json()).catch(() => []),
                 getReportSessions('2023-01-01', today()).catch(() => []),
+                getStoreCalendar('2023-01-01', today()).catch(() => []),
             ]);
             setAdjustments(Array.isArray(adjData) ? adjData : []);
             setCatSettings(cats);
             setSessions(Array.isArray(sessionRows) ? sessionRows : []);
+            setStoreCalendar(Array.isArray(calRows) ? calRows : []);
             const chronological = [...raw].sort((a, b) => a.timestamp - b.timestamp);
             const seen = new Map();
             const processed = chronological.map(order => {
@@ -1283,6 +1377,7 @@ const ReportPage = () => {
                     catSettings={catSettings}
                     adjustments={adjustments}
                     sessions={sessions}
+                    storeCalendar={storeCalendar}
                   />
                 : <RankingTab filteredOrders={filteredOrders} nonRevenueCats={nonRevenueCats} />
             }

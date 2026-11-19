@@ -180,6 +180,17 @@ export async function saveSettingValue(key, value) {
     return api('POST', `/api/settings/${key}`, { value });
 }
 
+// ── 店休日曆（store_calendar）──────────────────────────────────────────
+export async function getStoreCalendar(start, end) {
+    return api('GET', `/api/store-calendar?start=${start}&end=${end}`);
+}
+export async function saveStoreCalendarDay(date, { lunchOpen, dinnerOpen, note }) {
+    return api('PUT', `/api/store-calendar/${date}`, { lunchOpen, dinnerOpen, note });
+}
+export async function deleteStoreCalendarDay(date) {
+    return api('DELETE', `/api/store-calendar/${date}`);
+}
+
 // ── 庫存異動紀錄 ──────────────────────────────────────────────
 export async function getInventoryLogs(itemId) {
     const params = itemId ? `?item_id=${encodeURIComponent(itemId)}` : '';

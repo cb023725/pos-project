@@ -1907,6 +1907,34 @@ app.post('/api/settings/:key', async (req, res) => {
 });
 
 // ============================================================
+// 店休日曆（store_calendar）：沒有紀錄的日子 = 照常營業
+// ============================================================
+app.get('/api/store-calendar', async (req, res) => {
+    const { start, end } = req.query;
+    if (!start || !end) return res.status(400).json({ error: 'start 和 end 為必填（YYYY-MM-DD）' });
+    const { data, error } = await supabase.from('store_calendar').select('*')
+        .gte('date', start).lte('date', end).order('date');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json((data || []).map(r => ({
+        date: r.date, lunchOpen: r.lunch_open, dinnerOpen: r.dinner_open, note: r.note || '',
+    })));
+});
+app.put('/api/store-calendar/:date', async (req, res) => {
+    const { lunchOpen, dinnerOpen, note } = req.body;
+    const { error } = await supabase.from('store_calendar').upsert({
+        date: req.params.date, lunch_open: !!lunchOpen, dinner_open: !!dinnerOpen,
+        note: note || null, updated_at: new Date().toISOString(),
+    });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+});
+app.delete('/api/store-calendar/:date', async (req, res) => {
+    const { error } = await supabase.from('store_calendar').delete().eq('date', req.params.date);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+});
+
+// ============================================================
 // 轉換輔助函式（供上方路由使用）
 // ============================================================
 function orderToCamel(r) {
