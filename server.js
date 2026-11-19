@@ -1408,7 +1408,9 @@ app.post('/api/tables/:tableNumber/reset', async (req, res) => {
             if (activeInv && activeInv.length > 0) newStatus = 'archived_paid';
         }
         if (newStatus) {
-            await supabase.from('orders').update({ status: newStatus, updated_at: now }).eq('id', ord.id);
+            // cleared_at：入座時間＝開單到清桌，只在這裡（真正清桌）寫入，
+            // 跟 updated_at 分開是因為訂單後續可能還會被其他操作（作廢、補印等）更新 updated_at
+            await supabase.from('orders').update({ status: newStatus, updated_at: now, cleared_at: now }).eq('id', ord.id);
             // 棄單庫存扣除（依員工選擇）
             // 注意：庫存只在結帳時扣除，所以只處理「尚未結帳」的品項（isPaid !== true）
             if (newStatus === 'abandoned' && consumeInventory) {
@@ -2145,6 +2147,32 @@ app.delete('/api/store-calendar/:date', async (req, res) => {
 });
 
 // ============================================================
+// 客滿婉拒／候位（turnaways）
+// ============================================================
+app.post('/api/turnaways', async (req, res) => {
+    const { partySize, kind, note } = req.body;
+    const { data, error } = await supabase.from('turnaways').insert({
+        party_size: partySize || null, kind: kind === '候位' ? '候位' : '婉拒', note: note || null,
+    }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ id: data.id, occurredAt: new Date(data.occurred_at).getTime(), partySize: data.party_size, kind: data.kind, note: data.note });
+});
+app.get('/api/turnaways', async (req, res) => {
+    const { start, end } = req.query;
+    let q = supabase.from('turnaways').select('*').order('occurred_at', { ascending: false });
+    if (start) q = q.gte('occurred_at', new Date(start + 'T00:00:00+08:00').toISOString());
+    if (end)   q = q.lt('occurred_at', new Date(new Date(end + 'T00:00:00+08:00').getTime() + 86400000).toISOString());
+    const { data, error } = await q;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json((data || []).map(r => ({ id: r.id, occurredAt: new Date(r.occurred_at).getTime(), partySize: r.party_size, kind: r.kind, note: r.note })));
+});
+app.delete('/api/turnaways/:id', async (req, res) => {
+    const { error } = await supabase.from('turnaways').delete().eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+});
+
+// ============================================================
 // 轉換輔助函式（供上方路由使用）
 // ============================================================
 function orderToCamel(r) {
@@ -2160,6 +2188,7 @@ function orderToCamel(r) {
         sendTime: r.send_time ? Number(r.send_time) : null,
         finishTime: r.finish_time ? Number(r.finish_time) : null,
         specialNotes: r.special_notes || [],
+        clearedAt: r.cleared_at ? new Date(r.cleared_at).getTime() : null,
     };
 }
 function invoiceToCamel(r) {

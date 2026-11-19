@@ -12,6 +12,7 @@ import {
     getSettingValue,
     getStoreCalendar,
     saveStoreCalendarDay,
+    recordTurnaway,
 } from '../db';
 
 import TableCard from '../components/TableCard';
@@ -103,6 +104,60 @@ const ClearTableModal = ({ target, onConfirm, onCancel }) => {
                 <div className="flex divide-x divide-gray-100">
                     <button onClick={onCancel} className="flex-1 py-5 text-gray-400 font-black text-xl hover:bg-gray-50 transition-colors">取消</button>
                     <button onClick={onConfirm} className="flex-1 py-5 text-gray-600 font-black text-xl hover:bg-gray-100 transition-colors">確認清桌</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// 客滿婉拒／候位：記一筆時間、人數（選填）、婉拒或候位
+const TurnawayModal = ({ isOpen, onConfirm, onCancel }) => {
+    const [partySize, setPartySize] = useState('');
+    const [kind, setKind] = useState('婉拒');
+
+    useEffect(() => {
+        if (isOpen) { setPartySize(''); setKind('婉拒'); }
+    }, [isOpen]);
+
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+                <div className="flex flex-col items-center pt-8 pb-5 px-6">
+                    <div className="w-20 h-20 rounded-full bg-rose-50 border-[3px] border-rose-300 flex items-center justify-center mb-5">
+                        <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#e11d48" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="9" cy="7" r="4"/><path d="M2 21v-1a7 7 0 0114 0v1"/><line x1="17" y1="8" x2="22" y2="13"/><line x1="22" y1="8" x2="17" y2="13"/>
+                        </svg>
+                    </div>
+                    <h3 className="text-2xl font-black text-gray-800 mb-5">客滿婉拒 / 候位</h3>
+
+                    <div className="w-full flex gap-2 mb-4">
+                        {['婉拒', '候位'].map(k => (
+                            <button key={k} onClick={() => setKind(k)}
+                                className={`flex-1 py-3 rounded-xl font-black text-lg transition-colors ${kind === k ? 'bg-rose-500 text-white' : 'bg-gray-100 text-gray-500'}`}>
+                                {k}
+                            </button>
+                        ))}
+                    </div>
+                    <div className="w-full">
+                        <label className="text-sm font-bold text-gray-500 mb-1 block text-left">人數（選填）</label>
+                        <input
+                            type="number" min="1" value={partySize}
+                            onChange={e => setPartySize(e.target.value)}
+                            placeholder="不填也可以"
+                            className="w-full text-lg font-black text-center text-gray-800 bg-gray-50 border border-gray-300 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-rose-300"
+                        />
+                    </div>
+                </div>
+                <div className="border-t border-gray-100" />
+                <div className="flex divide-x divide-gray-100">
+                    <button onClick={onCancel} className="flex-1 py-5 text-gray-400 font-black text-xl hover:bg-gray-50 transition-colors">取消</button>
+                    <button
+                        onClick={() => onConfirm({ partySize: partySize ? parseInt(partySize, 10) : null, kind })}
+                        className="flex-1 py-5 text-rose-600 font-black text-xl hover:bg-rose-50 transition-colors"
+                    >
+                        記錄
+                    </button>
                 </div>
             </div>
         </div>
@@ -320,6 +375,19 @@ const TableManagementPage = () => {
     const [mergeSource, setMergeSource] = useState(null);         // { tableId, order, allOrders }
     const [missedCloseDate, setMissedCloseDate] = useState(null);    // 顯示用，例如 '7/12'
     const [missedCloseDateKey, setMissedCloseDateKey] = useState(null); // 'YYYY-MM-DD'，標記店休用
+    const [showTurnawayModal, setShowTurnawayModal] = useState(false);
+    const [turnawayToast, setTurnawayToast] = useState('');
+
+    const handleConfirmTurnaway = async ({ partySize, kind }) => {
+        setShowTurnawayModal(false);
+        try {
+            await recordTurnaway({ partySize, kind, note: null });
+            setTurnawayToast(`已記錄${kind}${partySize ? `（${partySize} 人）` : ''}`);
+            setTimeout(() => setTurnawayToast(''), 2500);
+        } catch (e) {
+            console.error('記錄客滿婉拒失敗:', e);
+        }
+    };
 
     const toDateKey = (ts) => {
         const d = new Date(ts);
@@ -707,6 +775,21 @@ const TableManagementPage = () => {
 
     return (
         <div className="h-[100dvh] w-full overflow-hidden flex flex-col font-sans bg-gray-50">
+            {/* 客滿婉拒／候位：浮動按鈕，隨時可記一筆，不佔桌況版面 */}
+            <button
+                onClick={() => setShowTurnawayModal(true)}
+                className="fixed bottom-5 right-5 z-40 w-14 h-14 rounded-full bg-rose-500 text-white shadow-lg flex items-center justify-center hover:bg-rose-600 active:scale-95 transition-all"
+                title="客滿婉拒 / 候位"
+            >
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="9" cy="7" r="4"/><path d="M2 21v-1a7 7 0 0114 0v1"/><line x1="17" y1="8" x2="22" y2="13"/><line x1="22" y1="8" x2="17" y2="13"/>
+                </svg>
+            </button>
+            {turnawayToast && (
+                <div className="fixed bottom-24 right-5 z-40 bg-gray-800 text-white text-sm font-bold px-4 py-2 rounded-xl shadow-lg">
+                    {turnawayToast}
+                </div>
+            )}
             {missedCloseDate && (
                 <div className="flex-shrink-0 flex items-center justify-between gap-3 px-4 py-2 bg-amber-500 text-white">
                     <span className="flex items-center gap-1.5 font-bold text-sm">
@@ -822,6 +905,11 @@ const TableManagementPage = () => {
                 target={abandonTarget}
                 onConfirm={handleConfirmAbandon}
                 onCancel={() => setAbandonTarget(null)}
+            />
+            <TurnawayModal
+                isOpen={showTurnawayModal}
+                onConfirm={handleConfirmTurnaway}
+                onCancel={() => setShowTurnawayModal(false)}
             />
             <SameTableMergeModal
                 sourceOrder={mergeSource?.order || null}

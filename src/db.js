@@ -191,6 +191,18 @@ export async function deleteStoreCalendarDay(date) {
     return api('DELETE', `/api/store-calendar/${date}`);
 }
 
+// ── 客滿婉拒／候位（turnaways）────────────────────────────────────────
+export async function recordTurnaway({ partySize, kind, note }) {
+    return api('POST', '/api/turnaways', { partySize, kind, note });
+}
+export async function getTurnaways(start, end) {
+    const qs = start && end ? `?start=${start}&end=${end}` : '';
+    return api('GET', `/api/turnaways${qs}`);
+}
+export async function deleteTurnaway(id) {
+    return api('DELETE', `/api/turnaways/${id}`);
+}
+
 // ── 外部事件紀錄（手動：廣告設定變更、菜單調價、營業時間變動…）──────────────
 export async function getExternalEvents() {
     const raw = await getSettingValue('external_events', null);

@@ -5,7 +5,7 @@ import {
     XAxis, YAxis, CartesianGrid,
     Tooltip, ResponsiveContainer,
 } from 'recharts';
-import { getReportOrders, getCategorySettings, getReportSessions, getStoreCalendar, downloadAnalysisExport } from '../db';
+import { getReportOrders, getCategorySettings, getReportSessions, getStoreCalendar, downloadAnalysisExport, getTurnaways } from '../db';
 
 const formatCurrency = (n) => Math.round(n || 0).toLocaleString('en-US');
 
@@ -537,7 +537,7 @@ const applyTimeSlot = (orders, slot) => {
 
 const fmtMD = (dateStr) => dateStr ? dateStr.slice(5).replace('-', '/') : '';
 
-const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate, nonRevenueCats, catSettings, adjustments = [], sessions = [], storeCalendar = [] }) => {
+const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate, nonRevenueCats, catSettings, adjustments = [], sessions = [], storeCalendar = [], turnaways = [] }) => {
     const [summarySlot, setSummarySlot] = useState('all');
     const [historyPage, setHistoryPage] = useState(1);
 
@@ -629,6 +629,21 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
         });
     }, [adjustments, startDate, endDate]);
     const periodAdjTotal = useMemo(() => periodAdj.reduce((s, a) => s + (a.amount || 0), 0), [periodAdj]);
+
+    // 客滿婉拒／候位：只需每個餐期的次數與人數（依開單時間同一套 15:45 分界）
+    const turnawayStats = useMemo(() => {
+        const lunch = { count: 0, people: 0 };
+        const dinner = { count: 0, people: 0 };
+        turnaways.forEach(t => {
+            const d = tsToDayTW(t.occurredAt);
+            if (startDate && d < startDate) return;
+            if (endDate   && d > endDate)   return;
+            const slot = tsToMinOfDayTW(t.occurredAt) < MEAL_SPLIT_MIN ? lunch : dinner;
+            slot.count += 1;
+            slot.people += t.partySize || 0;
+        });
+        return { lunch, dinner };
+    }, [turnaways, startDate, endDate]);
 
     // 平日 vs 假日日均統計（餐點實收 ÷ 來客，與其他 KPI 同一來源）
     // 日均的分母＝實際有營業的日曆日（依 store_calendar 排除全天店休），
@@ -877,6 +892,27 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
                             })}
                         </tbody>
                     </table>
+                </div>
+            )}
+
+            {/* 客滿婉拒／候位 */}
+            {(turnawayStats.lunch.count > 0 || turnawayStats.dinner.count > 0) && (
+                <div className="bg-white rounded-xl shadow overflow-hidden">
+                    <div className="px-5 py-3 border-b border-gray-100">
+                        <h3 className="font-black text-gray-800">客滿婉拒 / 候位</h3>
+                    </div>
+                    <div className="grid grid-cols-2 divide-x divide-gray-100">
+                        <div className="px-5 py-4 text-center">
+                            <p className="text-xs font-bold text-gray-400 mb-1">中午</p>
+                            <p className="text-2xl font-black text-rose-500">{turnawayStats.lunch.count} 次</p>
+                            <p className="text-xs text-gray-400 mt-1">{turnawayStats.lunch.people} 人</p>
+                        </div>
+                        <div className="px-5 py-4 text-center">
+                            <p className="text-xs font-bold text-gray-400 mb-1">晚上</p>
+                            <p className="text-2xl font-black text-rose-500">{turnawayStats.dinner.count} 次</p>
+                            <p className="text-xs text-gray-400 mt-1">{turnawayStats.dinner.people} 人</p>
+                        </div>
+                    </div>
                 </div>
             )}
 
@@ -1287,6 +1323,7 @@ const ReportPage = () => {
     const [orders, setOrders]           = useState([]);
     const [sessions, setSessions]       = useState([]);
     const [storeCalendar, setStoreCalendar] = useState([]);
+    const [turnaways, setTurnaways]     = useState([]);
     const [adjustments, setAdjustments] = useState([]);
     const [isLoading, setIsLoading]     = useState(true);
     const [tab, setTab]                 = useState('summary');
@@ -1305,17 +1342,19 @@ const ReportPage = () => {
     const loadOrders = async () => {
         setIsLoading(true);
         try {
-            const [raw, cats, adjData, sessionRows, calRows] = await Promise.all([
+            const [raw, cats, adjData, sessionRows, calRows, turnawayRows] = await Promise.all([
                 getReportOrders(),
                 getCategorySettings(),
                 fetch('/api/adjustments').then(r => r.json()).catch(() => []),
                 getReportSessions('2023-01-01', today()).catch(() => []),
                 getStoreCalendar('2023-01-01', today()).catch(() => []),
+                getTurnaways('2023-01-01', today()).catch(() => []),
             ]);
             setAdjustments(Array.isArray(adjData) ? adjData : []);
             setCatSettings(cats);
             setSessions(Array.isArray(sessionRows) ? sessionRows : []);
             setStoreCalendar(Array.isArray(calRows) ? calRows : []);
+            setTurnaways(Array.isArray(turnawayRows) ? turnawayRows : []);
             const chronological = [...raw].sort((a, b) => a.timestamp - b.timestamp);
             const seen = new Map();
             const processed = chronological.map(order => {
@@ -1428,6 +1467,7 @@ const ReportPage = () => {
                     adjustments={adjustments}
                     sessions={sessions}
                     storeCalendar={storeCalendar}
+                    turnaways={turnaways}
                   />
                 : <RankingTab filteredOrders={filteredOrders} nonRevenueCats={nonRevenueCats} />
             }
