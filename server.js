@@ -60,6 +60,23 @@ function twMinuteOfDay(isoString) {
 function twWeekday(dateStr) {
     return ['日', '一', '二', '三', '四', '五', '六'][new Date(dateStr + 'T12:00:00+08:00').getDay()];
 }
+function addDaysStr(dateStr, n) {
+    const d = new Date(dateStr + 'T12:00:00+08:00');
+    d.setUTCDate(d.getUTCDate() + n);
+    return twDateStr(d.toISOString());
+}
+// 週次：週四起算、週三結算。把日期往前移 3 天（週四→週一）後套用標準 ISO 週次算法即可
+function twWeekLabel(dateStr) {
+    const shifted = new Date(Date.UTC(...dateStr.split('-').map((v, i) => i === 1 ? v - 1 : +v)));
+    shifted.setUTCDate(shifted.getUTCDate() - 3);
+    const dayNum = (shifted.getUTCDay() + 6) % 7; // 週一=0 ... 週日=6
+    shifted.setUTCDate(shifted.getUTCDate() - dayNum + 3); // 當週週四
+    const firstThursday = new Date(Date.UTC(shifted.getUTCFullYear(), 0, 4));
+    const firstDayNum = (firstThursday.getUTCDay() + 6) % 7;
+    firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDayNum + 3);
+    const week = 1 + Math.round((shifted - firstThursday) / (7 * 86400000));
+    return `${shifted.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
 function toDisplayCategory(cat) {
     if (cat === '主餐' || cat === '單點') return '主餐';
     if (cat === '飲品' || cat === '飲料') return '飲品';
@@ -130,6 +147,25 @@ const DATA_DICTIONARY_MD = `# 咕咕義小餐館 營運資料字典
 | date | 事件日期 |
 | change | 變動內容（例如：廣告設定變更、菜單調價、營業時間變動） |
 | note | 備註 |
+
+## daily_traffic.csv — 一列 = 一個營業日，取代手動填寫的 Traffic Record 試算表
+
+| 欄位 | 說明 |
+| --- | --- |
+| date / weekday | 日期、星期 |
+| week | 週次，週四起算、週三結算，例如 2026-W47 |
+| status | 營業／店休／只營業午餐／只營業晚餐（依 store_calendar，沒有紀錄 = 營業） |
+| public_holiday | 國定假日名稱 |
+| lunch_customers / dinner_customers / total_customers | 來客數；該餐期店休時留空（不是 0），表示沒有資料 |
+| lunch_groups / dinner_groups / total_groups | 組數（不含純冷凍包訂單），留空規則同上 |
+| new_customers / new_groups | 新客人數、組數（全天），另有 lunch_ / dinner_ 開頭的版本 |
+| returning_customers / returning_groups | 舊客人數、組數（全天），另有 lunch_ / dinner_ 開頭的版本 |
+| unmarked_groups | 未標記新舊客的組數（全天） |
+| new_ratio | 新客人數 ÷ 全日來客數；當天有未標記組數時留空 |
+| net_revenue / meal_net_revenue / frozen_revenue | 實收、餐點實收、冷凍包，留空規則同來客數 |
+| note | store_calendar 備註 |
+
+**新舊客定義見上方「一張訂單」規則延伸**：is_new_group 為 true 算新客、false 算舊客、null（未標記）兩者都不算，只計入 unmarked_groups。只買冷凍包的訂單不計入任何新舊客統計。
 
 ## 刻意不提供
 
@@ -1675,7 +1711,9 @@ app.get('/api/report/analysis-export', async (req, res) => {
             });
         });
 
-        const calMap = new Map((calRows || []).map(r => [r.date, { lunchOpen: r.lunch_open, dinnerOpen: r.dinner_open }]));
+        const calMap = new Map((calRows || []).map(r => [r.date, {
+            lunchOpen: r.lunch_open, dinnerOpen: r.dinner_open, note: r.note || '', publicHoliday: r.public_holiday || '',
+        }]));
         const sessionCsvRows = (sessionRows || []).map(r => {
             const cal = calMap.get(r.business_date);
             const isOpen = r.meal_period === 'lunch' ? (cal ? cal.lunchOpen : true) : (cal ? cal.dinnerOpen : true);
@@ -1693,6 +1731,64 @@ app.get('/api/report/analysis-export', async (req, res) => {
         try { events = eventsRow?.data?.value ? JSON.parse(eventsRow.data.value) : []; } catch {}
         events = events.filter(e => e.date >= start && e.date <= end);
 
+        // daily_traffic.csv：取代手動 Traffic Record 試算表，一天一列，涵蓋期間內每一個日曆日（含店休日）
+        const sessByDate = new Map();
+        (sessionRows || []).forEach(r => {
+            const e = sessByDate.get(r.business_date) || {};
+            e[r.meal_period] = r;
+            sessByDate.set(r.business_date, e);
+        });
+        const trafficRows = [];
+        for (let cur = start; cur <= end; cur = addDaysStr(cur, 1)) {
+            const day = sessByDate.get(cur) || {};
+            const { lunch, dinner } = day;
+            const cal = calMap.get(cur);
+            const lunchOpen  = cal ? cal.lunchOpen  : true;
+            const dinnerOpen = cal ? cal.dinnerOpen : true;
+            const status = !lunchOpen && !dinnerOpen ? '店休'
+                : lunchOpen && !dinnerOpen ? '只營業午餐'
+                : !lunchOpen && dinnerOpen ? '只營業晚餐'
+                : '營業';
+            // 該餐期店休時留空（代表沒有資料）；有營業則取實際值，沒有訂單時為 0
+            const period = (open, row, field) => open ? (row ? (row[field] || 0) : 0) : '';
+            const sumOpen = (field) => {
+                if (!lunchOpen && !dinnerOpen) return '';
+                let s = 0;
+                if (lunchOpen)  s += lunch  ? (lunch[field]  || 0) : 0;
+                if (dinnerOpen) s += dinner ? (dinner[field] || 0) : 0;
+                return s;
+            };
+            const totalCustomers = sumOpen('customers');
+            const totalGroups    = sumOpen('total_groups');
+            const unmarkedGroups = sumOpen('unmarked_groups');
+            const newCustomers   = sumOpen('new_customers');
+            trafficRows.push({
+                date: cur, weekday: twWeekday(cur), week: twWeekLabel(cur),
+                status, public_holiday: cal ? cal.publicHoliday : '',
+                lunch_customers: period(lunchOpen, lunch, 'customers'),
+                dinner_customers: period(dinnerOpen, dinner, 'customers'),
+                total_customers: totalCustomers,
+                lunch_groups: period(lunchOpen, lunch, 'total_groups'),
+                dinner_groups: period(dinnerOpen, dinner, 'total_groups'),
+                total_groups: totalGroups,
+                new_customers: newCustomers, new_groups: sumOpen('new_groups'),
+                lunch_new_customers: period(lunchOpen, lunch, 'new_customers'),
+                lunch_new_groups: period(lunchOpen, lunch, 'new_groups'),
+                dinner_new_customers: period(dinnerOpen, dinner, 'new_customers'),
+                dinner_new_groups: period(dinnerOpen, dinner, 'new_groups'),
+                returning_customers: sumOpen('returning_customers'), returning_groups: sumOpen('returning_groups'),
+                lunch_returning_customers: period(lunchOpen, lunch, 'returning_customers'),
+                lunch_returning_groups: period(lunchOpen, lunch, 'returning_groups'),
+                dinner_returning_customers: period(dinnerOpen, dinner, 'returning_customers'),
+                dinner_returning_groups: period(dinnerOpen, dinner, 'returning_groups'),
+                unmarked_groups: unmarkedGroups,
+                new_ratio: (totalGroups !== '' && totalGroups > 0 && unmarkedGroups === 0)
+                    ? Math.round((newCustomers / totalCustomers) * 1000) / 1000 : '',
+                net_revenue: sumOpen('net_revenue'), meal_net_revenue: sumOpen('meal_net_revenue'), frozen_revenue: sumOpen('frozen_revenue'),
+                note: cal ? cal.note : '',
+            });
+        }
+
         const fileLabel = `${start.replace(/-/g, '')}-${end.replace(/-/g, '')}`;
         res.setHeader('Content-Type', 'application/zip');
         res.setHeader('Content-Disposition', `attachment; filename="gugu_analysis_${fileLabel}.zip"`);
@@ -1703,6 +1799,15 @@ app.get('/api/report/analysis-export', async (req, res) => {
         archive.append(toCSV(orderItemRows, ['order_id', 'business_date', 'meal_period', 'order_type', 'menu_item_id', 'item_name', 'display_category', 'unit_price', 'quantity', 'line_revenue']), { name: 'order_items.csv' });
         archive.append(toCSV(ordersFactRows, ['order_id', 'business_date', 'meal_period', 'opened_at', 'order_type', 'table_number', 'customer_count', 'net_revenue', 'meal_net_revenue', 'frozen_revenue', 'meal_item_qty']), { name: 'orders_fact.csv' });
         archive.append(toCSV(events, ['date', 'change', 'note']), { name: 'external_events.csv' });
+        archive.append(toCSV(trafficRows, [
+            'date', 'weekday', 'week', 'status', 'public_holiday',
+            'lunch_customers', 'dinner_customers', 'total_customers',
+            'lunch_groups', 'dinner_groups', 'total_groups',
+            'new_customers', 'new_groups', 'lunch_new_customers', 'lunch_new_groups', 'dinner_new_customers', 'dinner_new_groups',
+            'returning_customers', 'returning_groups', 'lunch_returning_customers', 'lunch_returning_groups', 'dinner_returning_customers', 'dinner_returning_groups',
+            'unmarked_groups', 'new_ratio',
+            'net_revenue', 'meal_net_revenue', 'frozen_revenue', 'note',
+        ]), { name: 'daily_traffic.csv' });
         archive.append(DATA_DICTIONARY_MD, { name: 'DATA_DICTIONARY.md' });
         await archive.finalize();
     } catch (e) {
