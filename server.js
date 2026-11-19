@@ -1475,10 +1475,12 @@ app.post('/api/orders/:id/move-table', async (req, res) => {
             const mergedItems = [...(dstOrder.items || []), ...(srcOrder.items || [])];
             const newTotal = mergedItems.reduce((s, i) => s + (i.price || 0) * (i.quantity || 1), 0);
             const mergedCount = (dstOrder.customer_count || 0) + (srcOrder.customer_count || 0);
+            // 跨桌併桌：記錄所有實際佔用的桌子（例如記 A7，實際坐 A6+A7），供座位使用率分析用
+            const tablesUsed = [...new Set([...(dstOrder.tables_used || []), dstOrder.table_number, srcOrder.table_number].filter(Boolean))];
 
             await supabase.from('orders').update({
                 items: mergedItems, total: newTotal, sub_total: newTotal,
-                customer_count: mergedCount, updated_at: now,
+                customer_count: mergedCount, updated_at: now, tables_used: tablesUsed,
             }).eq('id', mergeWithOrderId);
 
             // 合併棄單用獨立 'merged' 狀態，與真正棄單（'abandoned'）區隔
@@ -2189,6 +2191,7 @@ function orderToCamel(r) {
         finishTime: r.finish_time ? Number(r.finish_time) : null,
         specialNotes: r.special_notes || [],
         clearedAt: r.cleared_at ? new Date(r.cleared_at).getTime() : null,
+        tablesUsed: r.tables_used || [],
     };
 }
 function invoiceToCamel(r) {
