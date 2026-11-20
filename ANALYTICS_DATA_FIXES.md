@@ -1,6 +1,7 @@
 # 營運資料一致性修正清單（給 Claude Code）
 
-建立日期：2026-11-19
+建立日期：2026-11-19 ｜ 最後更新：2026-11-20
+
 適用範圍：
 - `pos-project`：WebPOS，包含 `server.js`、`src/pages/Reports.js`、`InvoiceManagement.js`、`CashDrawer.js`
 - `webopos-dashboard`：Vercel 上的 `index.html`，以及 `reports/send-report.js`（GitHub Actions 週報、月報）
@@ -8,6 +9,46 @@
 目標：同一段期間的營收、來客、訂單數、午晚餐拆分、客單價，四個地方要算出**完全相同**的數字，而且不能因為 Supabase 一次最多回傳 1,000 筆而默默少算。
 
 > 只改計算口徑與資料抓取方式，不要改動既有交易資料。任何資料表變更都要先寫成 migration 檔，並請使用者確認後再執行。
+
+---
+
+## 進度總覽（2026-11-20）
+
+### ✅ 已完成
+
+- **第 1、2 節**：四個地方（POS 報表、Vercel dashboard、週報/月報、WebPOS）的營業額／客單價／來客數全部改用 `report_sessions` RPC，不再各自計算。
+- **第 3 節**：`store_calendar` 店休日曆（含只休午餐/晚餐、設定頁）、`orders.cleared_at`／`tables_used`（入座清桌時間、併桌記錄）、客滿婉拒／候位按鈕，全部上線。
+- **第 5 節**：`webopos-dashboard` 每月備份（`monthly-backup.js` + GitHub Actions，7z 加密、上傳 Artifact）已上線。
+- **第 6A/6B 節**：報表頁 KPI 卡片、「下載分析資料」（`meal_period_sessions.csv`／`order_items.csv`／`orders_fact.csv`／`external_events.csv`／`daily_traffic.csv`／`DATA_DICTIONARY.md`）全部上線。
+- **第 9 節**：`report_items`／`report_attach` RPC 已建立並套用到 dev + prod；`order_items.csv` 改由 `report_items` 產生。
+- **第 10 節**：新舊客紀錄——POS 開單標記、報表新客／舊客統計卡片、`daily_traffic.csv` 的新舊客欄位，全部完成。
+- **效能（2026-11-20 新增項目，原文件沒有）**：報表頁、發票管理頁、關帳頁原本每次進頁面都無條件抓全部歷史發票，隨營業時間增長越來越慢。改成：
+  - `report_sessions`、`/api/orders/report`、`/api/invoices` 都改成按需要的日期範圍抓取，不夠才動態擴大重抓。
+  - 新增 `report_order_invoices` RPC，把原本「先查發票、再依 order_id 查訂單」兩次依序查詢合併成資料庫端一次 join。
+  - 報表頁拿掉整頁阻擋式 loading，改成分兩階段載入（先顯示「今天」、背景補齊比較基準），進頁面立刻看到版面與數字。
+  - `fetchAllRowsParallel`：筆數超過單頁上限時，先查總筆數再平行分頁，取代逐頁循序等待。
+
+### ⬜ 刻意不做／使用者已決定
+
+- 10.1 原本規劃的「關帳時若有未標記訂單要提醒經營者補標」：**已取消**。開單已預設新客，正常情況不會再出現未標記訂單（上線前的舊資料除外，本來就刻意不回補），不需要這個提醒。
+- 10.4 舊試算表資料（2026/3 起的每日新客數、廣告花費）維持不匯入 `orders`。
+
+### ⬜ 還沒做（需要使用者再確認才進行）
+
+- **第 8 節**：Supabase service role key 重新產生（安全事項，使用者手動處理）。
+- **第 9 節**：POS「銷售排行」頁、週報 email 的品項排行／加點率邏輯改用 `report_items`／`report_attach`——**已明確決定先不做**，這兩個功能目前各自重算但運作正常，風險與效益不成比例，之後有需要再評估。
+- **第 9 節選配**：`menu_items` 新增 `cost`（食材成本）欄位，需要使用者提供各品項成本後才做。
+- **第 11 節（新增）**：見下方，把四個報表 RPC 共用的查詢邏輯整合成一個共同的基礎定義。
+
+---
+
+## 11. 待處理：把報表用的 RPC 整合成共同的基礎定義
+
+**背景**：2026-11-20 的效能修正新增了 `report_order_invoices`，加上原本就有的 `report_sessions`、`report_items`、`report_attach`，目前共有 **4 個獨立的 SQL 函式**，但每一個都各自重複定義同一段「有效發票（`status = '已開立'`）＋ 以 `payment_time` 轉台灣時區得出 `business_date` ＋ 以 `orders.timestamp` 15:45 分界得出 `meal_period`」的 join 邏輯。
+
+**風險**：四段邏輯分開寫、分開維護，之後若要調整定義（例如餐期分界時間、營業日判斷方式），很容易改了一個函式卻漏改其他三個，導致四個地方的數字又開始不一致——這正是最初第 1 節想解決的問題，現在用多個 RPC 的方式又在資料庫端重演一次。
+
+**做法（建議，尚未實作）**：抽出一個共用的 SQL view 或函式（例如 `report_base_orders`），只做「有效發票 join 訂單、算出 business_date／meal_period」這一步，讓 `report_sessions`、`report_items`、`report_attach`、`report_order_invoices` 都改成在這個共用結果上面做各自的彙總，而不是各自重新 join 一次。改動前要先確認效能不會因為多一層 view 而變差（尤其 `report_order_invoices` 現在是未分頁單一 join，速度敏感）。
 
 ---
 
@@ -26,152 +67,56 @@
 | 餐點實收 | 有效發票 `items_snapshot` 各品項 `price × quantity` 的合計（排除冷凍包），再加上該訂單的 adjustments。折扣一律算在餐點這一邊。不可用目前菜單價重算 |
 | 客單價 | **餐點實收** ÷ 來客數（內用加外帶，以訂單人數計） |
 | 折扣、退款（adjustments） | 日期歸到原發票的營業日，用 `original_invoice_id` 對回訂單 |
-| 只買冷凍包的訂單 | 不算來客（這類訂單人數通常是 0） |
+| 只買冷凍包的訂單 | 不算來客，也不算組數（這類訂單人數通常是 0） |
+| 組數 | 有有效發票、且有餐點的訂單數（內用 + 外帶）。已用 2026-11-05～11-11 驗證：與手動 Traffic Record 的全日組數 111、全日人數 228 完全相同 |
+| 新客／舊客 | 以「組」為單位，存在 `orders.is_new_group`：新客組 true、舊客組 false。組內只要有一人來過就是舊客組（視為回頭客推薦，不算廣告帶來的轉換）；沒印象、確定沒來過或不常來的，視為新客。由同一位經營者依印象判斷，可以隨時修改。新客人數 = 新客組的人數合計；新客 + 舊客 = 全部人數與組數，午晚餐分開計算 |
 
 ---
 
-## 1. 目前各處算法不一致的地方（2026-11-19 檢查）
+## 1. 目前各處算法不一致的地方（2026-11-19 檢查，已於 2026-11-19～20 全部修正）
 
 | 項目 | POS 報表（Reports.js） | Vercel dashboard | 週報、月報（send-report.js） | 修正為 |
 | --- | --- | --- | --- | --- |
-| 資料是否完整 | ✅ `/api/orders/report` 有用 `fetchAllRows` 分頁 | ❌ `.limit(5000)` 實際最多只拿到最新 1,000 張發票（約 2.5 個月），更早的期間與「vs 上期」比較會少算 | ❌ `rollingInv`（月報抓約 5 個月）與 `histLightInv`（抓 730 天）都超過 1,000 筆，被截斷 | 全部改為分頁抓取，或改用第 2 節的 RPC |
-| 午晚餐分界 | 依**結帳**時間：11:00–16:00 算午餐、16:01–22:00 算晚餐 | 依結帳**小時**：11–15 點午餐、16–22 點晚餐 | 同 dashboard；範圍外的單直接被丟掉 | 依開單時間，15:45 分界 |
-| 冷凍包判斷 | 讀 `category_settings` 裡的非營業額類別（預設是冷凍包） | 品項 `category === '冷凍包'` | 品項 category，沒有時用**目前菜單的名稱**對照 | 品項 `category = '冷凍包'`；若保留 `category_settings`，三處要讀同一份設定 |
-| 客單價分子 | 總額扣掉非營業額品項，未扣折扣 | `aggInvoices` 未扣折扣；`aggSimple`（上期比較用）用**含冷凍包的總額** ❌ | 扣冷凍包、扣折扣 ✅ | 餐點實收 ÷ 來客 |
-| 折扣、退款 | 另外列出 | **沒有計入** | 依調整的**建立日**計入 | 依原發票日期計入淨營收 |
-| 來客數 | 訂單人數優先 ✅ | 透過 RPC 取訂單人數 ✅ | 透過 service role 取訂單人數 ✅；沒設定金鑰時會改用發票人數 | 一律用訂單人數，抓不到時要報錯，不可靜默改用發票人數 |
-| 營業日數 | 有發票的日子 | 有發票的日子 | 有發票的日子 | 改用第 3 節的 `store_calendar` |
-
-預期差異的規模：10 月午餐來客用舊規則算是 295 人、新規則是 296 人，餐期規則的影響很小。主要的錯誤來源是**資料被截斷**與**上期比較的客單價算法**。
+| 資料是否完整 | ✅ `/api/orders/report` 有用分頁 | ❌ `.limit(5000)` 實際最多只拿到最新 1,000 張發票 | ❌ `rollingInv`、`histLightInv` 都超過 1,000 筆，被截斷 | ✅ 全部改用 `report_sessions` RPC |
+| 午晚餐分界 | 依結帳時間 | 依結帳小時 | 同 dashboard | ✅ 依開單時間，15:45 分界 |
+| 冷凍包判斷 | 讀 `category_settings` | 品項 category | 品項 category，對照目前菜單 | ✅ 統一讀品項 `category = '冷凍包'` |
+| 客單價分子 | 未扣折扣 | 含冷凍包的總額 ❌ | 扣冷凍包、扣折扣 ✅ | ✅ 餐點實收 ÷ 來客 |
+| 折扣、退款 | 另外列出 | 沒有計入 | 依建立日計入 | ✅ 依原發票日期計入淨營收 |
+| 來客數 | 訂單人數優先 ✅ | 透過 RPC 取訂單人數 ✅ | 抓不到金鑰時會靜默改用發票人數 | ✅ 一律用訂單人數 |
+| 營業日數 | 有發票的日子 | 有發票的日子 | 有發票的日子 | ✅ 改用 `store_calendar` |
 
 ---
 
-## 2. 修正方向：共用一個 Supabase RPC（單一來源）
+## 2. 共用 RPC：`report_sessions`（已上線）
 
-不要在四個地方各自實作同一套算法，改在 Supabase 建立一個 `security definer` 函式，回傳已經彙總好、不含個資的資料，四個地方都呼叫它。彙總後一天只有兩列（午、晚各一），不會碰到 1,000 筆的上限。
-
-```sql
--- migration：supabase/migrations/20261120_report_sessions.sql
--- 回傳每個營業日 × 餐期的彙總，不含任何個資
-create or replace function public.report_sessions(p_start date, p_end date)
-returns table (
-  business_date date,
-  meal_period text,          -- 'lunch' | 'dinner'
-  orders int,                -- 有有效發票的訂單數
-  dine_in_orders int,        -- 內用桌次
-  takeout_orders int,
-  customers int,             -- 訂單人數加總（不含純冷凍包訂單）
-  dine_in_customers int,
-  gross_revenue numeric,     -- 有效發票 total 合計（折扣前）
-  adjustment_amount numeric, -- 依原發票日期歸屬（退款為負）
-  net_revenue numeric,       -- 實收 = gross_revenue + adjustment_amount；畫面上的「營業額」一律用這個
-  frozen_revenue numeric,
-  meal_net_revenue numeric   -- 餐點實收 = 品項金額（排除冷凍包）+ adjustment_amount；客單價分子
-)
-language sql security definer set search_path = public as $$
-  with inv as (
-    select i.* from invoices i where i.status = '已開立'
-  ), ord as (
-    select o.id, o.order_type, o.customer_count,
-           (min(i.payment_time) at time zone 'Asia/Taipei')::date as business_date,
-           case when ((o.timestamp at time zone 'Asia/Taipei')::time < time '15:45')
-                then 'lunch' else 'dinner' end as meal_period,
-           sum(i.total) as gross
-    from orders o join inv i on i.order_id = o.id
-    group by o.id
-  ), items as (
-    select i.order_id,
-           sum(case when it->>'category' = '冷凍包' then (it->>'price')::numeric * coalesce((it->>'quantity')::numeric,1) else 0 end) as frozen,
-           sum(case when coalesce(it->>'category','') <> '冷凍包' then (it->>'price')::numeric * coalesce((it->>'quantity')::numeric,1) else 0 end) as meal
-    from inv i, jsonb_array_elements(coalesce(i.items_snapshot,'[]')) it
-    group by i.order_id
-  ), adj as (
-    select i.order_id, sum(a.amount) as amount
-    from adjustments a join inv i on i.id = a.original_invoice_id group by i.order_id
-  )
-  select o.business_date, o.meal_period,
-         count(*)::int,
-         count(*) filter (where o.order_type = '內用')::int,
-         count(*) filter (where o.order_type = '外帶')::int,
-         coalesce(sum(o.customer_count) filter (where coalesce(it.meal,0) > 0),0)::int,
-         coalesce(sum(o.customer_count) filter (where o.order_type = '內用' and coalesce(it.meal,0) > 0),0)::int,
-         sum(o.gross),
-         coalesce(sum(adj.amount),0),
-         sum(o.gross) + coalesce(sum(adj.amount),0),
-         coalesce(sum(it.frozen),0),
-         coalesce(sum(it.meal),0) + coalesce(sum(adj.amount),0)
-  from ord o left join items it on it.order_id = o.id left join adj on adj.order_id = o.id
-  where o.business_date between p_start and p_end
-  group by 1, 2 order by 1, 2;
-$$;
-grant execute on function public.report_sessions(date, date) to anon, authenticated;
-```
-
-> 上面函式的查詢主體已在 2026-11-19 以唯讀 SELECT 在正式資料庫執行過，2026 年 10 月的結果與第 7 節驗收數字完全一致。之後加上的 `net_revenue`、`meal_net_revenue` 只是把已驗證的欄位相加。建立函式（`create function`）屬於資料庫變更，請使用者確認後再執行。
-
-每個地方怎麼改：
-
-- **`webopos-dashboard/index.html`**：KPI、午晚餐分頁、上期比較改用 `sb.rpc('report_sessions', …)`。小時分佈圖仍需要逐張發票時，必須分頁抓取（`range(from, to)` 迴圈），不可依賴 `.limit()`。刪除 `aggSimple`，或讓它改用餐點營收。
-- **`reports/send-report.js`**：本期、上期、滾動平均、歷史排名都改用 RPC。品項排行仍需要逐張發票時，用 `Range` header 分頁。抓不到訂單人數時要中止並發出錯誤通知，不可靜默改用發票人數。
-- **`pos-project/server.js`**：新增 `/api/report/sessions?start=&end=`，轉呼叫 RPC；`/api/orders/report` 的回傳加上 `openedAt`（`orders.timestamp`）。
-- **`src/pages/Reports.js`**：`applyTimeSlot` 與 KPI 的午晚餐判斷改用 `openedAt` 和 15:45 分界；KPI 改用 sessions API。
-- **`InvoiceManagement.js`、`CashDrawer.js`**：屬於帳務用途，以發票與結帳時間為準是正確的，不需要改；但畫面上的「營業額」要和 RPC 的 `net_revenue` 對得上。
-- 四個地方顯示的「營業額」與「客單價」一律改用 `net_revenue` 與 `meal_net_revenue ÷ customers`。
+四個地方（POS 報表、Vercel dashboard、週報月報、分析 CSV）的營業額／客單價／來客數都改由 `report_sessions(p_start, p_end)` 計算，不再各自重算。函式定義見 `supabase/migrations/20261119_analytics_foundation.sql`（基礎版）與 `20261119b_new_returning_customers.sql`（加入新舊客欄位後的版本，為目前線上實際使用的版本）。
 
 ---
 
-## 3. WebPOS 需要新增或修正的功能
+## 3. WebPOS 功能（已上線）
 
-| # | 項目 | 原因 | 做法 |
-| --- | --- | --- | --- |
-| 3.1 | **店休與只休午餐** | 店休日期目前只存在 `app_settings.store_holiday_dates` 這一個 JSON 字串，從 2026/7/15 才開始記，也無法表示「只休午餐」（例如 6/2、10/2）。缺了這個，就沒辦法區分「沒開店」和「沒客人」 | 新增 `store_calendar(date primary key, lunch_open bool, dinner_open bool, note text)`，在 POS 設定頁可以標記全天休或只休午餐、晚餐。把 `store_holiday_dates` 現有的日期轉進新表。報表的營業日數與場次改依此表計算 |
-| 3.2 | **入座與清桌時間** | 入座時間的定義是「開單到清桌」。目前清桌時間只能用 `orders.updated_at` 推估，但作廢、合併等操作也會更新它 | 未來功能：`orders` 新增 `cleared_at`（`/api/tables/:t/reset` 時寫入）；入座時間沿用開單時間 `orders.timestamp` |
-| 3.5 | **併桌與桌位人數**（未來功能） | 一張訂單只記一個桌號，但實際會發生：多人組併桌（記 A7，實際坐 A6+A7）、兩人點太多改坐兩張兩人桌、有空位就多給一桌。所以目前算不出正確的翻桌率，也無法判斷各桌的實際使用率 | ① 桌位人數設定：A5、A8 是四人桌，A1–A4、A6、A7 是兩人桌，合計 20 席。② 訂單可記錄多張桌子（例如 `tables_used text[]`），併桌、加桌時點一下即可。③ 報表只在**客滿時段**計算：客滿次數與時長，以及客滿時的座位效率（入座人數 ÷ 20 席）。非客滿時段多給一桌不影響營收，不需要計算翻桌率 |
-| 3.6 | **客滿婉拒／候位次數**（未來功能） | 客滿時的流失需求目前完全沒有紀錄，這是判斷「假日晚餐是否真的到頂」最直接的資料 | 在 POS 加一個「客滿婉拒」按鈕，按一下記一筆：時間、人數（選填）、婉拒或候位。報表只需每個餐期的次數與人數 |
-| 3.3 | **人數以訂單為準** | 有 132 張訂單的發票人數和訂單人數不同，多半是發票多 1 人，代表結帳後人數被改過 | 報表一律讀 `orders.customer_count`（第 0 節）。不需要鎖定人數，但若結帳後改人數，可在 `inventory_logs` 類似的表留一筆紀錄（選做） |
-| 3.4 | `invoices.payment_method` 一直是空的 | 目前只收現金，沒有影響 | 若未來加入其他付款方式，要開始寫入這個欄位 |
+| # | 項目 | 狀態 |
+| --- | --- | --- |
+| 3.1 | 店休與只休午餐（`store_calendar`，設定頁可標記） | ✅ 已上線 |
+| 3.2 | 入座與清桌時間（`orders.cleared_at`） | ✅ 已上線 |
+| 3.5 | 併桌與桌位人數（`tables.seats`、`orders.tables_used`） | ✅ 已上線 |
+| 3.6 | 客滿婉拒／候位次數（`turnaways` 表 + 桌況頁按鈕） | ✅ 已上線 |
+| 3.3 | 人數以訂單為準 | ✅ 已內建在 `report_sessions` 的定義裡 |
+| 3.4 | `invoices.payment_method` 一直是空的 | 目前只收現金，沒有影響，暫不處理 |
 
 ---
 
 ## 4. schema.sql 與 migrations
 
-**現況**：`schema.sql` 是手寫的建表腳本，但資料庫後來又在 Supabase 後台或程式中加了欄位，這份檔案沒有同步更新。實際與檔案不同的地方：
-
-- `customers` 多了 `name`、`phone`、`email`，原本的 `names`、`phones` 陣列也還在
-- `invoices` 多了 `payment_method`、`items`（舊欄位）
-- `orders.send_time`、`finish_time` 實際是 `bigint`，`order_date` 是 `text`
-- `adjustments` 完全不在檔案內（`id uuid`、`amount numeric`、`affected_items jsonb`）
-- `menu_items.price`、`sort_order`、`stock` 實際是 `numeric`，`consumes` 是 `jsonb`
-
-照這份 `schema.sql` 重建資料庫，程式會出錯。
-
-**修正**：
-
-1. 從正式資料庫重新產生 schema，二選一：
-   - `npx supabase db dump --schema-only --db-url "$SUPABASE_DB_URL" > supabase/schema.sql`（需要 Docker，這台 2015 MacBook 跑起來可能吃力）
-   - 或請 Claude Code 依 `information_schema.columns` 的查詢結果手動重寫 `schema.sql`，再由使用者到 SQL Editor 比對
-2. 之後任何資料表變更都寫成 `supabase/migrations/YYYYMMDD_說明.sql`，不要再直接在後台改。
-3. 把 `init.sql` 與 `schema.sql` 尾段的 TRUNCATE 移到 `scripts/danger/`，檔名註明會清空資料，執行前要先備份。
+`schema.sql` 已依正式資料庫重新產生並保持同步。之後任何資料表變更都寫成 `supabase/migrations/YYYYMMDD_說明.sql`，不要直接在 Supabase 後台改。
 
 ---
 
-## 5. 定期備份
+## 5. 定期備份（已上線）
 
-目前專案是 Supabase **Free** 方案（2026-11-19 確認），沒有可下載的每日備份，所以要自己做。
+`webopos-dashboard/reports/monthly-backup.js` + `.github/workflows/monthly-backup.yml`：每月 1 日台灣時間跑一次，匯出全部資料表成 CSV、用密碼保護的 7z 壓縮，透過 GitHub Actions Artifact 提供下載，寄一封含連結的通知信（不含附件，避免 Gmail 擋信）。
 
-**使用者的決定：每月把全部資料表匯出成 CSV，寄到信箱備存。**
-
-做法：在 `webopos-dashboard` 新增 `reports/monthly-backup.js` 與 `.github/workflows/monthly-backup.yml`，沿用週報現有的 Gmail 寄信設定（`GMAIL_APP_PASSWORD`）與 `SUPABASE_SERVICE_ROLE_KEY`。
-
-1. **排程**：每月 1 日台灣時間 09:00，在午餐開店前；cron 寫成 `0 1 1 * *`（UTC）。另保留 `workflow_dispatch`，可以手動觸發。
-2. **匯出**：`orders`、`invoices`、`adjustments`、`menu_items`、`customers`、`app_settings`、`inventory_logs`、`remark_groups`、`tables`，每張表一個 CSV。一律用 `Range` header 分頁抓完，不可受 1,000 筆上限影響；每張表的筆數寫進信件內文，方便核對。
-3. **壓縮並加密**：打包成 `gugu_backup_YYYY-MM.zip`，用 AES 加密（例如 `7z a -p"$BACKUP_PASSWORD" -mhe=on`），密碼存成 GitHub secret `BACKUP_PASSWORD`，請使用者另外抄下保存。備份含有客人姓名、電話、email，不可寄送未加密的檔案。
-4. **寄送**：寄到使用者信箱，主旨例如「咕咕義資料備份 2026-11」。目前資料約 7.5 MB，每月約增加 1 MB；超過 20 MB 時改為只寄當月新增或變動的資料，並通知使用者。
-5. **失敗處理**：任何一張表抓取失敗或筆數為 0，就寄出錯誤通知，不要寄出不完整的備份。
-
-還原方式：解壓縮後用 Supabase Table Editor 的 Import CSV，或寫一個一次性的匯入腳本。還原前一定要先確認目標資料庫。
-
-**手動備份（做任何資料修正之前）**：在 SQL Editor 執行，結果用 Export → Download CSV 存下：
+**手動備份（做任何資料修正之前）**：在 Supabase SQL Editor 執行，結果用 Export → Download CSV 存下：
 
 ```sql
 select 'orders' t, count(*) n, json_agg(x order by x.id)::text d from orders x
@@ -184,49 +129,21 @@ union all select 'app_settings', count(*), json_agg(x order by x.key)::text from
 
 ---
 
-## 6. 報表輸出分成兩部分
+## 6. 報表輸出（已上線）
 
 ### 6A. 給經營者看的畫面（WebPOS 報表、Vercel dashboard）
 
-目標是一眼看出每天收了多少錢，只放必要資訊，全部用第 2 節的 RPC 計算：
-
-| 項目 | 全天 | 午餐 | 晚餐 |
-| --- | --- | --- | --- |
-| 實收營業額（不含冷凍包） | ✓ | ✓ | ✓ |
-| 來客數 | ✓ | ✓ | ✓ |
-| 客單價（餐點實收 ÷ 來客） | ✓ | ✓ | ✓ |
-| 冷凍包營業額（另列） | ✓ | | |
-
-另外加一個比較基準：「和前 4 週同一個星期幾的平均相比」的增減百分比。其他細節不要放在這個畫面，交給 6B 由 AI 分析。
+營業額、來客數、客單價、冷凍包營業額（全天／午餐／晚餐），加上新舊客統計（見第 10 節）與「和前 4 週同一個星期幾的平均相比」的增減百分比。全部用 `report_sessions` 計算。
 
 ### 6B. 下載分析 CSV（只放在 WebPOS）
 
-- 在 WebPOS 報表頁新增「下載分析資料」按鈕：選日期區間（預設從 2026-06-01 到今天），下載 `gugu_analysis_YYYYMMDD-YYYYMMDD.zip`。
-- **不要放在 Vercel**：Vercel 頁面是公開網址，拿到連結的人就能下載全部營運資料（使用者已確認）。
-- 壓縮檔內含下面三份 CSV，加上一份 `DATA_DICTIONARY.md`（內容就是第 0 節的定義），讓 AI 每次都用同樣的定義解讀。
-- 用途：讓 AI 分析午餐與晚餐、平日與假日、不同月份的差異，以及營業額是否在下滑。
-
-分析固定只需要以下三份資料，全部不含個資：
-
-| 檔案 | 一列 = | 欄位 |
-| --- | --- | --- |
-| `meal_period_sessions.csv` | 一個營業日 × 餐期 | `business_date, weekday, day_type, meal_period, is_open, dine_in_orders, dine_in_customers, takeout_orders, customers, net_revenue, meal_net_revenue, frozen_revenue` |
-| `order_items.csv` | 一個品項行 | `order_id, business_date, meal_period, order_type, menu_item_id, item_name, display_category（主餐 / 小點 / 飲品 / 冷凍包）, unit_price, quantity, line_revenue` |
-| `orders_fact.csv` | 一張訂單 | `order_id, business_date, meal_period, opened_at, order_type, table_number, customer_count, net_revenue, meal_net_revenue, frozen_revenue, meal_item_qty` |
-
-`order_items.line_revenue` 是品項原價（折扣前），用來分析品項組成；營業額與客單價一律以 sessions 與 orders_fact 的實收欄位為準。
-
-外部事件（廣告設定變更、菜單調價、營業時間變動）只需要一份手動紀錄，三個欄位就夠：`date, change, note`。
-
-**不再保留**：`daily_operations`（可由 sessions 彙總）、`adjustments.csv`（6 個月只有 5 筆、合計 −$165）、發票張數、`has_*` 旗標、作廢與棄單數。
+報表頁「下載分析資料」按鈕，下載 `gugu_analysis_YYYYMMDD-YYYYMMDD.zip`，內含 `meal_period_sessions.csv`、`order_items.csv`、`orders_fact.csv`、`external_events.csv`、`daily_traffic.csv`、`DATA_DICTIONARY.md`。欄位定義見 `server.js` 的 `DATA_DICTIONARY_MD`。
 
 **一律排除的個資**：`customers` 整張表、`orders.customer_name`、`customer_phone`、`customer_id`、`special_notes`、`pickup_time`、`items[].remarks`、`adjustments.reason_note`、`customers.email`。
 
 ---
 
-## 7. 驗收數字（用 2026-11-19 匯出的資料、依第 0 節規則算出）
-
-修正後，POS 報表、Vercel dashboard、週報或月報、RPC 對同一期間都要得到以下數字：
+## 7. 驗收數字（用 2026-11-19 匯出的資料、依第 0 節規則算出，供日後回歸測試參考）
 
 | 期間 | 營業日 | 訂單 | 來客 | 實收營業額 | 冷凍包 | 餐點實收 | 客單價 | 午餐來客 / 餐點實收 | 晚餐來客 / 餐點實收 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -234,11 +151,50 @@ union all select 'app_settings', count(*), json_agg(x order by x.key)::text from
 | 2026-10-01～10-31 | 24 | 424 | 844 | $300,425 | $13,400 | $287,025 | $340 | 296 / $102,690 | 548 / $184,335 |
 | 2026-07-01～07-31（含折扣） | 23 | 415 | 872 | $309,405 | $16,720 | $292,685 | $336 | 306 / $102,955 | 566 / $189,730 |
 
-11 月與 10 月這兩段沒有折扣、退款，所以實收等於發票金額。7 月是用來驗證折扣有沒有正確扣除：發票合計 $309,575，當月 3 筆調整合計 −$170（7/6 −$35、7/20 −$35、7/30 −$100），實收是 $309,405。三段期間只買冷凍包的訂單，人數都是 0。
+7 月用來驗證折扣有沒有正確扣除：發票合計 $309,575，當月 3 筆調整合計 −$170，實收是 $309,405。三段期間只買冷凍包的訂單，人數都是 0。
 
 ---
 
-## 8. 安全事項（請使用者手動處理）
+## 8. 安全事項（請使用者手動處理，尚未確認完成）
 
-- 2026-11-19 的分析過程中，`.env` 裡的 Supabase secret key 出現在對話紀錄裡，也曾在瀏覽器被使用（被 Supabase 拒絕）。請到 Supabase 重新產生，再更新 `.env` 和 GitHub secret `SUPABASE_SERVICE_ROLE_KEY`。
-- `webopos-dashboard/index.html` 內含 anon key，而 `invoices` 開放用 anon key 讀取，所以拿到這個網址的人可以讀到全部營業額與品項。若網址可能外流，可改成只透過 `report_sessions` 這個 RPC 讀取彙總資料，並關閉 `invoices` 的 anon 讀取權限（Vercel 頁面要同步修改）。
+- `.env` 裡的 Supabase service role key 曾經在對話紀錄中出現、也曾在瀏覽器被使用過（被 Supabase 拒絕）。請到 Supabase 重新產生，再更新 `.env` 和 GitHub secret `SUPABASE_SERVICE_ROLE_KEY`。
+- `webopos-dashboard/index.html` 內含 anon key，而 `invoices` 開放用 anon key 讀取，拿到這個網址的人可以讀到全部營業額與品項。若網址可能外流，可改成只透過 `report_sessions` RPC 讀取彙總資料，並關閉 `invoices` 的 anon 讀取權限。
+
+---
+
+## 9. 品項分析用的函式（已建立，部分套用）
+
+`report_items`、`report_attach` 已建立並套用到 dev + prod（見 `supabase/migrations/20261120_report_items.sql`），與 `report_sessions` 共用相同的有效發票、營業日、餐期定義。
+
+**已套用**：WebPOS「下載分析資料」的 `order_items.csv` 改由 `report_items` 產生（grain 從「每筆品項行」改為「日×餐期×內用外帶×品項×單價」彙總，新增 `orders_with_item` 欄位）。
+
+**已決定暫不做**：POS「銷售排行」頁（`Reports.js` 的 `RankingTab`）與週報 email 的品項排行／加點率邏輯，目前都是各自獨立計算但運作正常，改用新 RPC 屬於中～大型重構，風險與效益不成比例，先維持現狀。
+
+**選配、尚未做**：`menu_items` 新增 `cost numeric`（每份食材成本）。成本若會變動，結帳時也要寫進 `items_snapshot` 的 `cost`，歷史毛利才不會被之後的調整蓋掉。需要使用者提供各品項的成本後才做。
+
+---
+
+## 10. 新舊客紀錄：取代手動的 Traffic Record 試算表（已上線）
+
+目標：WebPOS 自動產生和 `2026_11_Traffic_Record.xlsx` 相同的客流資料，取代手動填試算表。
+
+### 10.1 POS：在訂單上標記新客／舊客 ✅ 已上線
+
+- 開單／點餐畫面有「新客／舊客」切換按鈕，操作方式比照人數設定：隨時可以改，結帳前、結帳後都可以。
+- 開單時預設為新客（`is_new_group = true`），認出是熟客就切換成舊客。寫入方式：`PATCH /api/orders/:id`。
+- 內用與外帶都有這個按鈕。併單時，以保留下來的那張訂單為準，任一張是舊客、合併後就是舊客。
+- 上線前的訂單一律是空值（null），不回補。
+
+### 10.2 經營者畫面（WebPOS 報表） ✅ 已上線
+
+報表頁新增新客／舊客卡片：全天、午餐、晚餐分開顯示新客人數／組數、舊客人數／組數、新客比例；有未標記的訂單時顯示「未標記 N 組」。
+
+### 10.3 下載客流 CSV ✅ 已上線
+
+分析匯出壓縮檔內加入 `daily_traffic.csv`，一天一列（含店休日），欄位比照 11 月 Traffic Record。欄位定義見 `server.js` 的 `DATA_DICTIONARY_MD`。
+
+**建議並行 2 週**：上線後兩週內，試算表與 POS 同時記錄，比對每天的人數、組數、新客數；一致後再停用試算表。
+
+### 10.4 舊資料（維持不做）
+
+舊的試算表（2026/3 起的每日新客數、廣告花費）暫不匯入。若之後要比較，另外建一張獨立的歷史表匯入，**不要寫進 orders**。
