@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { getInvoices, getInvoiceSequence, getLastCloseTime, performDayClose, getCategorySettings, getQuickTags, saveQuickTags, DEFAULT_QUICK_TAGS, getSettingValue, saveSettingValue, getAbandonedOrders } from '../db';
+import { getInvoices, getInvoiceSequence, performDayClose, getCategorySettings, getQuickTags, saveQuickTags, DEFAULT_QUICK_TAGS, getSettingValue, saveSettingValue, getAbandonedOrders } from '../db';
 
 const BACKEND_URL = '';
 const RESERVE_KEY      = 'pos_reserve_amount';
@@ -404,14 +404,13 @@ const CashDrawerPage = () => {
     const [isClosed, setIsClosed]                 = useState(false);
 
     // ── 關帳區間 ──────────────────────────────────────────────────────────────
-    // 首次：今日 00:00；爾後：上次關帳時間
-    const periodStart = useMemo(() => {
-        const last = getLastCloseTime();
-        if (last) return last;
+    // 首次：今日 00:00；爾後：上次關帳時間。一律以 Supabase 的 last_close_time 為準
+    // （不要讀 localStorage：如果上次關帳時 Supabase 寫入失敗但本機寫入成功，
+    //  localStorage 會比伺服器還新，導致這段期間的發票被誤判成「已經關過」而漏掉）。
+    const [periodStart, setPeriodStart] = useState(() => {
         const d = new Date(); d.setHours(0, 0, 0, 0);
         return d.getTime();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isClosed]);
+    });
 
     const periodStartLabel = useMemo(() => {
         const d = new Date(periodStart);
@@ -419,15 +418,13 @@ const CashDrawerPage = () => {
     }, [periodStart]);
 
     // ── 關帳單「營業日期」──────────────────────────────────────────────────────
-    // 預設帶入 periodStart 的日期（多數情況正確，例如延後跨日關帳）；
-    // 但若這次關帳其實是「今天正常關帳，只是順便帶了一筆前一天打烊後的零星交易」，
-    // 系統無法自動分辨，需要手動改成實際的營業日
+    // 固定預設為「執行關帳動作當天」，不要跟著 periodStart 走——periodStart 可能是
+    // 前一天的時間點（延後跨日關帳），但關帳單代表的通常就是今天，手動改天期才是例外
     const toDateInputValue = (ts) => {
         const d = new Date(ts);
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     };
-    const [businessDate, setBusinessDate] = useState(() => toDateInputValue(periodStart));
-    useEffect(() => { setBusinessDate(toDateInputValue(periodStart)); }, [periodStart]);
+    const [businessDate, setBusinessDate] = useState(() => toDateInputValue(Date.now()));
 
     // ── 發票 ──────────────────────────────────────────────────────────────────
     const [invoices, setInvoices] = useState([]);
@@ -489,7 +486,12 @@ const CashDrawerPage = () => {
     const loadInvoices = async () => {
         setIsLoading(true);
         try {
-            const since = getLastCloseTime() || (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
+            // 先拿伺服器上的 last_close_time（唯一真實來源），再用它去抓這段期間的資料
+            const lastCloseRaw = await getSettingValue('last_close_time', null);
+            const since = lastCloseRaw
+                ? parseInt(lastCloseRaw, 10)
+                : (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); })();
+            setPeriodStart(since);
             const [invData, seqData, cats, tags, reserveRaw, txRaw, abandonedData, adjData] = await Promise.all([
                 getInvoices(since),
                 getInvoiceSequence(),
@@ -753,8 +755,7 @@ const CashDrawerPage = () => {
         const closeData = {
             periodStart,
             periodEnd,
-            // 印單上的營業日期：預設帶 periodStart（會計期間起點），可在關帳前手動調整
-            // （例如：這次關帳其實是隔天的正常關帳，只是順便帶了前一天打烊後的零星交易）
+            // 印單上的營業日期：固定預設為執行關帳當天，需要時可在關帳前手動改成實際營業日
             businessDate:  businessDate,
             activeCount:   activeInvoices.length,
             invoiceRange:  makeInvoiceRange(activeInvoices),   // '#-00014763～#-00014765'
@@ -783,7 +784,14 @@ const CashDrawerPage = () => {
         };
         localStorage.setItem(CLOSE_REPORT_KEY, JSON.stringify(closeData));
 
-        await performDayClose();
+        let closedAt;
+        try {
+            closedAt = await performDayClose();
+        } catch (e) {
+            alert(`關帳失敗，資料沒有同步到伺服器，請檢查網路連線後重試：${e.message}`);
+            return;
+        }
+        setPeriodStart(closedAt);
         setTransactions([]);
         await saveSettingValue('pending_transactions', JSON.stringify([]));
         localStorage.removeItem(TX_KEY);

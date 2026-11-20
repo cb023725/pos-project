@@ -507,31 +507,16 @@ export async function migrateRemarkGroups() {
 }
 
 // ======================================================================
-// 關帳 / 流水號（localStorage + Supabase 雙存）
+// 關帳 / 流水號 —— 一律以 Supabase 為準，不快取在 localStorage。
+// 關帳區間要跨裝置一致，若只存本機，裝置之間（或同裝置清過快取後）會對不上。
 // ======================================================================
-const CLOSE_TIME_KEY     = 'pos_last_close_time';
-const CLOSE_ORDER_ID_KEY = 'pos_last_close_order_id';
-
-export function getLastCloseTime() {
-    const s = localStorage.getItem(CLOSE_TIME_KEY);
-    return s ? parseInt(s, 10) : null;
-}
-export function getLastCloseOrderId() {
-    const s = localStorage.getItem(CLOSE_ORDER_ID_KEY);
-    return s ? parseInt(s, 10) : 0;
-}
 export async function performDayClose() {
     const now = Date.now();
-    localStorage.setItem(CLOSE_TIME_KEY, String(now));
-    try {
-        const { maxId } = await api('GET', '/api/orders/max-id');
-        localStorage.setItem(CLOSE_ORDER_ID_KEY, String(maxId));
-        // 同時存 Supabase，讓其他裝置也能取得
-        await api('POST', '/api/settings/last_close_time', { value: now });
-        await api('POST', '/api/settings/last_close_order_id', { value: maxId });
-    } catch(e) {
-        console.error('performDayClose error', e);
-    }
+    // 先確保寫入 Supabase 成功，中途失敗要讓呼叫端知道、不能悄悄略過，
+    // 否則呼叫端會以為已經關帳到 now，但伺服器還停在舊時間，下次區間就會對不上。
+    const { maxId } = await api('GET', '/api/orders/max-id');
+    await api('POST', '/api/settings/last_close_time', { value: now });
+    await api('POST', '/api/settings/last_close_order_id', { value: maxId });
     return now;
 }
 
