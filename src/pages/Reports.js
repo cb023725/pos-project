@@ -1410,9 +1410,15 @@ const ReportPage = () => {
     // 只在選取的區間超出這個範圍時才重新打 API，避免每次切換頁面都抓全部歷史發票。
     const loadedRangeRef = useRef(null);
 
+    // 分兩階段載入：先抓「今天」讓畫面立刻顯示真實數字（量測約 0.3s），
+    // 再背景補齊比較基準（上週同日／前期）需要的更寬範圍（量測約再 0.5s），不擋畫面、不二次閃爍成轉圈圈
     useEffect(() => {
-        const initial = getNeededRange(today(), today());
-        loadOrders(initial.start, initial.end);
+        (async () => {
+            const t = today();
+            await loadOrders(t, t);
+            const needed = getNeededRange(t, t);
+            loadOrders(needed.start, needed.end);
+        })();
     }, []);
 
     // 選取區間變動時，確認目前載入的資料是否已涵蓋 compPeriod 比較基準需要的範圍，不夠才重抓
@@ -1442,13 +1448,18 @@ const ReportPage = () => {
     const loadOrders = async (rangeStart, rangeEnd) => {
         setIsLoading(true);
         try {
+            // report_sessions 是對全部歷史訂單/發票/品項做聚合查詢，範圍越寬越慢（量測：全部歷史 1.2s、近 90 天 0.16s）。
+            // store_calendar/turnaways 資料量小、不受影響，但一併帶同一個範圍求簡單一致。
+            // rangeStart/rangeEnd 為空字串（使用者選「全部」）時才退回全部歷史的寬範圍。
+            const sessStart = rangeStart || '2023-01-01';
+            const sessEnd   = rangeEnd   || today();
             const [raw, cats, adjData, sessionRows, calRows, turnawayRows] = await Promise.all([
                 getReportOrders(rangeStart, rangeEnd),
                 getCategorySettings(),
                 fetch('/api/adjustments').then(r => r.json()).catch(() => []),
-                getReportSessions('2023-01-01', today()).catch(() => []),
-                getStoreCalendar('2023-01-01', today()).catch(() => []),
-                getTurnaways('2023-01-01', today()).catch(() => []),
+                getReportSessions(sessStart, sessEnd).catch(() => []),
+                getStoreCalendar(sessStart, sessEnd).catch(() => []),
+                getTurnaways(sessStart, sessEnd).catch(() => []),
             ]);
             loadedRangeRef.current = { start: rangeStart, end: rangeEnd };
             setAdjustments(Array.isArray(adjData) ? adjData : []);
@@ -1525,18 +1536,15 @@ const ReportPage = () => {
         });
     }, [orders, compPeriod]);
 
-    if (isLoading) {
-        return (
-            <div className="flex items-center justify-center h-full">
-                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#4A9A7A]"></div>
-            </div>
-        );
-    }
-
     return (
         <div className="p-5 font-sans bg-gray-50 min-h-full">
             <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-                <h1 className="text-2xl font-black text-gray-900">營業報表</h1>
+                <div className="flex items-center gap-2">
+                    <h1 className="text-2xl font-black text-gray-900">營業報表</h1>
+                    {isLoading && (
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-[#4A9A7A]" title="資料更新中" />
+                    )}
+                </div>
                 <div className="flex items-center gap-3">
                     <DateRangeBar startDate={startDate} endDate={endDate} onStart={setStartDate} onEnd={setEndDate} />
                     <AnalysisExportButton />

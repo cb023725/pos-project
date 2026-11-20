@@ -35,21 +35,23 @@ async function fetchAllRows(buildQuery) {
     return all;
 }
 // 分頁數量較多時，fetchAllRows 的逐頁循序等待會疊加網路延遲。
-// 先用一次 head:true 的 count 查詢拿到總筆數，再平行發出所有分頁請求。
-async function fetchAllRowsParallel(buildCountQuery, buildPageQuery) {
-    const { count, error: countErr } = await buildCountQuery();
-    if (countErr) throw countErr;
-    const total = count || 0;
-    if (total === 0) return [];
-    const pageCount = Math.ceil(total / SUPA_PAGE_SIZE);
-    const pages = await Promise.all(
-        Array.from({ length: pageCount }, (_, i) =>
-            buildPageQuery().range(i * SUPA_PAGE_SIZE, i * SUPA_PAGE_SIZE + SUPA_PAGE_SIZE - 1))
-    );
-    const all = [];
-    for (const p of pages) {
-        if (p.error) throw p.error;
-        all.push(...(p.data || []));
+// buildQuery() 必須自己帶 { count: 'exact' }（RPC 呼叫不支援 head:true 的 count 查詢，
+// 所以不能像一般資料表那樣先用 head 查詢拿總數，改成第一頁本身就帶 count，直接拿到總筆數）。
+// 第一頁查完就知道總數，剩下的頁數再平行補齊。
+async function fetchAllRowsParallel(buildQuery) {
+    const first = await buildQuery().range(0, SUPA_PAGE_SIZE - 1);
+    if (first.error) throw first.error;
+    const total = first.count ?? (first.data ? first.data.length : 0);
+    let all = [...(first.data || [])];
+    if (total > SUPA_PAGE_SIZE) {
+        const pageCount = Math.ceil(total / SUPA_PAGE_SIZE);
+        const rest = await Promise.all(
+            Array.from({ length: pageCount - 1 }, (_, i) => {
+                const page = i + 1;
+                return buildQuery().range(page * SUPA_PAGE_SIZE, page * SUPA_PAGE_SIZE + SUPA_PAGE_SIZE - 1);
+            })
+        );
+        rest.forEach(p => { if (p.error) throw p.error; all = all.concat(p.data || []); });
     }
     return all;
 }
@@ -1605,40 +1607,37 @@ app.get('/api/orders/max-id', async (req, res) => {
     const { data } = await supabase.from('orders').select('id').order('id', { ascending: false }).limit(1);
     res.json({ maxId: data?.[0]?.id || 0 });
 });
+// 原本是「先查發票、再依 order_id 查訂單」兩次依序查詢，改用 report_order_invoices RPC
+// 在資料庫端一次 join，省掉一次網路往返（每次往返約 100-130ms）
 app.get('/api/orders/report', async (req, res) => {
     const { start, end } = req.query; // 選填：YYYY-MM-DD（依台灣時區），省略 = 全部歷史
-    let invs;
+    const startTs = start ? new Date(start + 'T00:00:00+08:00').toISOString() : null;
+    const endTs   = end   ? new Date(new Date(end + 'T00:00:00+08:00').getTime() + 86400000).toISOString() : null;
+    let rows;
     try {
-        invs = await fetchAllRows(() => {
-            let q = supabase.from('invoices').select('*').eq('status', '已開立').order('payment_time');
-            if (start) q = q.gte('payment_time', new Date(start + 'T00:00:00+08:00').toISOString());
-            if (end)   q = q.lt('payment_time', new Date(new Date(end + 'T00:00:00+08:00').getTime() + 86400000).toISOString());
-            return q;
-        });
+        if (start && end) {
+            rows = await fetchAllRows(() =>
+                supabase.rpc('report_order_invoices', { p_start_ts: startTs, p_end_ts: endTs }));
+        } else {
+            rows = await fetchAllRowsParallel(() =>
+                supabase.rpc('report_order_invoices', { p_start_ts: startTs, p_end_ts: endTs }, { count: 'exact' }));
+        }
     } catch (error) {
         return res.status(500).json({ error: error.message });
     }
-    const orderIds = [...new Set((invs||[]).map(i => i.order_id))];
-    const ords = orderIds.length
-        ? await fetchAllRows(() => supabase.from('orders').select('*').in('id', orderIds))
-        : [];
-    const oMap = new Map((ords||[]).map(o => [o.id, o]));
-    res.json((invs||[]).map(inv => {
-        const o = oMap.get(inv.order_id);
-        return {
-            id: inv.order_id, orderId: inv.order_id,
-            dailyOrderNo: inv.daily_order_no || o?.daily_order_no,
-            invoiceNumber: inv.invoice_number,
-            timestamp: new Date(inv.payment_time).getTime(),
-            openedAt: o?.timestamp ? new Date(o.timestamp).getTime() : null,
-            total: inv.total || inv.amount,
-            items: inv.items_snapshot || [],
-            table: o?.table_number || inv.table_name || '外帶',
-            currentOrderCustomerCount: o?.customer_count,
-            customerCount: inv.customer_count || 0,
-            orderType: o?.order_type || inv.order_type || (inv.table_name === '外帶' ? '外帶' : '內用'),
-        };
-    }));
+    res.json((rows||[]).map(r => ({
+        id: r.invoice_order_id, orderId: r.invoice_order_id,
+        dailyOrderNo: r.invoice_daily_order_no || r.order_daily_order_no,
+        invoiceNumber: r.invoice_number,
+        timestamp: new Date(r.payment_time).getTime(),
+        openedAt: r.order_timestamp ? new Date(r.order_timestamp).getTime() : null,
+        total: r.total || r.amount,
+        items: r.items_snapshot || [],
+        table: r.order_table_number || r.invoice_table_name || '外帶',
+        currentOrderCustomerCount: r.order_customer_count,
+        customerCount: r.invoice_customer_count || 0,
+        orderType: r.order_order_type || r.invoice_order_type || (r.invoice_table_name === '外帶' ? '外帶' : '內用'),
+    })));
 });
 // 彙總報表資料（午/晚各一列），不含個資；四個地方的「營業額」「客單價」都以此為準
 app.get('/api/report/sessions', async (req, res) => {
@@ -2076,10 +2075,8 @@ app.delete('/api/adjustments/:id', async (req, res) => {
 app.get('/api/invoices/sequence', async (req, res) => {
     let data;
     try {
-        data = await fetchAllRowsParallel(
-            () => supabase.from('invoices').select('id', { count: 'exact', head: true }).eq('status', '已開立'),
-            () => supabase.from('invoices').select('id, payment_time').eq('status', '已開立').order('payment_time'),
-        );
+        data = await fetchAllRowsParallel(() =>
+            supabase.from('invoices').select('id, payment_time', { count: 'exact' }).eq('status', '已開立').order('payment_time'));
     } catch (error) {
         return res.status(500).json({ error: error.message });
     }
