@@ -1,6 +1,6 @@
 # 營運資料一致性修正清單（給 Claude Code）
 
-建立日期：2026-11-19 ｜ 最後更新：2026-11-20
+建立日期：2026-11-19 ｜ 最後更新：2026-11-21
 
 適用範圍：
 - `pos-project`：WebPOS，包含 `server.js`、`src/pages/Reports.js`、`InvoiceManagement.js`、`CashDrawer.js`
@@ -39,6 +39,11 @@
 - **第 9 節**：POS「銷售排行」頁、週報 email 的品項排行／加點率邏輯改用 `report_items`／`report_attach`——**已明確決定先不做**，這兩個功能目前各自重算但運作正常，風險與效益不成比例，之後有需要再評估。
 - **第 9 節選配**：`menu_items` 新增 `cost`（食材成本）欄位，需要使用者提供各品項成本後才做。
 - **第 11 節（新增）**：見下方，把四個報表 RPC 共用的查詢邏輯整合成一個共同的基礎定義。
+- **第 12 節（新增，2026-11-21）**：關帳頁新增「查看過去關帳單」功能，見下方。
+
+### 🐛 已修正的 bug（2026-11-21）
+
+- **關帳區間誤判，漏算發票**：`getLastCloseTime()` 原本只讀 localStorage，若上次關帳時 Supabase 寫入失敗（例如網路不穩）但本機寫入成功，本機記錄的關帳時間會比伺服器新，中間這段期間的發票（例如冷凍包外帶單）就會被誤判成已經關過帳而沒出現在畫面上。已改成一律以 Supabase 為唯一依據，並讓 `performDayClose()` 寫入失敗時直接拋錯、不再悄悄略過。關帳單「營業日期」也改成固定預設為執行關帳當天，不再跟著 periodStart（可能是前一天）走。
 
 ---
 
@@ -49,6 +54,36 @@
 **風險**：四段邏輯分開寫、分開維護，之後若要調整定義（例如餐期分界時間、營業日判斷方式），很容易改了一個函式卻漏改其他三個，導致四個地方的數字又開始不一致——這正是最初第 1 節想解決的問題，現在用多個 RPC 的方式又在資料庫端重演一次。
 
 **做法（建議，尚未實作）**：抽出一個共用的 SQL view 或函式（例如 `report_base_orders`），只做「有效發票 join 訂單、算出 business_date／meal_period」這一步，讓 `report_sessions`、`report_items`、`report_attach`、`report_order_invoices` 都改成在這個共用結果上面做各自的彙總，而不是各自重新 join 一次。改動前要先確認效能不會因為多一層 view 而變差（尤其 `report_order_invoices` 現在是未分頁單一 join，速度敏感）。
+
+---
+
+## 12. 待處理：關帳頁新增「查看過去關帳單」功能
+
+**目標**：在關帳頁（`CashDrawer.js`）加一個入口，可以回顧之前的關帳單——內容要跟當時實際印出來的那張**完全一致**（折扣/退款、臨時收支、各自訂分組金額如冷凍包、作廢發票、對帳差異與原因、下期零用金等都要有），忘記記帳或要核對帳目時可以回頭查，不用只靠記憶或翻紙本。
+
+**現況**：關帳單目前完全不持久化。`performDayClose()`／`handleFinalSubmit` 只把最新一次的 `closeData` 存一份在 localStorage（`pos_last_close_report`），每次關帳都會整個覆蓋掉上一次，只能重印「最後一次」，沒有任何歷史紀錄可查。
+
+**做法（建議，尚未實作）**：
+
+1. 新增 `cash_closes` 資料表（Supabase），每次確認關帳時把完整的 `closeData`（跟目前列印用的同一份物件）存一列進去，不用拆欄位，比照 `invoices.items_snapshot` 的做法整包存 `jsonb`：
+
+   ```sql
+   create table public.cash_closes (
+     id          bigserial primary key,
+     period_start timestamptz not null,
+     period_end   timestamptz not null,
+     business_date date not null,
+     close_data   jsonb not null,  -- 跟列印用的 closeData 同一份，欄位變動不用改 schema
+     created_at   timestamptz not null default now()
+   );
+   ```
+
+2. 關帳頁加一個「查看過去關帳單」入口，可依日期查詢／往回捲動瀏覽，點開某一筆後**直接重用現有的列印渲染邏輯**（`sendPrintClose` 那一套樣板），不要另外做一套畫面，否則以後兩邊會長得不一樣、維護成本變兩倍。
+3. 這張表只存營業數字，不含個資，不需要額外遮蔽；但比照關帳本身的定位，只在 POS 內部可見，不要放到 Vercel 公開頁面。
+
+**待確認（使用者決定後再動工）**：
+- 資料要保留多久：全部保留（一天最多幾筆、資料量很小）還是比照備份只留近 N 個月。
+- 是否需要「補印」功能（直接從歷史紀錄重新觸發列印，而不只是螢幕上查看）。
 
 ---
 

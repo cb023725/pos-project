@@ -1637,6 +1637,7 @@ app.get('/api/orders/report', async (req, res) => {
         currentOrderCustomerCount: r.order_customer_count,
         customerCount: r.invoice_customer_count || 0,
         orderType: r.order_order_type || r.invoice_order_type || (r.invoice_table_name === '外帶' ? '外帶' : '內用'),
+        isNewGroup: r.order_is_new_group,
     })));
 });
 // 彙總報表資料（午/晚各一列），不含個資；四個地方的「營業額」「客單價」都以此為準

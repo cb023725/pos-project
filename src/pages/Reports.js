@@ -896,25 +896,34 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
                 <table className="w-full text-sm">
                     <thead className="bg-gray-50">
                         <tr>
-                            <th className="pl-5 pr-3 py-3 text-left text-xs font-bold text-gray-400 w-28"></th>
-                            <th className="px-4 py-3 text-center text-xs font-bold text-gray-600">全天</th>
-                            <th className="px-4 py-3 text-center text-xs font-bold text-gray-600">午餐</th>
-                            <th className="px-4 py-3 text-center text-xs font-bold text-gray-600">晚餐</th>
+                            <th className="pl-5 pr-3 py-3 text-left text-xs font-bold text-gray-400 w-16 whitespace-nowrap"></th>
+                            <th className="px-4 py-3 text-center text-xs font-bold text-gray-600 whitespace-nowrap">新客（人/組）</th>
+                            <th className="px-4 py-3 text-center text-xs font-bold text-gray-600 whitespace-nowrap">舊客（人/組）</th>
+                            <th className="px-4 py-3 text-center text-xs font-bold text-gray-600 whitespace-nowrap">新客比例</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                         {[
-                            { label: '新客人數／組數', get: g => (g.newCustomers > 0 || g.newGroups > 0) ? `${g.newCustomers} 人／${g.newGroups} 組` : '—' },
-                            { label: '舊客人數／組數', get: g => (g.returningCustomers > 0 || g.returningGroups > 0) ? `${g.returningCustomers} 人／${g.returningGroups} 組` : '—' },
-                            { label: '新客比例',       get: g => (g.newCustomers > 0 || g.returningCustomers > 0) ? `${Math.round(g.newCustomers / g.totalCustomers * 100)}%` : '—' },
-                        ].map(r => (
-                            <tr key={r.label} className="hover:bg-gray-50">
-                                <td className="pl-5 pr-3 py-3.5 text-xs font-bold text-gray-500">{r.label}</td>
-                                <td className="px-4 py-3.5 text-center font-black text-gray-800">{r.get(newReturningStats.all)}</td>
-                                <td className="px-4 py-3.5 text-center text-gray-700">{r.get(newReturningStats.lunch)}</td>
-                                <td className="px-4 py-3.5 text-center text-gray-700">{r.get(newReturningStats.dinner)}</td>
-                            </tr>
-                        ))}
+                            { label: '全天', stats: newReturningStats.all,    bold: true },
+                            { label: '午餐', stats: newReturningStats.lunch,  bold: false },
+                            { label: '晚餐', stats: newReturningStats.dinner, bold: false },
+                        ].map(row => {
+                            const g = row.stats;
+                            const newText   = (g.newCustomers > 0 || g.newGroups > 0) ? `${g.newCustomers} 人／${g.newGroups} 組` : '—';
+                            const oldText   = (g.returningCustomers > 0 || g.returningGroups > 0) ? `${g.returningCustomers} 人／${g.returningGroups} 組` : '—';
+                            // 新客比例只用「有標記的」人數當分母（新客＋舊客），不計入未標記；完全沒有標記資料時留白
+                            const markedCustomers = g.newCustomers + g.returningCustomers;
+                            const ratioText = markedCustomers > 0 ? `${Math.round(g.newCustomers / markedCustomers * 100)}%` : '—';
+                            const cellCls = row.bold ? 'font-black text-gray-800' : 'font-medium text-gray-400';
+                            return (
+                                <tr key={row.label} className="hover:bg-gray-50">
+                                    <td className={`pl-5 pr-3 py-3.5 text-xs whitespace-nowrap ${row.bold ? 'font-black text-gray-800' : 'font-bold text-gray-400'}`}>{row.label}</td>
+                                    <td className={`px-4 py-3.5 text-center whitespace-nowrap ${cellCls}`}>{newText}</td>
+                                    <td className={`px-4 py-3.5 text-center whitespace-nowrap ${cellCls}`}>{oldText}</td>
+                                    <td className={`px-4 py-3.5 text-center whitespace-nowrap ${cellCls}`}>{ratioText}</td>
+                                </tr>
+                            );
+                        })}
                     </tbody>
                 </table>
             </div>
@@ -1081,13 +1090,14 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
                                     <th className="px-3 py-2 text-left   text-xs font-bold text-gray-500 whitespace-nowrap">結帳時間</th>
                                     <th className="px-3 py-2 text-center text-xs font-bold text-gray-500 whitespace-nowrap w-16">桌號</th>
                                     <th className="px-3 py-2 text-center text-xs font-bold text-gray-500 whitespace-nowrap w-12">人數</th>
+                                    <th className="px-3 py-2 text-center text-xs font-bold text-gray-500 whitespace-nowrap w-14">新/舊客</th>
                                     <th className="px-3 py-2 text-left   text-xs font-bold text-gray-500">結帳項目</th>
                                     <th className="px-3 py-2 text-right  text-xs font-bold text-gray-500 whitespace-nowrap w-24">金額</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100">
                                 {slotOrders.length === 0 ? (
-                                    <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">此日期區間無紀錄</td></tr>
+                                    <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">此日期區間無紀錄</td></tr>
                                 ) : pageOrders.map((o, i) => (
                                     <tr key={`${o.invoiceNumber}-${i}`} className="hover:bg-gray-50">
                                         <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-400 font-mono align-top pt-3">
@@ -1101,6 +1111,13 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
                                         </td>
                                         <td className="px-3 py-2 whitespace-nowrap text-center text-gray-600 align-top pt-3">
                                             {(o.adjustedCustomerCount || 0) > 0 ? o.adjustedCustomerCount : ''}
+                                        </td>
+                                        <td className="px-3 py-2 whitespace-nowrap text-center align-top pt-3">
+                                            {o.isNewGroup === true
+                                                ? <span className="text-xs font-bold text-emerald-600">新客</span>
+                                                : o.isNewGroup === false
+                                                    ? <span className="text-xs font-bold text-blue-600">舊客</span>
+                                                    : <span className="text-xs text-gray-300">—</span>}
                                         </td>
                                         <td className="px-3 py-2 text-gray-700 align-top">
                                             <ul className="list-disc list-inside space-y-0.5 pt-1">
