@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { getInvoices, getLastCloseTime, performDayClose, getCategorySettings, getQuickTags, saveQuickTags, DEFAULT_QUICK_TAGS, getSettingValue, saveSettingValue, getAbandonedOrders } from '../db';
+import { getInvoices, getInvoiceSequence, getLastCloseTime, performDayClose, getCategorySettings, getQuickTags, saveQuickTags, DEFAULT_QUICK_TAGS, getSettingValue, saveSettingValue, getAbandonedOrders } from '../db';
 
 const BACKEND_URL = '';
 const RESERVE_KEY      = 'pos_reserve_amount';
 const START_INVOICE_NUM = 14760;  // 與 InvoiceManagement.js 一致
 
 // 計算發票顯示流水號（跨期不重置，與 InvoiceManagement 邏輯相同）
-const getDisplayInvoiceNum = (invoiceId, allInvoices) => {
-    const sorted = [...allInvoices].sort((a, b) =>
+// sequence：全部歷史發票的 {id, paymentTime}（輕量版，不含 items_snapshot），用來算排序位置
+const getDisplayInvoiceNum = (invoiceId, sequence) => {
+    const sorted = [...sequence].sort((a, b) =>
         new Date(a.paymentTime).getTime() - new Date(b.paymentTime).getTime()
     );
     const index = sorted.findIndex(inv => inv.id === invoiceId);
@@ -430,6 +431,7 @@ const CashDrawerPage = () => {
 
     // ── 發票 ──────────────────────────────────────────────────────────────────
     const [invoices, setInvoices] = useState([]);
+    const [invoiceSequence, setInvoiceSequence] = useState([]); // 全部歷史的 id+paymentTime，只用來算顯示流水號
     const [abandonedOrders, setAbandonedOrders] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
 
@@ -488,8 +490,9 @@ const CashDrawerPage = () => {
         setIsLoading(true);
         try {
             const since = getLastCloseTime() || (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
-            const [invData, cats, tags, reserveRaw, txRaw, abandonedData, adjData] = await Promise.all([
-                getInvoices(),
+            const [invData, seqData, cats, tags, reserveRaw, txRaw, abandonedData, adjData] = await Promise.all([
+                getInvoices(since),
+                getInvoiceSequence(),
                 getCategorySettings(),
                 getQuickTags(),
                 getSettingValue('reserve_amount', null),
@@ -498,6 +501,7 @@ const CashDrawerPage = () => {
                 fetch(`${BACKEND_URL}/api/adjustments?since=${since}`).then(r => r.json()).catch(() => []),
             ]);
             setInvoices(invData);
+            setInvoiceSequence(seqData || []);
             setAbandonedOrders(abandonedData || []);
             setAdjustments(Array.isArray(adjData) ? adjData : []);
             setCatSettings(cats);
@@ -606,7 +610,7 @@ const CashDrawerPage = () => {
         [transactions]);
 
     // ── helper：發票顯示號碼（傳遞給 AdjustmentModal 用）────────────────────
-    const getDisplayInvNum = useCallback((invId) => getDisplayInvoiceNum(invId, invoices), [invoices]);
+    const getDisplayInvNum = useCallback((invId) => getDisplayInvoiceNum(invId, invoiceSequence), [invoiceSequence]);
 
     // ── 計算 ──────────────────────────────────────────────────────────────────
     const cashTotal = useMemo(() =>
@@ -736,7 +740,7 @@ const CashDrawerPage = () => {
         // 計算發票號碼區間（與 InvoicePage 相同的 #-XXXXXXXX 格式）
         const makeInvoiceRange = (invList) => {
             const nums = invList.map(i => {
-                const num = getDisplayInvoiceNum(i.id, invoices);
+                const num = getDisplayInvoiceNum(i.id, invoiceSequence);
                 console.log(`[關帳] invoice id=${i.id} → display=${num}`);
                 return num;
             }).filter(Boolean).sort();
@@ -755,7 +759,7 @@ const CashDrawerPage = () => {
             activeCount:   activeInvoices.length,
             invoiceRange:  makeInvoiceRange(activeInvoices),   // '#-00014763～#-00014765'
             voidedCount:   voidedInvoices.length,
-            voidedNums:    voidedInvoices.map(i => getDisplayInvoiceNum(i.id, invoices)).filter(Boolean).sort(),
+            voidedNums:    voidedInvoices.map(i => getDisplayInvoiceNum(i.id, invoiceSequence)).filter(Boolean).sort(),
             voidedAmount:  periodVoided,
             sales:        periodRegularSales,       // 已開立，不含自訂分組
             customGroups: customGroupsForPrint,    // 動態分組（冷凍包/年菜等）

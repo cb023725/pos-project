@@ -34,6 +34,25 @@ async function fetchAllRows(buildQuery) {
     }
     return all;
 }
+// 分頁數量較多時，fetchAllRows 的逐頁循序等待會疊加網路延遲。
+// 先用一次 head:true 的 count 查詢拿到總筆數，再平行發出所有分頁請求。
+async function fetchAllRowsParallel(buildCountQuery, buildPageQuery) {
+    const { count, error: countErr } = await buildCountQuery();
+    if (countErr) throw countErr;
+    const total = count || 0;
+    if (total === 0) return [];
+    const pageCount = Math.ceil(total / SUPA_PAGE_SIZE);
+    const pages = await Promise.all(
+        Array.from({ length: pageCount }, (_, i) =>
+            buildPageQuery().range(i * SUPA_PAGE_SIZE, i * SUPA_PAGE_SIZE + SUPA_PAGE_SIZE - 1))
+    );
+    const all = [];
+    for (const p of pages) {
+        if (p.error) throw p.error;
+        all.push(...(p.data || []));
+    }
+    return all;
+}
 
 // ── 分析資料匯出用的共用工具 ──────────────────────────────────────────────
 function toCSV(rows, cols) {
@@ -1587,10 +1606,15 @@ app.get('/api/orders/max-id', async (req, res) => {
     res.json({ maxId: data?.[0]?.id || 0 });
 });
 app.get('/api/orders/report', async (req, res) => {
+    const { start, end } = req.query; // 選填：YYYY-MM-DD（依台灣時區），省略 = 全部歷史
     let invs;
     try {
-        invs = await fetchAllRows(() =>
-            supabase.from('invoices').select('*').eq('status', '已開立').order('payment_time'));
+        invs = await fetchAllRows(() => {
+            let q = supabase.from('invoices').select('*').eq('status', '已開立').order('payment_time');
+            if (start) q = q.gte('payment_time', new Date(start + 'T00:00:00+08:00').toISOString());
+            if (end)   q = q.lt('payment_time', new Date(new Date(end + 'T00:00:00+08:00').getTime() + 86400000).toISOString());
+            return q;
+        });
     } catch (error) {
         return res.status(500).json({ error: error.message });
     }
@@ -2048,14 +2072,28 @@ app.delete('/api/adjustments/:id', async (req, res) => {
 
 // 發票
 // ============================================================
+// 輕量版：只回傳 id + payment_time，供「發票顯示流水號」計算排序位置用（不帶 items_snapshot，平行分頁抓取）
+app.get('/api/invoices/sequence', async (req, res) => {
+    let data;
+    try {
+        data = await fetchAllRowsParallel(
+            () => supabase.from('invoices').select('id', { count: 'exact', head: true }).eq('status', '已開立'),
+            () => supabase.from('invoices').select('id, payment_time').eq('status', '已開立').order('payment_time'),
+        );
+    } catch (error) {
+        return res.status(500).json({ error: error.message });
+    }
+    res.json((data || []).map(r => ({ id: r.id, paymentTime: r.payment_time })));
+});
 app.get('/api/invoices', async (req, res) => {
-    const { status, from } = req.query;
+    const { status, from, to } = req.query;
     let data;
     try {
         data = await fetchAllRows(() => {
             let q = supabase.from('invoices').select('*').order('id');
             if (status) q = q.eq('status', status);
             if (from)   q = q.gte('payment_time', from);
+            if (to)     q = q.lte('payment_time', to);
             return q;
         });
     } catch (error) {

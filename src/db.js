@@ -380,8 +380,9 @@ export async function archiveTakeoutOrder(orderId) {
     await api('PATCH', `/api/orders/${orderId}`, { status: 'paid_report_complete' });
     return true;
 }
-export async function getReportOrders() {
-    return api('GET', '/api/orders/report');
+export async function getReportOrders(start, end) {
+    if (!start || !end) return api('GET', '/api/orders/report');
+    return api('GET', `/api/orders/report?start=${start}&end=${end}`);
 }
 // 彙總報表資料（午/晚各一列），四個地方的「營業額」「客單價」共用的單一來源
 export async function getReportSessions(start, end) {
@@ -391,8 +392,16 @@ export async function getReportSessions(start, end) {
 // ======================================================================
 // 發票
 // ======================================================================
-export async function getInvoices() {
-    return api('GET', '/api/invoices');
+export async function getInvoices(sinceMs, toMs) {
+    const params = new URLSearchParams();
+    if (sinceMs) params.set('from', new Date(sinceMs).toISOString());
+    if (toMs)    params.set('to', new Date(toMs).toISOString());
+    const qs = params.toString();
+    return api('GET', `/api/invoices${qs ? `?${qs}` : ''}`);
+}
+// 輕量版：只有 id + paymentTime，用來算「發票顯示流水號」在全部歷史中的排序位置
+export async function getInvoiceSequence() {
+    return api('GET', '/api/invoices/sequence');
 }
 export async function getAbandonedOrders(since) {
     const qs = since ? `?since=${since}` : '';

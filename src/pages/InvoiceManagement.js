@@ -2,13 +2,15 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getInvoices, voidInvoice, getOrderById, getTableStatuses } from '../db';
+import { getInvoices, getInvoiceSequence, voidInvoice, getOrderById, getTableStatuses } from '../db';
 
 const BACKEND_URL = '';
 
 const InvoiceManagementPage = () => {
     const navigate = useNavigate();
     const [invoices, setInvoices] = useState([]);
+    const [invoiceSequence, setInvoiceSequence] = useState([]); // 全部歷史的 id+paymentTime，只用來算顯示流水號
+    const [adjustments, setAdjustments] = useState([]);
     const [tableStatuses, setTableStatuses] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [selectedOrder, setSelectedOrder] = useState(null);
@@ -36,19 +38,27 @@ const InvoiceManagementPage = () => {
     // 起始發票流水號設定
     const START_INVOICE_NUM = 14760;
 
+    // startDate/endDate 改變時重新抓取（只抓選定區間，發票流水號序列另外抓全部歷史的輕量版）
     useEffect(() => {
         loadData();
-    }, []);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [startDate, endDate]);
 
     const loadData = async () => {
         setIsLoading(true);
         try {
-            const [invoiceData, tableData] = await Promise.all([
-                getInvoices(),
-                getTableStatuses()
+            const startMs = new Date(startDate + 'T00:00:00').getTime();
+            const endMs   = new Date(endDate + 'T23:59:59.999').getTime();
+            const [invoiceData, seqData, tableData, adjData] = await Promise.all([
+                getInvoices(startMs, endMs),
+                getInvoiceSequence(),
+                getTableStatuses(),
+                fetch(`${BACKEND_URL}/api/adjustments`).then(r => r.json()).catch(() => []),
             ]);
             setInvoices(invoiceData);
+            setInvoiceSequence(seqData || []);
             setTableStatuses(tableData);
+            setAdjustments(Array.isArray(adjData) ? adjData : []);
         } catch (error) {
             console.error("載入資料失敗:", error);
         } finally {
@@ -92,9 +102,30 @@ const InvoiceManagementPage = () => {
         };
     }, [invoices, startDate, endDate]);
 
+    // 以 invoiceId 為 key 的 adjustments map
+    const adjByInvoice = useMemo(() => {
+        const m = new Map();
+        adjustments.forEach(a => {
+            const key = a.originalInvoiceId;
+            if (!m.has(key)) m.set(key, []);
+            m.get(key).push(a);
+        });
+        return m;
+    }, [adjustments]);
+
+    // 本期 adjustments 合計（以關聯發票的 paymentTime 為準）
+    const periodAdjTotal = useMemo(() => {
+        return adjustments.filter(a => {
+            const inv = invoices.find(i => i.id === a.originalInvoiceId);
+            if (!inv) return false;
+            const dateStr = getLocalDateString(new Date(inv.paymentTime));
+            return dateStr >= startDate && dateStr <= endDate;
+        }).reduce((s, a) => s + (a.amount || 0), 0);
+    }, [adjustments, invoices, startDate, endDate]);
+
     const getDisplayInvoiceNumber = (invoiceId) => {
-        const chronologicalInvoices = [...invoices].sort((a, b) => new Date(a.paymentTime).getTime() - new Date(b.paymentTime).getTime());
-        const index = chronologicalInvoices.findIndex(inv => inv.id === invoiceId);
+        const chronological = [...invoiceSequence].sort((a, b) => new Date(a.paymentTime).getTime() - new Date(b.paymentTime).getTime());
+        const index = chronological.findIndex(inv => inv.id === invoiceId);
         if (index === -1) return "#-00000000";
         const currentNum = START_INVOICE_NUM + index;
         return `#-${currentNum.toString().padStart(8, '0')}`;
@@ -175,6 +206,7 @@ const InvoiceManagementPage = () => {
             if (orderSnapshot) {
                 setSelectedOrder({
                     ...orderSnapshot,
+                    invoiceId: inv.id,
                     displayInvoiceNumber: getDisplayInvoiceNumber(inv.id),
                     paymentTime: inv.paymentTime,
                     voidTime: inv.voidTime,
@@ -225,7 +257,7 @@ const InvoiceManagementPage = () => {
                                 { label: '全部',    s: '2020-01-01', e: getLocalDateString(new Date()) },
                             ].map(sc => (
                                 <button key={sc.label} onClick={() => setQuickDate(sc.s, sc.e)}
-                                    className="text-xs font-bold text-[#2FB8B8] hover:bg-[#2FB8B8]/10 px-2 py-0.5 rounded whitespace-nowrap transition-colors"
+                                    className="text-xs font-bold text-[#4A9A7A] hover:bg-[#4A9A7A]/10 px-2 py-0.5 rounded whitespace-nowrap transition-colors"
                                 >{sc.label}</button>
                             ))}
                         </div>
@@ -234,10 +266,15 @@ const InvoiceManagementPage = () => {
             </div>
 
             {/* Stats Dashboard */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <div className="grid gap-4 mb-6 grid-cols-2 md:grid-cols-4">
                 <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
                     <p className="text-gray-400 text-xs font-bold uppercase">發票總額 (淨)</p>
-                    <p className="text-2xl font-black text-blue-600">${formatCurrency(stats.totalAmount)}</p>
+                    <p className="text-2xl font-black text-[#4A9A7A]">${formatCurrency(stats.totalAmount + periodAdjTotal)}</p>
+                    {periodAdjTotal !== 0 && (
+                        <p className="text-xs mt-0.5 text-gray-400">
+                            含折扣調整 {periodAdjTotal > 0 ? '+' : '−'}${formatCurrency(Math.abs(periodAdjTotal))}
+                        </p>
+                    )}
                 </div>
                 <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
                     <p className="text-gray-400 text-xs font-bold uppercase">已開立張數</p>
@@ -257,7 +294,7 @@ const InvoiceManagementPage = () => {
             <div className="flex gap-2 mb-4">
                 <button 
                     onClick={() => setActiveTab('active')}
-                    className={`px-6 py-2 rounded-t-xl font-black transition-all ${activeTab === 'active' ? 'bg-white text-blue-600 border-t-2 border-blue-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                    className={`px-6 py-2 rounded-t-xl font-black transition-all ${activeTab === 'active' ? 'bg-white text-[#4A9A7A] border-t-2 border-[#4A9A7A] shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
                 >
                     結帳紀錄
                 </button>
@@ -293,7 +330,7 @@ const InvoiceManagementPage = () => {
                                 filteredInvoices.map((inv) => (
                                     <tr key={inv.id} className="hover:bg-gray-50 transition-colors">
                                         <td className="px-6 py-4 whitespace-nowrap align-middle">
-                                            <span className={`font-mono font-bold px-2 py-1 rounded ${activeTab === 'active' ? 'text-blue-600 bg-blue-50' : 'text-gray-400 bg-gray-100'}`}>
+                                            <span className={`font-mono font-bold px-2 py-1 rounded ${activeTab === 'active' ? 'text-[#4A9A7A] bg-[#4A9A7A]/10' : 'text-gray-400 bg-gray-100'}`}>
                                                 {getDisplayInvoiceNumber(inv.id)}
                                             </span>
                                         </td>
@@ -304,14 +341,22 @@ const InvoiceManagementPage = () => {
                                             {formatOrderId(inv)}
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-center align-middle">
-                                            <span className={`px-3 py-1 rounded-full font-bold text-xs ${inv.orderType === '外帶' ? 'bg-orange-100 text-orange-600' : 'bg-indigo-100 text-indigo-600'}`}>
+                                            <span className={`px-3 py-1 rounded-full font-bold text-xs ${inv.orderType === '外帶' ? 'bg-[#D47856]/15 text-[#D47856]' : 'bg-[#4A9A7A]/15 text-[#4A9A7A]'}`}>
                                                 {inv.orderType}
                                             </span>
                                         </td>
-                                        <td className="px-6 py-4 whitespace-nowrap align-middle">
+                                        <td className="px-6 py-4 align-middle">
                                             <span className={`font-black ${activeTab === 'voided' ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
                                                 ${formatCurrency(inv.amount)}
                                             </span>
+                                            {adjByInvoice.has(inv.id) && (() => {
+                                                const total = adjByInvoice.get(inv.id).reduce((s, a) => s + (a.amount || 0), 0);
+                                                return (
+                                                    <div className={`text-xs font-semibold mt-0.5 ${total < 0 ? 'text-orange-500' : 'text-green-600'}`}>
+                                                        折扣 {total < 0 ? '−' : '+'}${formatCurrency(Math.abs(total))}
+                                                    </div>
+                                                );
+                                            })()}
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm align-middle">
                                             {activeTab === 'active' ? (
@@ -374,7 +419,7 @@ const InvoiceManagementPage = () => {
                             <div className="grid grid-cols-2 gap-4 text-sm border-b pb-4">
                                 <div>
                                     <p className="text-gray-400 font-bold">發票號碼</p>
-                                    <p className="font-mono font-bold text-blue-600">{selectedOrder.displayInvoiceNumber}</p>
+                                    <p className="font-mono font-bold text-[#4A9A7A]">{selectedOrder.displayInvoiceNumber}</p>
                                 </div>
                                 <div>
                                     <p className="text-gray-400 font-bold">桌號</p>
@@ -404,6 +449,26 @@ const InvoiceManagementPage = () => {
                                 </div>
                             </div>
 
+                            {adjByInvoice.has(selectedOrder.invoiceId) && (
+                                <div className="pt-3 border-t">
+                                    <p className="text-gray-400 font-bold text-xs mb-2 uppercase">折扣 / 退款紀錄</p>
+                                    <div className="space-y-2">
+                                        {adjByInvoice.get(selectedOrder.invoiceId).map(a => (
+                                            <div key={a.id} className="flex justify-between text-sm">
+                                                <div>
+                                                    <span className={`font-bold ${a.amount < 0 ? 'text-orange-600' : 'text-green-700'}`}>{a.reasonPreset}</span>
+                                                    {a.reasonNote && <span className="text-gray-400 ml-1">（{a.reasonNote}）</span>}
+                                                    <div className="text-xs text-gray-400">{(a.affectedItems||[]).map(i=>i.name).join('、')}</div>
+                                                </div>
+                                                <span className={`font-black ${a.amount < 0 ? 'text-orange-600' : 'text-green-700'}`}>
+                                                    {a.amount > 0 ? '+' : ''}${formatCurrency(a.amount)}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
                             <div className="mt-4 pt-4 border-t flex justify-between items-center">
                                 <span className="font-bold text-gray-500">總計金額</span>
                                 <span className="text-2xl font-black text-gray-900">${formatCurrency(selectedOrder.total)}</span>
@@ -411,7 +476,7 @@ const InvoiceManagementPage = () => {
                         </div>
 
                         <div className="p-4 bg-gray-50 flex gap-3">
-                            <button onClick={handleReprintCustomer} className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors">
+                            <button onClick={handleReprintCustomer} className="flex-1 py-3 bg-[#4A9A7A] text-white rounded-xl font-bold hover:bg-[#3A8A6A] transition-colors">
                                 補印顧客聯
                             </button>
                             <button onClick={() => setIsDetailModalOpen(false)} className="flex-1 py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-gray-800 transition-colors">

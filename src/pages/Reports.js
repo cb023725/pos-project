@@ -1,5 +1,5 @@
 // src/pages/Reports.js
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
     ComposedChart, Line, Area, Bar,
     XAxis, YAxis, CartesianGrid,
@@ -47,6 +47,23 @@ const addDays = (dateStr, n) => {
     const d = new Date(dateStr || today());
     d.setDate(d.getDate() + n);
     return d.toISOString().split('T')[0];
+};
+
+// 依目前選取的日期區間，算出 ReportPage 實際需要抓多少歷史資料才夠（涵蓋 compPeriod 比較基準）。
+// 永遠至少保留選取區間起點往前 90 天，避免使用者切換常用區間按鈕時要重新打 API。
+const getNeededRange = (startDate, endDate) => {
+    if (!startDate || !endDate) return { start: '', end: '' }; // 全部
+    const nDays = Math.round((new Date(endDate) - new Date(startDate)) / 86400000) + 1;
+    let neededStart;
+    if (startDate.endsWith('-01')) {
+        // 整月起點：比較基準是去年同期，可能遠超過 90 天
+        const prevYear = (y) => `${parseInt(y.slice(0, 4)) - 1}${y.slice(4)}`;
+        neededStart = prevYear(startDate);
+    } else {
+        const lookback = Math.max(nDays === 1 ? 56 : nDays, 90); // 單日比較最多往前掃 8 週
+        neededStart = addDays(startDate, -lookback);
+    }
+    return { start: neededStart, end: endDate };
 };
 
 // compute KPI totals from an array of orders
@@ -1389,7 +1406,32 @@ const ReportPage = () => {
     const [endDate,   setEndDate]       = useState(today());
     const [catSettings, setCatSettings] = useState([]);
 
-    useEffect(() => { loadOrders(); }, []);
+    // 目前 orders 實際涵蓋的日期範圍（{start:'',end:''} 代表已載入全部歷史）。
+    // 只在選取的區間超出這個範圍時才重新打 API，避免每次切換頁面都抓全部歷史發票。
+    const loadedRangeRef = useRef(null);
+
+    useEffect(() => {
+        const initial = getNeededRange(today(), today());
+        loadOrders(initial.start, initial.end);
+    }, []);
+
+    // 選取區間變動時，確認目前載入的資料是否已涵蓋 compPeriod 比較基準需要的範圍，不夠才重抓
+    useEffect(() => {
+        const loaded = loadedRangeRef.current;
+        if (!loaded) return; // 初次載入尚未完成
+        const needed = getNeededRange(startDate, endDate);
+        const isAll = loaded.start === '' && loaded.end === '';
+        const covered = isAll || (
+            (needed.start === '' ? loaded.start === '' : (loaded.start === '' || needed.start >= loaded.start)) &&
+            (needed.end   === '' ? loaded.end   === '' : (loaded.end   === '' || needed.end   <= loaded.end))
+        );
+        if (!covered) {
+            const mergedStart = needed.start === '' || loaded.start === '' ? '' : (needed.start < loaded.start ? needed.start : loaded.start);
+            const mergedEnd   = needed.end   === '' || loaded.end   === '' ? '' : (needed.end   > loaded.end   ? needed.end   : loaded.end);
+            loadOrders(mergedStart, mergedEnd);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [startDate, endDate]);
 
     // 非營業額類別 Set（動態，預設含冷凍包）
     const nonRevenueCats = useMemo(() => {
@@ -1397,17 +1439,18 @@ const ReportPage = () => {
         return new Set(catSettings.filter(c => c.reportGroup !== '營業額').map(c => c.name));
     }, [catSettings]);
 
-    const loadOrders = async () => {
+    const loadOrders = async (rangeStart, rangeEnd) => {
         setIsLoading(true);
         try {
             const [raw, cats, adjData, sessionRows, calRows, turnawayRows] = await Promise.all([
-                getReportOrders(),
+                getReportOrders(rangeStart, rangeEnd),
                 getCategorySettings(),
                 fetch('/api/adjustments').then(r => r.json()).catch(() => []),
                 getReportSessions('2023-01-01', today()).catch(() => []),
                 getStoreCalendar('2023-01-01', today()).catch(() => []),
                 getTurnaways('2023-01-01', today()).catch(() => []),
             ]);
+            loadedRangeRef.current = { start: rangeStart, end: rangeEnd };
             setAdjustments(Array.isArray(adjData) ? adjData : []);
             setCatSettings(cats);
             setSessions(Array.isArray(sessionRows) ? sessionRows : []);
