@@ -2607,90 +2607,85 @@ const handleChangeItemQuantity = (internalId, diff) => {
                     
                     {/* 頂部區塊 */}
                     <div className="flex-shrink-0"> 
-                        {/* 第一行：返回按鈕、桌號、內用/外帶、人數、時間 */}
-                        <div className="p-2 bg-red-600 text-white flex justify-between items-center">
-                            
-                            <div className="flex items-center space-x-2">
-                                <button 
-                                    onClick={handleGoBack} 
+                        {/* 第一行：返回按鈕、桌號/外帶（左）、人數+新客舊客（中）、備註+時間（右）—— 三段用 justify-between 平均分布，絕不互相重疊 */}
+                        <div className="p-1.5 bg-red-600 text-white flex items-center justify-between">
+
+                            <div className="flex items-center space-x-1 flex-shrink-0">
+                                <button
+                                    onClick={handleGoBack}
                                     className="text-white hover:bg-white/10 p-0 rounded-full transition-colors"
                                     title="返回桌位管理"
                                 >
                                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
                                 </button>
-                                
+
                                 {isTakeout ? (
                                     <button
                                         onClick={() => setShowTablePicker(true)}
-                                        className="text-white font-black text-xl px-1.5 py-0.5 rounded-lg hover:bg-white/20 transition-colors flex items-center gap-1"
+                                        className="text-white font-black text-xl px-1 py-0.5 rounded-lg hover:bg-white/20 transition-colors flex-shrink-0 whitespace-nowrap"
                                         title="點擊可換到內用桌"
                                     >
                                         外帶
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6"/></svg>
                                     </button>
                                 ) : (
                                     <select
                                         value={tableNumber}
                                         onChange={handleTableChange}
-                                        className="bg-transparent text-white font-black text-xl appearance-none cursor-pointer border-none p-1.5 0 focus:outline-none w-auto"
+                                        className="bg-transparent text-white font-black text-xl appearance-none cursor-pointer border-none p-1 0 focus:outline-none w-auto"
                                     >
                                         {TABLE_OPTIONS.map(opt => <option key={opt} value={opt} className="bg-red-600">{opt || ''}</option>)}
                                     </select>
                                 )}
-                                
-                                <div className="flex items-center space-x-1 bg-white/20 p-0.5 rounded-full">
-                                    <div className="text-xs font-bold bg-white text-red-600 px-1.5 py-0.5 rounded-full whitespace-nowrap">
-                                        {tableNumber === '外帶' ? '外帶' : '內用'}
-                                    </div>
+                            </div>
 
-                                    {tableNumber !== '' && (
-                                        <div className="flex items-center text-xs font-black space-x-1.5">
+                            {/* 人數 +/- 與新客/舊客，完全連接在同一個膠囊裡，置中顯示 */}
+                            <div className="flex items-center justify-center flex-shrink-0">
+                                {tableNumber !== '' && (
+                                    <div className="flex items-center bg-white/20 p-0.5 rounded-full whitespace-nowrap">
+                                        <div className="flex items-center text-xs font-black space-x-1 pr-0.5">
                                             <button
                                                 onClick={() => handleChangeCustomerCount(-1)}
-                                                className="w-5 h-5 bg-white/10 text-white rounded-full transition-colors hover:bg-white/30 flex items-center justify-center text-sm leading-none"
+                                                className="w-6 h-6 bg-white/10 text-white rounded-full transition-colors hover:bg-white/30 flex items-center justify-center text-base leading-none flex-shrink-0"
                                                 disabled={customerCount <= (isTakeout ? 0 : 1)}
                                             >-</button>
                                             <span
                                                 onClick={handleOpenCustomerCountModal}
-                                                className="text-white font-black text-base cursor-pointer px-3">
+                                                className="text-white font-black text-lg cursor-pointer px-1">
                                                 {customerCount}
                                             </span>
                                             <button
                                                 onClick={() => handleChangeCustomerCount(1)}
-                                                className="w-5 h-5 bg-white/10 text-white rounded-full transition-colors hover:bg-white/30 flex items-center justify-center text-sm leading-none"
+                                                className="w-6 h-6 bg-white/10 text-white rounded-full transition-colors hover:bg-white/30 flex items-center justify-center text-base leading-none flex-shrink-0"
                                             >+</button>
                                         </div>
-                                    )}
-                                </div>
-
-                                {tableNumber !== '' && (
-                                    <div className="flex items-center bg-white/20 p-0.5 rounded-full" title="新客／舊客，隨時可切換">
-                                        {[{ v: true, label: '新客' }, { v: false, label: '舊客' }].map(opt => (
-                                            <button
-                                                key={String(opt.v)}
-                                                onClick={() => handleToggleNewGroup(opt.v)}
-                                                className={`text-[11px] font-black px-2 py-0.5 rounded-full transition-colors ${
-                                                    isNewGroup === opt.v ? 'bg-white text-red-600' : 'text-white/70 hover:text-white'
-                                                }`}
-                                            >
-                                                {opt.label}
-                                            </button>
-                                        ))}
+                                        <div className="flex items-center" title="新客／舊客，隨時可切換">
+                                            {[{ v: true, label: '新客' }, { v: false, label: '舊客' }].map(opt => (
+                                                <button
+                                                    key={String(opt.v)}
+                                                    onClick={() => handleToggleNewGroup(opt.v)}
+                                                    className={`text-[11px] font-black px-1 py-0.5 rounded-full transition-colors whitespace-nowrap flex-shrink-0 ${
+                                                        isNewGroup === opt.v ? 'bg-white text-red-600' : 'text-white/70 hover:text-white'
+                                                    }`}
+                                                >
+                                                    {opt.label}
+                                                </button>
+                                            ))}
+                                        </div>
                                     </div>
                                 )}
                             </div>
 
-                            <div className="flex items-center space-x-2 text-xs font-bold">
+                            <div className="flex items-center space-x-1 text-xs font-bold flex-shrink-0">
                                 <button
                                     onClick={() => setShowSpecialNoteModal(true)}
-                                    className={`p-1 rounded-full transition-colors ${specialNotes.length > 0 ? 'bg-amber-400 text-red-700 hover:bg-amber-300' : 'text-white/70 hover:bg-white/10'}`}
+                                    className={`p-0.5 rounded-full transition-colors ${specialNotes.length > 0 ? 'bg-amber-400 text-red-700 hover:bg-amber-300' : 'text-white/70 hover:bg-white/10'}`}
                                     title="特殊備註"
                                 >
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill={specialNotes.length > 0 ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                         <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
                                     </svg>
                                 </button>
-                                <div className="flex flex-col text-right">
+                                <div className="flex flex-col text-right whitespace-nowrap">
                                     <span className="text-[10px]">
                                         <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/70 mr-1" />
                                         {elapsedTimeMin} min
@@ -2706,11 +2701,11 @@ const handleChangeItemQuantity = (internalId, diff) => {
                         {/* 第二行：單號、商品總數 */}
                         <div className="flex-shrink-0">
                             <div className="py-1 px-3 bg-red-500 text-white flex justify-between items-center text-sm font-bold">
-                                <div className="flex items-center">
-                                    <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2H7a2 2 0 00-2 2v2M7 7a2 2 0 012-2h6a2 2 0 012 2v2H7V7z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                                <div className="flex items-center whitespace-nowrap">
+                                    <svg className="w-4 h-4 mr-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2H7a2 2 0 00-2 2v2M7 7a2 2 0 012-2h6a2 2 0 012 2v2H7V7z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
                                     <span className="text-base">{dailyOrderNo ? String(dailyOrderNo).padStart(3, '0') : '---'}</span>
                                 </div>
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-shrink-0 whitespace-nowrap">
                                     {!isPartialCheckoutMode && currentOrderId
                                         && currentOrder.some(i => !i.isServed)
                                         && !currentOrder.some(i => getSentBatch(i) === 0) && (
@@ -3111,7 +3106,7 @@ const handleChangeItemQuantity = (internalId, diff) => {
                 </div>
 
                 {/* 右側區塊：菜單選擇區 */}
-                <div className="w-[70%] flex flex-col bg-white rounded-xl p-2 h-full">
+                <div className="w-[70%] flex flex-col bg-white rounded-xl py-2 px-1 h-full">
                     {/* 菜單類別 Tabs 區塊 */}
                     <div className="flex items-center mb-3 flex-shrink-0 gap-2">
                         <div className="flex space-x-2 overflow-x-auto scrollbar-hide flex-grow">
@@ -3145,7 +3140,7 @@ const handleChangeItemQuantity = (internalId, diff) => {
                         {/* 移除左右 padding (px-0)，並確保寬度為 full */}
                         <div className="w-full px-0 py-2"> 
                             {/* 設定 gap-3 並確保 grid 撐滿全寬 */}
-                            <div className="grid grid-cols-5 gap-2 w-full">
+                            <div className="grid grid-cols-5 gap-1 w-full">
     {filteredMenu.flatMap(item => {
         // 判斷條件：當前是主餐 Tab，且項目編號是 10
         if (item.category === '主餐' && Number(item.sortOrder) === 10 || item.category === '單點' && Number(item.sortOrder) === 46) {

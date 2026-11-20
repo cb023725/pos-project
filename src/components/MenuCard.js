@@ -45,10 +45,10 @@ const MenuCard = React.memo(({ item, onAddItem, onLongPress }) => {
             className={`
                 w-full bg-white rounded-xl shadow-lg transition-all text-left flex flex-col overflow-hidden relative select-none
                 ${isDisabled
-                    ? 'opacity-60 cursor-not-allowed border-4 border-red-300'
+                    ? 'opacity-60 cursor-not-allowed ring-4 ring-inset ring-red-300'
                     : isDepleted
-                        ? 'border-2 border-orange-300 hover:ring-4 hover:ring-orange-200 active:scale-[0.98] hover:shadow-xl'
-                        : 'hover:ring-4 hover:ring-blue-200 active:scale-[0.98] hover:shadow-xl'
+                        ? 'ring-4 ring-inset ring-orange-300 hover:ring-orange-200 active:scale-[0.98] hover:shadow-xl'
+                        : 'hover:ring-4 hover:ring-inset hover:ring-blue-200 active:scale-[0.98] hover:shadow-xl'
                 }
             `}
         >
@@ -97,7 +97,7 @@ const MenuCard = React.memo(({ item, onAddItem, onLongPress }) => {
             </div>
 
             {/* 底部資訊 */}
-            <div className="p-1 flex flex-col h-25 justify-center">
+            <div className="py-1 px-0.5 flex flex-col h-25 justify-center">
                 <div className="relative w-full mb-1">
                     {item.category === '主餐' && item.sortOrder && (
                         <div className="absolute left-0 top-0.5 flex items-center justify-center w-5 h-5 bg-black rounded-md z-10">
@@ -105,8 +105,8 @@ const MenuCard = React.memo(({ item, onAddItem, onLongPress }) => {
                         </div>
                     )}
                     <p
-                        className={`text-[20px] font-black leading-tight line-clamp-2 break-words ${isDisabled ? 'text-gray-500' : 'text-gray-900'}`}
-                        style={{ textIndent: item.category === '主餐' && item.sortOrder ? '28px' : '0px' }}
+                        className={`text-[22px] font-black leading-tight line-clamp-2 break-words ${isDisabled ? 'text-gray-500' : 'text-gray-900'}`}
+                        style={{ textIndent: item.category === '主餐' && item.sortOrder ? '22px' : '0px' }}
                     >
                         {item.name}
                     </p>
