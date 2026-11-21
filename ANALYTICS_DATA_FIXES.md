@@ -1,6 +1,6 @@
 # 營運資料一致性修正清單（給 Claude Code）
 
-建立日期：2026-11-19 ｜ 最後更新：2026-11-21
+建立日期：2026-11-19 ｜ 最後更新：2026-11-22
 
 適用範圍：
 - `pos-project`：WebPOS，包含 `server.js`、`src/pages/Reports.js`、`InvoiceManagement.js`、`CashDrawer.js`
@@ -22,6 +22,7 @@
 - **第 6A/6B 節**：報表頁 KPI 卡片、「下載分析資料」（`meal_period_sessions.csv`／`order_items.csv`／`orders_fact.csv`／`external_events.csv`／`daily_traffic.csv`／`DATA_DICTIONARY.md`）全部上線。
 - **第 9 節**：`report_items`／`report_attach` RPC 已建立並套用到 dev + prod；`order_items.csv` 改由 `report_items` 產生。
 - **第 10 節**：新舊客紀錄——POS 開單標記、報表新客／舊客統計卡片、`daily_traffic.csv` 的新舊客欄位，全部完成。
+- **第 11 節**：`report_sessions`／`report_items`／`report_attach`／`report_order_invoices` 共用的「有效發票＋business_date／meal_period」join 邏輯已抽成共用 view（`report_valid_invoices`→`report_base_orders`→`report_item_lines`），四個函式改在共用結果上彙總。已在 dev/prod 以 before/after 全量 diff 確認輸出完全一致，效能無回歸。
 - **效能（2026-11-20 新增項目，原文件沒有）**：報表頁、發票管理頁、關帳頁原本每次進頁面都無條件抓全部歷史發票，隨營業時間增長越來越慢。改成：
   - `report_sessions`、`/api/orders/report`、`/api/invoices` 都改成按需要的日期範圍抓取，不夠才動態擴大重抓。
   - 新增 `report_order_invoices` RPC，把原本「先查發票、再依 order_id 查訂單」兩次依序查詢合併成資料庫端一次 join。
@@ -38,7 +39,6 @@
 - **第 8 節**：Supabase service role key 重新產生（安全事項，使用者手動處理）。
 - **第 9 節**：POS「銷售排行」頁、週報 email 的品項排行／加點率邏輯改用 `report_items`／`report_attach`——**已明確決定先不做**，這兩個功能目前各自重算但運作正常，風險與效益不成比例，之後有需要再評估。
 - **第 9 節選配**：`menu_items` 新增 `cost`（食材成本）欄位，需要使用者提供各品項成本後才做。
-- **第 11 節（新增）**：見下方，把四個報表 RPC 共用的查詢邏輯整合成一個共同的基礎定義。
 - **第 12 節（新增，2026-11-21）**：關帳頁新增「查看過去關帳單」功能，見下方。
 
 ### 🐛 已修正的 bug（2026-11-21）
@@ -47,13 +47,15 @@
 
 ---
 
-## 11. 待處理：把報表用的 RPC 整合成共同的基礎定義
+## 11. ✅ 已完成：把報表用的 RPC 整合成共同的基礎定義（2026-11-22）
 
-**背景**：2026-11-20 的效能修正新增了 `report_order_invoices`，加上原本就有的 `report_sessions`、`report_items`、`report_attach`，目前共有 **4 個獨立的 SQL 函式**，但每一個都各自重複定義同一段「有效發票（`status = '已開立'`）＋ 以 `payment_time` 轉台灣時區得出 `business_date` ＋ 以 `orders.timestamp` 15:45 分界得出 `meal_period`」的 join 邏輯。
+**背景**：2026-11-20 的效能修正新增了 `report_order_invoices`，加上原本就有的 `report_sessions`、`report_items`、`report_attach`，原本共有 **4 個獨立的 SQL 函式**，但每一個都各自重複定義同一段「有效發票（`status = '已開立'`）＋ 以 `payment_time` 轉台灣時區得出 `business_date` ＋ 以 `orders.timestamp` 15:45 分界得出 `meal_period`」的 join 邏輯。
 
-**風險**：四段邏輯分開寫、分開維護，之後若要調整定義（例如餐期分界時間、營業日判斷方式），很容易改了一個函式卻漏改其他三個，導致四個地方的數字又開始不一致——這正是最初第 1 節想解決的問題，現在用多個 RPC 的方式又在資料庫端重演一次。
+**風險**：四段邏輯分開寫、分開維護，之後若要調整定義（例如餐期分界時間、營業日判斷方式），很容易改了一個函式卻漏改其他三個，導致四個地方的數字又開始不一致。
 
-**做法（建議，尚未實作）**：抽出一個共用的 SQL view 或函式（例如 `report_base_orders`），只做「有效發票 join 訂單、算出 business_date／meal_period」這一步，讓 `report_sessions`、`report_items`、`report_attach`、`report_order_invoices` 都改成在這個共用結果上面做各自的彙總，而不是各自重新 join 一次。改動前要先確認效能不會因為多一層 view 而變差（尤其 `report_order_invoices` 現在是未分頁單一 join，速度敏感）。
+**做法（已實作，`supabase/migrations/20261122_consolidate_report_rpcs.sql`）**：抽出三層共用 view——`report_valid_invoices`（有效發票＋訂單欄位，列層級）→ `report_base_orders`（依 order_id 彙總出 business_date／meal_period／營業額）→ `report_item_lines`（品項展開，帶 business_date／meal_period）。四個函式改成在對應層上彙總，不再各自重複 join；新 view 已 `revoke` 掉 anon/authenticated 存取權，避免被 PostgREST 自動開成公開端點。
+
+**驗證**：dev、prod 都已套用，before/after 全量 diff 確認四個 RPC 輸出完全一致；另以 10 月份獨立查詢交叉比對第 7 節已驗證過的數字（冷凍包 $13,400、全月 $300,425）完全吻合；應用層 HTTP endpoint 效能測試無回歸。不需改動 `server.js` 或前端。
 
 ---
 
