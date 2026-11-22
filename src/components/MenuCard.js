@@ -4,6 +4,10 @@ const formatCurrency = (n) => Math.round(n || 0).toLocaleString('en-US');
 
 const LONG_PRESS_MS = 600;
 
+// 外部 CDN 圖片（如 mcusercontent.com）原圖動輒 1-2MB，縮圖顯示用，走伺服器端代理縮小快取；
+// 本機 /images/... 的靜態圖本來就小、同源，不需要代理
+const toDisplaySrc = (url) => (/^https?:\/\//.test(url) ? `/api/image-proxy?url=${encodeURIComponent(url)}&w=300` : url);
+
 const MenuCard = React.memo(({ item, onAddItem, onLongPress }) => {
     const hasInventoryLink = !!(item.consumes?.length); // 有庫存連動才顯示售完/庫存數
     const isSoldOut  = !!item.soldOut;
@@ -74,7 +78,7 @@ const MenuCard = React.memo(({ item, onAddItem, onLongPress }) => {
             <div className="w-full aspect-[3/2] relative overflow-hidden bg-gray-100">
                 {item.imageUrl ? (
                     <img
-                        src={item.imageUrl}
+                        src={toDisplaySrc(item.imageUrl)}
                         alt={item.name}
                         className="absolute inset-0 w-full h-full object-cover transition-transform duration-300 hover:scale-105"
                         onError={(e) => {

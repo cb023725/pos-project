@@ -23,6 +23,7 @@
 # local data & logs
 pos.db
 logs/
+image-cache/
 
 # claude memory
 .claude/

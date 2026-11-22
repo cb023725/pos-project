@@ -8,6 +8,7 @@ const net        = require('net');
 const path       = require('path');
 const os         = require('os');
 const fs         = require('fs');
+const crypto     = require('crypto');
 const { execFile } = require('child_process');
 const PDFDocument  = require('pdfkit');
 const archiver     = require('archiver');
@@ -1331,6 +1332,43 @@ const rowsToCamel = r => Array.isArray(r) ? r.map(rowToCamel) : rowToCamel(r);
 app.get('/api/health', async (req, res) => {
     const { error } = await supabase.from('menu_items').select('id').limit(1);
     res.json({ ok: !error, supabase: error ? error.message : 'connected', dev: IS_DEV });
+});
+
+// ============================================================
+// 圖片代理縮圖：菜單圖片目前是外部 CDN 的原圖（實測平均 1.4MB、最大 1080x1080），
+// 但 MenuCard 只用縮圖大小顯示，造成 OrderPage 切換/捲動時載入明顯變慢。
+// 縮成小圖後存在本機磁碟快取，同一張圖只需處理一次（實測 1.8MB -> 26KB）。
+// ============================================================
+const IMAGE_CACHE_DIR = path.join(__dirname, 'image-cache');
+if (!fs.existsSync(IMAGE_CACHE_DIR)) fs.mkdirSync(IMAGE_CACHE_DIR);
+const IMAGE_PROXY_ALLOWED_HOSTS = ['mcusercontent.com'];
+app.get('/api/image-proxy', async (req, res) => {
+    const { url, w } = req.query;
+    if (!url) return res.status(400).json({ error: 'url 必填' });
+    let parsed;
+    try { parsed = new URL(url); } catch { return res.status(400).json({ error: 'url 格式錯誤' }); }
+    if (!IMAGE_PROXY_ALLOWED_HOSTS.includes(parsed.hostname)) {
+        return res.status(400).json({ error: '不支援的圖片來源' });
+    }
+    const width = Math.min(Math.max(parseInt(w) || 300, 50), 600);
+    const cacheKey = crypto.createHash('md5').update(`${url}:${width}`).digest('hex');
+    const cachePath = path.join(IMAGE_CACHE_DIR, `${cacheKey}.jpg`);
+    res.set('Cache-Control', 'public, max-age=2592000'); // 30 天
+    res.set('Content-Type', 'image/jpeg');
+    if (fs.existsSync(cachePath)) return res.sendFile(cachePath);
+    try {
+        const { Jimp } = require('jimp');
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`來源圖片下載失敗 (${resp.status})`);
+        const buf = Buffer.from(await resp.arrayBuffer());
+        const image = await Jimp.read(buf);
+        image.resize({ w: width });
+        const outBuf = await image.getBuffer('image/jpeg', { quality: 80 });
+        fs.writeFile(cachePath, outBuf, () => {}); // 快取寫檔失敗不影響這次回應
+        res.send(outBuf);
+    } catch (error) {
+        res.status(502).json({ error: error.message });
+    }
 });
 
 // ============================================================
