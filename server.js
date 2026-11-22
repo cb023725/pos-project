@@ -1246,8 +1246,108 @@ function buildCustomerReceiptPDF(data, filePath) {
 }
 
 // ----------------------------------------------------
+// 【年菜】二聯單（顧客聯／存根聯內容相同，只差標題，各印一份）
+// data: { seqLabel, customerName, customerPhone, deliveryMethod, pickupDate,
+//         recipientName, recipientAddress, items, total }
+// ----------------------------------------------------
+function buildNianfaiReceiptPDF(data, filePath, copyLabel) {
+    return new Promise((resolve, reject) => {
+        const rows = (data.items || []).map(it => ({ ...it, qty: it.quantity || it.qty || 1 }));
+
+        const mDoc = new PDFDocument({ size: [PAGE_W, 1000] });
+        mDoc.registerFont('Bold', FONT_BOLD).registerFont('Reg', FONT_REG);
+
+        const deliveryLine = data.deliveryMethod === 'delivery'
+            ? `宅配：${data.recipientName || ''} ${data.recipientAddress || ''}`
+            : `自取：${data.pickupDate || ''}`;
+
+        let h = (C_STO_SZ + 3) + (C_HDR_SZ + 3) + (C_SUB_SZ + 3) + 4
+              + (C_SUB_SZ + 2) * 3 + 4 + (C_COL_SZ + 3) + 3;
+        for (const row of rows) {
+            mDoc.font('Bold').fontSize(C_ITEM_SZ);
+            const nameH = mDoc.heightOfString(row.name || '', { width: C_NAME_W });
+            h += Math.max(nameH, C_ITEM_SZ + 3) + 2;
+        }
+        h += 10 + (C_TOT_SZ + 6) + (C_SUB_SZ + 10); // 合計 + 已付清 + 底部留白
+
+        const doc = new PDFDocument({
+            size: [PAGE_W, h],
+            margins: { top: 0, bottom: 0, left: CM, right: CM },
+            compress: false,
+        });
+        const chunks = [];
+        doc.on('data',  c => chunks.push(c));
+        doc.on('end',   () => fs.writeFile(filePath, Buffer.concat(chunks),
+                                e => e ? reject(e) : resolve(h)));
+        doc.on('error', reject);
+        doc.registerFont('Bold', FONT_BOLD).registerFont('Reg', FONT_REG);
+
+        const hLine = (y, lw) => {
+            doc.moveTo(CM, y).lineTo(PAGE_W - CM, y)
+               .lineWidth(lw || 0.6).strokeColor('black').stroke();
+        };
+
+        let y = 0;
+        doc.font('Bold').fontSize(C_STO_SZ).fillColor('black')
+           .text('咕咕義小餐館 年菜訂購單', CM, y, { width: CCW, align: 'center', lineBreak: false });
+        y += C_STO_SZ + 3;
+
+        doc.font('Bold').fontSize(C_HDR_SZ).fillColor('black')
+           .text(`${copyLabel}　流水號 ${data.seqLabel || ''}`, CM, y, { width: CCW, align: 'center', lineBreak: false });
+        y += C_HDR_SZ + 3;
+
+        doc.font('Reg').fontSize(C_SUB_SZ).fillColor('black')
+           .text(`訂購人：${data.customerName || ''}　${data.customerPhone || ''}`, CM, y, { width: CCW, lineBreak: false });
+        y += C_SUB_SZ + 2;
+        doc.font('Reg').fontSize(C_SUB_SZ).fillColor('black')
+           .text(deliveryLine, CM, y, { width: CCW, lineBreak: true });
+        y += C_SUB_SZ + 4;
+
+        hLine(y, 0.8); y += 4;
+
+        doc.font('Reg').fontSize(C_COL_SZ).fillColor('black')
+           .text('品名', C_NAME_X, y, { lineBreak: false });
+        doc.font('Reg').fontSize(C_COL_SZ).fillColor('black')
+           .text('數量', C_QTY_X, y, { width: C_QTY_W, align: 'center', lineBreak: false });
+        doc.font('Reg').fontSize(C_COL_SZ).fillColor('black')
+           .text('金額', C_PRI_X, y, { width: C_PRI_W, align: 'right', lineBreak: false });
+        y += C_COL_SZ + 3;
+        hLine(y, 0.4); y += 3;
+
+        for (const row of rows) {
+            doc.font('Bold').fontSize(C_ITEM_SZ);
+            const nameH = doc.heightOfString(row.name || '', { width: C_NAME_W });
+            const rowH = Math.max(nameH, C_ITEM_SZ + 3);
+            doc.font('Bold').fontSize(C_ITEM_SZ).fillColor('black')
+               .text(row.name || '', C_NAME_X, y, { width: C_NAME_W, lineBreak: true });
+            doc.font('Reg').fontSize(C_ITEM_SZ).fillColor('black')
+               .text(String(row.qty), C_QTY_X, y, { width: C_QTY_W, align: 'center', lineBreak: false });
+            doc.font('Reg').fontSize(C_ITEM_SZ).fillColor('black')
+               .text(String((row.price || 0) * row.qty), C_PRI_X, y, { width: C_PRI_W, align: 'right', lineBreak: false });
+            y += rowH + 2;
+        }
+
+        hLine(y, 0.8); y += 5;
+
+        const total = data.total != null ? data.total : rows.reduce((s, r) => s + (r.price || 0) * r.qty, 0);
+        const totY = y;
+        doc.font('Reg').fontSize(C_TOT_SZ - 1).fillColor('black').text('合計', CM, totY, { lineBreak: false });
+        doc.y = totY; doc.x = CM;
+        doc.font('Bold').fontSize(C_TOT_SZ).fillColor('black')
+           .text(`$${total.toLocaleString('en-US')}`, { width: CCW, align: 'right', lineBreak: false });
+        y += C_TOT_SZ + 6;
+
+        doc.font('Bold').fontSize(C_SUB_SZ).fillColor('black')
+           .text('已付清', CM, y, { width: CCW, align: 'center', lineBreak: false });
+
+        doc.end();
+    });
+}
+
+// ----------------------------------------------------
 // 【列印】POST /print
-// printMode: 'kitchen' → 廚房聯×2, 'customer' → 顧客聯×1, 'all' → 廚房聯×2 + 顧客聯×1
+// printMode: 'kitchen' → 廚房聯×2, 'customer' → 顧客聯×1, 'all' → 廚房聯×2 + 顧客聯×1,
+//            'nianfai' → 年菜二聯單（顧客聯×1 + 存根聯×1）
 // ----------------------------------------------------
 app.post('/print', printRateLimit, async (req, res) => {
     const data = req.body;
@@ -1291,6 +1391,17 @@ app.post('/print', printRateLimit, async (req, res) => {
                 const h = await buildCustomerReceiptPDF(data, f);
                 await printPDF(f, h, 1);
                 console.log('顧客聯已送出（1份）');
+            }
+
+            // 年菜二聯單：顧客聯＋存根聯內容相同，各印一份
+            if (printMode === 'nianfai') {
+                const fc = path.join(os.tmpdir(), `nianfai_c_${Date.now()}.pdf`);
+                const hc = await buildNianfaiReceiptPDF(data, fc, '顧客聯');
+                await printPDF(fc, hc, 1);
+                const fs2 = path.join(os.tmpdir(), `nianfai_s_${Date.now()}.pdf`);
+                const hs = await buildNianfaiReceiptPDF(data, fs2, '存根聯');
+                await printPDF(fs2, hs, 1);
+                console.log('年菜二聯單已送出（顧客聯+存根聯）');
             }
         } catch (e) {
             console.error('🔴 列印錯誤：', e);
@@ -2146,6 +2257,18 @@ async function submitToNianfaiForm(orderId) {
     }
 }
 
+// 待傳佇列重試：結帳當下送表單失敗（或 GAS 網址還沒設定）的訂單，每 5 分鐘補送一次。
+// 現場年菜單量很小，不需要更積極的重試頻率；GAS 網址還沒設定時這裡會直接跳過，不會洗錯誤記錄。
+setInterval(async () => {
+    if (!process.env.NIANFAI_GAS_URL) return;
+    const { data: pendingRows } = await supabase
+        .from('nianfai_orders').select('order_id')
+        .in('form_submission_status', ['pending', 'failed']);
+    for (const row of (pendingRows || [])) {
+        await submitToNianfaiForm(row.order_id).catch(e => console.error(`[年菜] 待傳佇列重送失敗 order_id=${row.order_id}:`, e.message));
+    }
+}, 5 * 60 * 1000);
+
 app.post('/api/nianfai/orders', async (req, res) => {
     const {
         items, year, customerName, customerPhone, deliveryMethod,
@@ -2613,6 +2736,17 @@ app.post('/print-preview', async (req, res) => {
 
         const ts = Date.now();
         const slips = [];
+
+        // 年菜二聯單預覽
+        if (data.printMode === 'nianfai') {
+            const fnameC = `preview_nf_c_${ts}.pdf`;
+            const hc = await buildNianfaiReceiptPDF(data, path.join(os.tmpdir(), fnameC), '顧客聯');
+            slips.push({ name: '年菜顧客聯', url: `/print-preview/${fnameC}`, height: hc });
+            const fnameS = `preview_nf_s_${ts}.pdf`;
+            const hs = await buildNianfaiReceiptPDF(data, path.join(os.tmpdir(), fnameS), '存根聯');
+            slips.push({ name: '年菜存根聯', url: `/print-preview/${fnameS}`, height: hs });
+            return res.json({ slips });
+        }
 
         // 顧客聯
         {
