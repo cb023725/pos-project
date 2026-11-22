@@ -1545,6 +1545,32 @@ app.post('/api/tables/:tableNumber/reset', async (req, res) => {
     }
     res.json({ ok: true });
 });
+// Dev 專用：一鍵清空桌位管理測試頁——刪除所有進行中（未結帳歸檔）的訂單與對應發票，
+// 桌位全部重設為空桌，庫存連動品項統一設回 10 份。已歸檔的歷史訂單/發票/報表資料不動。
+// IS_DEV 擋在最前面，就算有人直接打這支 API 也不會在 prod 生效。
+app.post('/api/dev/reset-test-data', async (req, res) => {
+    if (!IS_DEV) return res.status(403).json({ error: '僅限 dev 環境使用' });
+    try {
+        const { data: activeOrders, error: oErr } = await supabase.from('orders').select('id').in('status', ['open', 'served', 'paid']);
+        if (oErr) throw oErr;
+        const orderIds = (activeOrders || []).map(o => o.id);
+        if (orderIds.length > 0) {
+            const { data: invs } = await supabase.from('invoices').select('id').in('order_id', orderIds);
+            const invIds = (invs || []).map(i => i.id);
+            if (invIds.length > 0) {
+                await supabase.from('adjustments').delete().in('original_invoice_id', invIds);
+                await supabase.from('invoices').delete().in('id', invIds);
+            }
+            await supabase.from('orders').delete().in('id', orderIds);
+        }
+        await supabase.from('tables').update({ status: 'idle', order_id: null, updated_at: new Date().toISOString() }).not('table_number', 'is', null);
+        await supabase.from('menu_items').update({ stock: 10 }).ilike('category', '%庫存%');
+        res.json({ ok: true, clearedOrders: orderIds.length });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // 佔位但不開單（occupyTableWithoutOrder）
 app.post('/api/tables/:tableNumber/occupy', async (req, res) => {
     const { timestamp } = req.body;

@@ -13,6 +13,7 @@ import {
     getStoreCalendar,
     saveStoreCalendarDay,
     recordTurnaway,
+    resetDevTestData,
 } from '../db';
 
 import TableCard from '../components/TableCard';
@@ -377,6 +378,28 @@ const TableManagementPage = () => {
     const [missedCloseDateKey, setMissedCloseDateKey] = useState(null); // 'YYYY-MM-DD'，標記店休用
     const [showTurnawayModal, setShowTurnawayModal] = useState(false);
     const [turnawayToast, setTurnawayToast] = useState('');
+    const [isDevMode, setIsDevMode] = useState(false);
+    const [isResettingTestData, setIsResettingTestData] = useState(false);
+
+    useEffect(() => {
+        fetch('/api/health').then(r => r.json()).then(d => { if (d.dev) setIsDevMode(true); }).catch(() => {});
+    }, []);
+
+    const handleDevResetTestData = async () => {
+        if (!window.confirm('確定要清空測試資料嗎？\n\n會刪除所有進行中（尚未結帳歸檔）的訂單與發票，桌位全部重設為空桌，庫存連動品項統一設回 10 份。\n已歸檔的歷史訂單/發票/報表資料不受影響。')) return;
+        setIsResettingTestData(true);
+        try {
+            await resetDevTestData();
+            await loadTableStatuses(true);
+            setTurnawayToast('測試資料已清空');
+            setTimeout(() => setTurnawayToast(''), 2500);
+        } catch (e) {
+            console.error('清空測試資料失敗:', e);
+            alert(`清空失敗：${e.message}`);
+        } finally {
+            setIsResettingTestData(false);
+        }
+    };
 
     const handleConfirmTurnaway = async ({ partySize, kind }) => {
         setShowTurnawayModal(false);
@@ -785,6 +808,19 @@ const TableManagementPage = () => {
                     <circle cx="9" cy="7" r="4"/><path d="M2 21v-1a7 7 0 0114 0v1"/><line x1="17" y1="8" x2="22" y2="13"/><line x1="22" y1="8" x2="17" y2="13"/>
                 </svg>
             </button>
+            {isDevMode && (
+                <button
+                    onClick={handleDevResetTestData}
+                    disabled={isResettingTestData}
+                    className="fixed bottom-5 left-5 z-40 px-4 h-14 rounded-full bg-orange-500 text-white shadow-lg flex items-center gap-2 hover:bg-orange-600 active:scale-95 transition-all disabled:opacity-60"
+                    title="Dev 專用：清空測試資料"
+                >
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 6h18"/><path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
+                    </svg>
+                    <span className="font-bold text-sm whitespace-nowrap">{isResettingTestData ? '清空中...' : '一鍵清空測試資料'}</span>
+                </button>
+            )}
             {turnawayToast && (
                 <div className="fixed bottom-24 right-5 z-40 bg-gray-800 text-white text-sm font-bold px-4 py-2 rounded-xl shadow-lg">
                     {turnawayToast}

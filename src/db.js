@@ -315,6 +315,10 @@ export async function occupyTableWithoutOrder(tableNumber, timestamp) {
     await api('POST', `/api/tables/${tableNumber}/occupy`, { timestamp });
     return true;
 }
+// Dev 專用：一鍵清空測試用的進行中訂單、桌位重設為空桌、庫存連動品項設回 10 份
+export async function resetDevTestData() {
+    return api('POST', '/api/dev/reset-test-data');
+}
 export async function moveOrderToTable(orderId, { newTable, fromTable, mergeWithOrderId = null }) {
     return api('POST', `/api/orders/${orderId}/move-table`, { newTable, fromTable, mergeWithOrderId });
 }
