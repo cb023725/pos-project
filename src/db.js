@@ -319,6 +319,16 @@ export async function occupyTableWithoutOrder(tableNumber, timestamp) {
 export async function resetDevTestData() {
     return api('POST', '/api/dev/reset-test-data');
 }
+
+// ======================================================================
+// 年菜（nianfai）：訂單與一般內用外帶完全分開
+// ======================================================================
+export async function getNianfaiItems(year) {
+    return api('GET', `/api/nianfai/items?year=${year}`);
+}
+export async function createNianfaiOrder(payload) {
+    return api('POST', '/api/nianfai/orders', payload);
+}
 export async function moveOrderToTable(orderId, { newTable, fromTable, mergeWithOrderId = null }) {
     return api('POST', `/api/orders/${orderId}/move-table`, { newTable, fromTable, mergeWithOrderId });
 }

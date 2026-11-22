@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useMemo, useCallback, useReducer, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import MenuCard from '../components/MenuCard';
+import NianfaiModal from '../components/NianfaiModal';
 import {
+    getSettingValue,
     getMenuItems,
     getInventoryItems,
     getActiveOrders,
@@ -1694,6 +1696,20 @@ const OrderPage = () => {
             .map(c => c.name);
     }, [categorySettings, isTakeout]);
 
+    // 年菜：跟一般點餐完全分開的獨立 modal，只在 Yw 開賣後才顯示這個 tab 按鈕。
+    // nianfai_active_year 指出「今年要賣哪個年度的年菜」，不用猜日期；
+    // 每年開新檔只要改這個值 + 對應年度的 season_active 開關，兩個地方。
+    const [nianfaiYear, setNianfaiYear] = useState(null);
+    const [showNianfaiModal, setShowNianfaiModal] = useState(false);
+    useEffect(() => {
+        getSettingValue('nianfai_active_year', null).then(year => {
+            if (!year) return;
+            getSettingValue(`nianfai_${year}_season_active`, null).then(v => {
+                if (v === 'true') setNianfaiYear(parseInt(year, 10));
+            });
+        });
+    }, []);
+
     // 當類別清單載入或變更時，確保 selectedCategory 在清單中
     useEffect(() => {
         if (categories.length > 0 && !categories.includes(selectedCategory)) {
@@ -3123,6 +3139,14 @@ const handleChangeItemQuantity = (internalId, diff) => {
                                     {cat}
                                 </button>
                             ))}
+                            {nianfaiYear && (
+                                <button
+                                    onClick={() => setShowNianfaiModal(true)}
+                                    className="px-8 py-2.5 rounded-xl font-bold transition-all whitespace-nowrap text-m bg-[#D47856] text-white shadow-lg flex-shrink-0"
+                                >
+                                    🧧 年菜
+                                </button>
+                            )}
                         </div>
                         {/* 一鍵恢復供應 */}
                         <button
@@ -3232,6 +3256,12 @@ const handleChangeItemQuantity = (internalId, diff) => {
                 isOpen={showItemChangeModal}
                 onClose={() => setShowItemChangeModal(false)}
                 onDiscard={handleDiscardItemChanges}
+            />
+
+            <NianfaiModal
+                isOpen={showNianfaiModal}
+                year={nianfaiYear}
+                onClose={() => setShowNianfaiModal(false)}
             />
 
             <SpecialNoteModal
