@@ -1114,9 +1114,9 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
                                         </td>
                                         <td className="px-3 py-2 whitespace-nowrap text-center align-top pt-3">
                                             {o.isNewGroup === true
-                                                ? <span className="text-xs font-bold text-emerald-600">新客</span>
+                                                ? <span className="text-xs font-bold text-blue-600">新客</span>
                                                 : o.isNewGroup === false
-                                                    ? <span className="text-xs font-bold text-blue-600">舊客</span>
+                                                    ? <span className="text-xs font-bold text-gray-800">舊客</span>
                                                     : <span className="text-xs text-gray-300">—</span>}
                                         </td>
                                         <td className="px-3 py-2 text-gray-700 align-top">
