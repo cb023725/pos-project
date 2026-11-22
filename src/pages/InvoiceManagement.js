@@ -188,6 +188,7 @@ const InvoiceManagementPage = () => {
                     id: i.id,
                     name: i.name,
                     printName: i.printName || null,
+                    customerPrintName: i.customerPrintName || null,
                     category: i.category || null,
                     sortOrder: i.sortOrder != null ? i.sortOrder : null,
                     price: i.price || 0,

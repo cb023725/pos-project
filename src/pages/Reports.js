@@ -1186,16 +1186,20 @@ const RankingTab = ({ filteredOrders, nonRevenueCats }) => {
     const slotOrders = useMemo(() => applyTimeSlot(filteredOrders, timeSlot), [filteredOrders, timeSlot]);
 
     const { itemRank, catRank, groupRank } = useMemo(() => {
+        // 用 item.id 分組（不是名稱文字），避免同一道菜改了 iPad 顯示名稱後，
+        // 改名字前/後的歷史訂單被當成兩道不同餐點，銷售量/金額被拆開計算。
+        // name 只拿來顯示，每次都更新成最新一筆遇到的名稱即可。
         const itemMap  = new Map();
         const catMap   = new Map();
-        const groupMap = new Map(); // { groupName -> Map<itemName, {name,qty,rev}> }
+        const groupMap = new Map(); // { groupName -> Map<itemId, {id,name,qty,rev}> }
         slotOrders.forEach(o => {
             (o.items || []).forEach(item => {
                 const rev = item.price * item.quantity;
                 const cat = item.category || '未分類';
-                const ex = itemMap.get(item.name) || { name: item.name, category: cat, quantity: 0, revenue: 0 };
-                ex.quantity += item.quantity; ex.revenue += rev;
-                itemMap.set(item.name, ex);
+                const key = item.id || item.name;
+                const ex = itemMap.get(key) || { id: key, name: item.name, category: cat, quantity: 0, revenue: 0 };
+                ex.name = item.name; ex.quantity += item.quantity; ex.revenue += rev;
+                itemMap.set(key, ex);
 
                 const ce = catMap.get(cat) || { name: cat, quantity: 0, revenue: 0 };
                 ce.quantity += item.quantity; ce.revenue += rev;
@@ -1204,9 +1208,9 @@ const RankingTab = ({ filteredOrders, nonRevenueCats }) => {
                 if (nonRevenueCats.has(cat)) {
                     if (!groupMap.has(cat)) groupMap.set(cat, new Map());
                     const gm = groupMap.get(cat);
-                    const ge = gm.get(item.name) || { name: item.name, quantity: 0, revenue: 0 };
-                    ge.quantity += item.quantity; ge.revenue += rev;
-                    gm.set(item.name, ge);
+                    const ge = gm.get(key) || { id: key, name: item.name, quantity: 0, revenue: 0 };
+                    ge.name = item.name; ge.quantity += item.quantity; ge.revenue += rev;
+                    gm.set(key, ge);
                 }
             });
         });
@@ -1234,14 +1238,14 @@ const RankingTab = ({ filteredOrders, nonRevenueCats }) => {
     const [selectedItem, setSelectedItem] = useState(null);
     const [trendMetric, setTrendMetric]   = useState('quantity');
 
-    // 品項每日趨勢資料（依 slotOrders 計算，與時段切換連動）
+    // 品項每日趨勢資料（依 slotOrders 計算，與時段切換連動）；selectedItem 存的是 item.id
     const trendData = useMemo(() => {
         if (!selectedItem) return [];
         const dayMap = new Map();
         slotOrders.forEach(o => {
             const d = tsToDayTW(o.timestamp);
             (o.items || []).forEach(item => {
-                if (item.name !== selectedItem) return;
+                if ((item.id || item.name) !== selectedItem) return;
                 const ex = dayMap.get(d) || { label: d, quantity: 0, revenue: 0 };
                 ex.quantity += item.quantity;
                 ex.revenue  += item.price * item.quantity;
@@ -1251,6 +1255,11 @@ const RankingTab = ({ filteredOrders, nonRevenueCats }) => {
         return Array.from(dayMap.values()).sort((a, b) => a.label.localeCompare(b.label));
     }, [selectedItem, slotOrders]);
 
+    // 趨勢圖標題要顯示名稱，但 selectedItem 存的是 id，從排行榜資料反查目前名稱
+    const selectedItemName = useMemo(() =>
+        itemRank.find(i => i.id === selectedItem)?.name || selectedItem,
+    [itemRank, selectedItem]);
+
     const sortBy = (arr, { key, dir }) => {
         const s = [...arr].sort((a, b) =>
             typeof a[key] === 'string' ? a[key].localeCompare(b[key]) : a[key] - b[key]
@@ -1258,7 +1267,7 @@ const RankingTab = ({ filteredOrders, nonRevenueCats }) => {
         return dir === 'asc' ? s : s.reverse();
     };
 
-    const handleSelectItem = (name) => setSelectedItem(prev => prev === name ? null : name);
+    const handleSelectItem = (id) => setSelectedItem(prev => prev === id ? null : id);
 
     const RankTable = ({ data, sort, setSort, title, emptyMsg, showTrend = false }) => (
         <div className="bg-white rounded-xl shadow overflow-hidden">
@@ -1284,10 +1293,10 @@ const RankingTab = ({ filteredOrders, nonRevenueCats }) => {
                         {data.length === 0 ? (
                             <tr><td colSpan={4} className="px-4 py-8 text-center text-gray-400">{emptyMsg || '此日期區間無資料'}</td></tr>
                         ) : data.map((item, i) => {
-                            const isSelected = showTrend && selectedItem === item.name;
+                            const isSelected = showTrend && selectedItem === (item.id || item.name);
                             return (
-                                <tr key={item.name}
-                                    onClick={() => showTrend && handleSelectItem(item.name)}
+                                <tr key={item.id || item.name}
+                                    onClick={() => showTrend && handleSelectItem(item.id || item.name)}
                                     className={`${showTrend ? 'cursor-pointer' : ''} ${isSelected ? 'bg-[#4A9A7A]/10' : i === 0 && sort.key !== 'name' ? 'bg-yellow-50/60' : ''} hover:bg-[#4A9A7A]/5`}>
                                     <td className="px-4 py-2.5 text-center text-xs text-gray-400">{i + 1}</td>
                                     <td className={`px-4 py-2.5 font-bold ${isSelected ? 'text-[#4A9A7A]' : 'text-gray-800'}`}>
@@ -1330,7 +1339,7 @@ const RankingTab = ({ filteredOrders, nonRevenueCats }) => {
                 <div className="bg-white rounded-xl shadow overflow-hidden">
                     <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
                         <div>
-                            <h3 className="font-black text-gray-800">{selectedItem} — 每日趨勢</h3>
+                            <h3 className="font-black text-gray-800">{selectedItemName} — 每日趨勢</h3>
                             <p className="text-xs text-gray-400 mt-0.5">
                                 {TIME_SLOTS.find(s => s.key === timeSlot)?.label}・共 {trendData.reduce((s, d) => s + d.quantity, 0)} 份
                             </p>

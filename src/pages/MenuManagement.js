@@ -244,7 +244,7 @@ const AddCategoryModal = ({ existingNames, onClose, onAdd }) => {
 // ItemModal — 新增/編輯菜單品項
 // ======================================================================
 const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [], categories = [] }) => {
-    const baseItem = { name: '', printName: '', price: 0, category: categories[0]?.name || '', imageUrl: '', stock: 0, consumes: [] };
+    const baseItem = { name: '', printName: '', customerPrintName: '', price: 0, category: categories[0]?.name || '', imageUrl: '', stock: 0, consumes: [] };
     const initialData = isAdding ? baseItem : {
         ...baseItem,
         ...item,
@@ -252,6 +252,7 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
         consumes: item?.consumes || [],
         sortOrder: item?.sortOrder !== undefined ? item.sortOrder : Infinity,
         printName: item?.printName || '',
+        customerPrintName: item?.customerPrintName || '',
     };
     const [formData, setFormData] = useState(initialData);
     const [submitting, setSubmitting] = useState(false);
@@ -320,6 +321,13 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
                                 <span className="ml-2 text-xs text-gray-400 font-normal">（留空使用原名稱）</span>
                             </label>
                             <input type="text" name="printName" value={formData.printName || ''} onChange={handleChange} placeholder={formData.name} className="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-3 text-base"/>
+                        </div>
+                        <div className="mb-4">
+                            <label className="block text-base font-medium text-gray-700">
+                                顧客聯名稱
+                                <span className="ml-2 text-xs text-gray-400 font-normal">（留空使用原名稱，結帳單用）</span>
+                            </label>
+                            <input type="text" name="customerPrintName" value={formData.customerPrintName || ''} onChange={handleChange} placeholder={formData.name} className="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-3 text-base"/>
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                             <div className="mb-4">

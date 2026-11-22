@@ -1051,7 +1051,9 @@ const FULL_NAME_MAP = {
 };
 
 function getCustomerItemName(item) {
-    const base = FULL_NAME_MAP[item.id] || item.name || '';
+    // customerPrintName 是後台可編輯的欄位，新訂單的出單資料會帶這個值；
+    // FULL_NAME_MAP 保留做舊訂單（這個欄位還不存在時下的單）補印時的退路。
+    const base = item.customerPrintName || FULL_NAME_MAP[item.id] || item.name || '';
     // 主餐加序號前綴（數字緊接品名，不加空格）
     if ((item.category || '') === '主餐' && item.sortOrder != null) {
         return `${item.sortOrder}.${base}`;
@@ -1385,7 +1387,7 @@ app.get('/api/menu', async (req, res) => {
         const linkedStocks = consumes.filter(cId => cId in invMap && invMap[cId] !== null).map(cId => invMap[cId]);
         const linkedStock = linkedStocks.length > 0 ? Math.min(...linkedStocks) : null;
         return {
-            id: r.id, name: r.name, printName: r.print_name, price: r.price,
+            id: r.id, name: r.name, printName: r.print_name, customerPrintName: r.customer_print_name, price: r.price,
             category: r.category, sortOrder: r.sort_order, stock: r.stock,
             soldOut: r.sold_out, consumes, imageUrl: r.image_url,
             thresholds: r.thresholds || null,
@@ -1405,7 +1407,7 @@ app.post('/api/menu', async (req, res) => {
             .slice(0, 20);
         id = `${base}_${Date.now()}`;
     }
-    const row = { id, name: b.name, print_name: b.printName||'',
+    const row = { id, name: b.name, print_name: b.printName||'', customer_print_name: b.customerPrintName||'',
         price: b.price, category: b.category||'', sort_order: b.sortOrder,
         stock: b.stock, sold_out: b.soldOut||false, consumes: b.consumes||[],
         image_url: b.imageUrl||null, thresholds: b.thresholds||null };
@@ -1418,6 +1420,7 @@ app.patch('/api/menu/:id', async (req, res) => {
     const updates = {};
     if (b.name        !== undefined) updates.name       = b.name;
     if (b.printName   !== undefined) updates.print_name = b.printName;
+    if (b.customerPrintName !== undefined) updates.customer_print_name = b.customerPrintName;
     if (b.price       !== undefined) updates.price      = b.price;
     if (b.category    !== undefined) updates.category   = b.category;
     if (b.sortOrder   !== undefined) updates.sort_order = b.sortOrder;
