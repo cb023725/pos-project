@@ -19,6 +19,13 @@ const supabase = createClient(
     process.env.SUPABASE_SERVICE_KEY
 );
 
+// 連線保溫：營業中常有幾分鐘沒人操作 POS 的空檔，底層 TCP/TLS 連線會被回收，
+// 下一次真正的請求就得重新握手，使用者會感覺「切換頁面變慢」(實測約 0.4~1.6 秒)。
+// 用一個很輕量的查詢每 20 秒戳一次，讓連線保持熱的，失敗也不影響正常運作。
+setInterval(() => {
+    supabase.from('app_settings').select('key').limit(1).then(() => {}, () => {});
+}, 20000);
+
 // PostgREST 單次查詢預設上限 1000 筆，超過會被悄悄截斷。
 // 用於資料量可能超過此上限的查詢（如全部發票/訂單），需分頁抓完整資料。
 const SUPA_PAGE_SIZE = 1000;
