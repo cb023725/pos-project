@@ -2112,6 +2112,103 @@ app.post('/api/orders/:id/complete', async (req, res) => {
 });
 
 // ============================================================
+// 年菜（nianfai）：訂單與通路完全獨立於一般內用外帶，不扣庫存
+// ============================================================
+
+// 現場年菜單結帳後自動送同一個 Google Form（GAS doPost），讓 Yw 不用手動填兩次。
+// NIANFAI_GAS_URL 還沒設定好之前（測試 GAS 尚未部署）一律留在待傳狀態，不視為錯誤；
+// 之後補上網址、或前次失敗，都靠下面的定時器重試（見本檔案稍後的 setInterval）。
+async function submitToNianfaiForm(orderId) {
+    const gasUrl = process.env.NIANFAI_GAS_URL;
+    if (!gasUrl) return; // 尚未設定，保持 pending，不算失敗
+    const { data: nf } = await supabase.from('nianfai_orders').select('*').eq('order_id', orderId).single();
+    if (!nf || nf.form_submission_status === 'sent') return;
+    const { data: order } = await supabase.from('orders').select('items').eq('id', orderId).single();
+    try {
+        const resp = await fetch(gasUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                secret: process.env.NIANFAI_GAS_SECRET || '',
+                year: nf.year, seqNo: nf.seq_no,
+                customerName: nf.customer_name, customerPhone: nf.customer_phone,
+                deliveryMethod: nf.delivery_method, pickupDate: nf.pickup_date,
+                recipientName: nf.recipient_name, recipientPhone: nf.recipient_phone,
+                recipientAddress: nf.recipient_address,
+                items: order?.items || [],
+            }),
+        });
+        if (!resp.ok) throw new Error(`GAS 回應 ${resp.status}`);
+        await supabase.from('nianfai_orders').update({ form_submission_status: 'sent', form_submission_error: null }).eq('order_id', orderId);
+    } catch (error) {
+        await supabase.from('nianfai_orders').update({ form_submission_status: 'failed', form_submission_error: error.message }).eq('order_id', orderId);
+        throw error;
+    }
+}
+
+app.post('/api/nianfai/orders', async (req, res) => {
+    const {
+        items, year, customerName, customerPhone, deliveryMethod,
+        pickupDate, recipientName, recipientPhone, recipientAddress,
+    } = req.body;
+    if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: '品項不可為空' });
+    if (!year) return res.status(400).json({ error: '缺少年度' });
+    if (!['pickup', 'delivery'].includes(deliveryMethod)) return res.status(400).json({ error: '取貨方式錯誤' });
+
+    const total = items.reduce((s, it) => s + (it.price || 0) * (it.quantity || 1), 0);
+    const now = new Date().toISOString();
+
+    try {
+        // 流水號：app_settings 存當年度計數器，年菜現場單量很小，接受極小機率的競態
+        const seqKey = `nianfai_${year}_next_seq`;
+        const { data: seqRow } = await supabase.from('app_settings').select('value').eq('key', seqKey).single();
+        const seqNo = parseInt(seqRow?.value, 10) || 1;
+        await supabase.from('app_settings').upsert({ key: seqKey, value: String(seqNo + 1), updated_at: now });
+
+        const { data: order, error: orderErr } = await supabase.from('orders').insert({
+            table_number: '外帶', order_type: '外帶', status: 'paid',
+            items, total, sub_total: total, paid_amount: total,
+            timestamp: now, updated_at: now, is_nianfai: true,
+        }).select().single();
+        if (orderErr) throw orderErr;
+
+        const { error: nfErr } = await supabase.from('nianfai_orders').insert({
+            order_id: order.id, year, seq_no: seqNo,
+            customer_name: customerName || null, customer_phone: customerPhone || null,
+            delivery_method: deliveryMethod, pickup_date: pickupDate || null,
+            recipient_name: recipientName || null, recipient_phone: recipientPhone || null,
+            recipient_address: recipientAddress || null,
+        });
+        if (nfErr) throw nfErr;
+
+        const { data: invoice, error: invErr } = await supabase.from('invoices').insert({
+            invoice_number: `NF-${year}-${String(seqNo).padStart(3, '0')}`,
+            payment_time: now, order_id: order.id,
+            order_type: '外帶', table_name: '外帶', customer_count: 0,
+            total, amount: total, items_snapshot: items, status: '已開立',
+        }).select().single();
+        if (invErr) throw invErr;
+
+        submitToNianfaiForm(order.id).catch(e => console.error('[年菜] 送表單失敗（已留待傳佇列）:', e.message));
+
+        res.json({ ok: true, orderId: order.id, seqNo, invoiceId: invoice.id, total });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+app.get('/api/nianfai/items', async (req, res) => {
+    const { year } = req.query;
+    if (!year) return res.status(400).json({ error: '缺少年度' });
+    const { data, error } = await supabase.from('menu_items').select('*').eq('nianfai_year', parseInt(year, 10)).order('sort_order');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json((data || []).map(r => ({
+        id: r.id, name: r.name, price: r.price, category: r.category,
+        sortOrder: r.sort_order, imageUrl: r.image_url,
+        bundleComposition: r.bundle_composition || null,
+    })));
+});
+
+// ============================================================
 // 折扣/退款調整
 // ============================================================
 app.get('/api/adjustments', async (req, res) => {

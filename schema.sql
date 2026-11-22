@@ -11,18 +11,21 @@
 -- menu_items 菜單
 -- ================================================================
 create table if not exists public.menu_items (
-  id          text primary key,
-  name        text not null,
-  print_name  text default '',
-  price       numeric,
-  category    text default '',          -- 主餐 / 單點 / 小點 / 飲品 / 冷凍包 …
-  sort_order  numeric default 9999,
-  stock       numeric,
-  sold_out    boolean default false,
-  consumes    jsonb default '[]'::jsonb,
-  image_url   text,
-  created_at  timestamptz default now(),
-  thresholds  jsonb
+  id                   text primary key,
+  name                 text not null,
+  print_name           text default '',
+  customer_print_name  text,                     -- 顧客聯（結帳單）名稱，留空用 name；舊資料退回用 server.js 的 FULL_NAME_MAP
+  price                numeric,
+  category             text default '',          -- 主餐 / 單點 / 小點 / 飲品 / 冷凍包 …
+  sort_order           numeric default 9999,
+  stock                numeric,
+  sold_out             boolean default false,
+  consumes             jsonb default '[]'::jsonb,
+  image_url            text,
+  created_at           timestamptz default now(),
+  thresholds           jsonb,
+  bundle_composition   jsonb,                    -- 年菜套餐組成 [{"itemId":"...","qty":1}, ...]；單點品項維持 null
+  nianfai_year         integer                   -- 這個品項今年要在年菜通路賣，值是年度（例如 2027）；不是年菜品項則為 null
 );
 
 -- ================================================================
@@ -79,8 +82,34 @@ create table if not exists public.orders (
   order_date      text,
   special_notes   jsonb default '[]'::jsonb,
   cleared_at      timestamptz,                 -- 清桌時間（未來功能，程式尚未寫入）
-  tables_used     text[]                       -- 併桌、加桌實際佔用的桌子，例如 {A6,A7}（未來功能）
+  tables_used     text[],                      -- 併桌、加桌實際佔用的桌子，例如 {A6,A7}（未來功能）
+  is_new_group    boolean,                     -- 新客(true)/舊客(false)/未標記(null)，開單時選擇
+  is_nianfai      boolean default false        -- 年菜訂單：報表排除依據，也用來判斷結帳時跳過扣庫存
 );
+
+-- ================================================================
+-- nianfai_orders 年菜訂單明細（1 筆對應 1 筆 orders，is_nianfai=true）
+-- 年菜專屬欄位獨立成表，不污染共用的 orders。流水號每年從 001 起，不含線上單
+-- （線上單用表單時間戳記辨識，不在這張表）。
+-- form_submission_status：pending(待送)/sent(已送)/failed(失敗，會重試)
+-- ================================================================
+create table if not exists public.nianfai_orders (
+  order_id               bigint primary key references public.orders(id) on delete cascade,
+  year                   integer not null,
+  seq_no                 integer not null,
+  customer_name          text,
+  customer_phone         text,
+  delivery_method        text check (delivery_method in ('pickup', 'delivery')),
+  pickup_date            date,
+  recipient_name         text,
+  recipient_phone        text,
+  recipient_address      text,
+  form_submission_status text default 'pending',
+  form_submission_error  text,
+  created_at             timestamptz default now()
+);
+create unique index if not exists nianfai_orders_year_seq_idx on public.nianfai_orders (year, seq_no);
+alter table public.nianfai_orders enable row level security;
 
 -- ================================================================
 -- invoices 發票（營收的事實來源；一張訂單分次結帳時會有多張）
@@ -138,7 +167,8 @@ create table if not exists public.customers (
 -- ================================================================
 -- app_settings 設定值
 -- key：category_settings / quick_tags / reserve_amount / pending_transactions /
---      last_close_time / last_close_order_id / store_holiday_dates（已轉入 store_calendar，程式改完後停用）
+--      last_close_time / last_close_order_id / store_holiday_dates（已轉入 store_calendar，程式改完後停用） /
+--      nianfai_<year>_season_active（年菜開賣/收單總開關） / nianfai_<year>_next_seq（年菜流水號計數器）
 -- ================================================================
 create table if not exists public.app_settings (
   key         text primary key,
@@ -230,68 +260,223 @@ language sql security definer as $fn$
   select id, customer_count from orders where id = any(order_ids);
 $fn$;
 
--- 所有報表共用的彙總函式（不含個資）。營業額一律為實收（扣折扣、退款）
--- 定義見 ANALYTICS_DATA_FIXES.md 第 0 節
+-- ================================================================
+-- 報表共用 view（3 層，由淺到深）。只給下面 4 個 security definer 函式用，
+-- 明確 revoke 掉 anon/authenticated，避免被 PostgREST 自動開成公開端點。
+-- 設計與背景見 supabase/migrations/20261122_consolidate_report_rpcs.sql
+-- ================================================================
+
+-- 第 1 層：有效發票（status='已開立'）＋ 對應訂單欄位，列層級、不彙總
+create or replace view public.report_valid_invoices as
+select
+  i.id               as invoice_id,
+  i.order_id         as order_id,
+  i.payment_time     as payment_time,
+  i.total            as total,
+  i.amount           as amount,
+  i.items_snapshot   as items_snapshot,
+  i.daily_order_no   as invoice_daily_order_no,
+  i.invoice_number   as invoice_number,
+  i.table_name       as invoice_table_name,
+  i.order_type       as invoice_order_type,
+  i.customer_count   as invoice_customer_count,
+  o.timestamp        as order_timestamp,
+  o.table_number     as order_table_number,
+  o.order_type       as order_order_type,
+  o.customer_count   as order_customer_count,
+  o.daily_order_no   as order_daily_order_no,
+  o.is_new_group     as order_is_new_group
+from public.invoices i
+left join public.orders o on o.id = i.order_id
+where i.status = '已開立';
+
+-- 第 2 層：每筆訂單彙總出 business_date／meal_period／營業額
+create or replace view public.report_base_orders as
+select
+  o.id as order_id,
+  o.order_type,
+  o.customer_count,
+  o.is_new_group,
+  (min(v.payment_time) at time zone 'Asia/Taipei')::date as business_date,
+  case when ((o.timestamp at time zone 'Asia/Taipei')::time < time '15:45')
+       then 'lunch' else 'dinner' end as meal_period,
+  sum(v.total) as gross_revenue
+from public.orders o
+join public.report_valid_invoices v on v.order_id = o.id
+group by o.id;
+
+-- 第 3 層：品項行展開，帶 business_date／meal_period
+create or replace view public.report_item_lines as
+select
+  v.order_id,
+  bo.business_date,
+  bo.meal_period,
+  bo.order_type,
+  it->>'id' as item_id,
+  it->>'name' as item_name,
+  coalesce(it->>'category', '') as category,
+  (it->>'price')::numeric as unit_price,
+  coalesce((it->>'quantity')::numeric, 1) as quantity
+from public.report_valid_invoices v
+join public.report_base_orders bo on bo.order_id = v.order_id
+cross join lateral jsonb_array_elements(coalesce(v.items_snapshot, '[]'::jsonb)) it;
+
+revoke all on public.report_valid_invoices from public, anon, authenticated;
+revoke all on public.report_base_orders    from public, anon, authenticated;
+revoke all on public.report_item_lines     from public, anon, authenticated;
+
+-- ================================================================
+-- 報表函式（不含個資）。營業額一律為實收（扣折扣、退款）。定義見 ANALYTICS_DATA_FIXES.md 第 0 節
+-- ================================================================
+
+-- 彙總報表資料（午/晚各一列），四個地方的「營業額」「客單價」共用的單一來源
 create or replace function public.report_sessions(p_start date, p_end date)
 returns table (
-  business_date     date,
-  meal_period       text,     -- 'lunch' | 'dinner'（依開單時間，15:45 分界）
-  orders            int,
-  dine_in_orders    int,
-  takeout_orders    int,
-  customers         int,      -- 訂單人數加總（不含只買冷凍包的訂單）
-  dine_in_customers int,
-  gross_revenue     numeric,  -- 有效發票 total 合計（折扣前）
-  adjustment_amount numeric,  -- 折扣、退款，依原發票日期歸屬
-  net_revenue       numeric,  -- 實收營業額
-  frozen_revenue    numeric,  -- 冷凍包（另計）
-  meal_net_revenue  numeric   -- 餐點實收，客單價分子
+  business_date        date,
+  meal_period          text,     -- 'lunch' | 'dinner'（依開單時間，15:45 分界）
+  orders               int,      -- 有有效發票的訂單數（含只買冷凍包的訂單）
+  dine_in_orders       int,
+  takeout_orders       int,
+  customers            int,      -- 人數：訂單人數加總（含外帶份數，不含只買冷凍包的訂單）
+  dine_in_customers    int,
+  total_groups         int,      -- 組數：不含只買冷凍包的訂單（內用＋外帶）
+  new_groups           int,
+  new_customers        int,
+  returning_groups     int,
+  returning_customers  int,
+  unmarked_groups      int,      -- 未標記新舊客的組數；new + returning + unmarked = total_groups
+  unmarked_customers   int,
+  gross_revenue        numeric,  -- 有效發票 total 合計（折扣前）
+  adjustment_amount    numeric,  -- 折扣、退款，依原發票日期歸屬
+  net_revenue          numeric,  -- 實收營業額
+  frozen_revenue       numeric,  -- 冷凍包（另計）
+  meal_net_revenue     numeric   -- 餐點實收，客單價分子
 )
 language sql stable security definer set search_path = public as $fn$
-  with inv as (
-    select i.* from invoices i where i.status = '已開立'
-  ), ord as (
-    select o.id, o.order_type, o.customer_count,
-           (min(i.payment_time) at time zone 'Asia/Taipei')::date as business_date,
-           case when ((o.timestamp at time zone 'Asia/Taipei')::time < time '15:45')
-                then 'lunch' else 'dinner' end as meal_period,
-           sum(i.total) as gross
-    from orders o join inv i on i.order_id = o.id
-    group by o.id
-  ), items as (
-    select i.order_id,
-           sum(case when it->>'category' = '冷凍包'
-                    then (it->>'price')::numeric * coalesce((it->>'quantity')::numeric, 1) else 0 end) as frozen,
-           sum(case when coalesce(it->>'category', '') <> '冷凍包'
-                    then (it->>'price')::numeric * coalesce((it->>'quantity')::numeric, 1) else 0 end) as meal
-    from inv i, jsonb_array_elements(coalesce(i.items_snapshot, '[]'::jsonb)) it
-    group by i.order_id
+  with items as (
+    select order_id,
+           sum(case when category = '冷凍包' then unit_price * quantity else 0 end) as frozen,
+           sum(case when category <> '冷凍包' then unit_price * quantity else 0 end) as meal
+    from report_item_lines
+    group by order_id
   ), adj as (
-    select i.order_id, sum(a.amount) as amount
-    from adjustments a join inv i on i.id = a.original_invoice_id
-    group by i.order_id
+    select v.order_id, sum(a.amount) as amount
+    from adjustments a
+    join report_valid_invoices v on v.invoice_id = a.original_invoice_id
+    group by v.order_id
+  ), x as (
+    select bo.*, coalesce(it.meal, 0) as meal, coalesce(it.frozen, 0) as frozen, coalesce(adj.amount, 0) as adj_amount,
+           (coalesce(it.meal, 0) > 0) as is_meal_order
+    from report_base_orders bo
+    left join items it on it.order_id = bo.order_id
+    left join adj on adj.order_id = bo.order_id
+    where bo.business_date between p_start and p_end
   )
-  select o.business_date, o.meal_period,
+  select x.business_date, x.meal_period,
          count(*)::int,
-         count(*) filter (where o.order_type = '內用')::int,
-         count(*) filter (where o.order_type = '外帶')::int,
-         coalesce(sum(o.customer_count) filter (where coalesce(it.meal, 0) > 0), 0)::int,
-         coalesce(sum(o.customer_count) filter (where o.order_type = '內用' and coalesce(it.meal, 0) > 0), 0)::int,
-         sum(o.gross),
-         coalesce(sum(adj.amount), 0),
-         sum(o.gross) + coalesce(sum(adj.amount), 0),
-         coalesce(sum(it.frozen), 0),
-         coalesce(sum(it.meal), 0) + coalesce(sum(adj.amount), 0)
-  from ord o
-  left join items it on it.order_id = o.id
-  left join adj on adj.order_id = o.id
-  where o.business_date between p_start and p_end
-  group by 1, 2
-  order by 1, 2;
+         count(*) filter (where order_type = '內用')::int,
+         count(*) filter (where order_type = '外帶')::int,
+         coalesce(sum(customer_count) filter (where is_meal_order), 0)::int,
+         coalesce(sum(customer_count) filter (where is_meal_order and order_type = '內用'), 0)::int,
+         count(*) filter (where is_meal_order)::int,
+         count(*) filter (where is_meal_order and is_new_group is true)::int,
+         coalesce(sum(customer_count) filter (where is_meal_order and is_new_group is true), 0)::int,
+         count(*) filter (where is_meal_order and is_new_group is false)::int,
+         coalesce(sum(customer_count) filter (where is_meal_order and is_new_group is false), 0)::int,
+         count(*) filter (where is_meal_order and is_new_group is null)::int,
+         coalesce(sum(customer_count) filter (where is_meal_order and is_new_group is null), 0)::int,
+         sum(gross_revenue),
+         sum(adj_amount),
+         sum(gross_revenue) + sum(adj_amount),
+         sum(frozen),
+         sum(meal) + sum(adj_amount)
+  from x
+  group by x.business_date, x.meal_period
+  order by x.business_date, x.meal_period;
+$fn$;
+
+-- 品項銷售排行（POS 銷售排行頁、週報 email 可用；目前兩者仍各自重算，尚未改用這個）
+create or replace function public.report_items(p_start date, p_end date)
+returns table (
+  business_date    date,
+  meal_period      text,
+  order_type       text,
+  menu_item_id     text,
+  item_name        text,
+  category         text,
+  unit_price       numeric,
+  quantity         numeric,
+  line_revenue     numeric,
+  orders_with_item int
+)
+language sql stable security definer set search_path = public as $fn$
+  select business_date, meal_period, order_type, item_id, max(item_name), max(category), unit_price,
+         sum(quantity), sum(unit_price * quantity), count(distinct order_id)::int
+  from report_item_lines
+  where business_date between p_start and p_end
+  group by business_date, meal_period, order_type, item_id, unit_price
+  order by 1, 2, 3, 4;
+$fn$;
+
+-- 加點率／分類銷售彙總
+create or replace function public.report_attach(p_start date, p_end date)
+returns table (
+  business_date        date,
+  meal_period          text,
+  order_type           text,
+  category             text,
+  orders_with_category int,
+  quantity             numeric,
+  line_revenue         numeric
+)
+language sql stable security definer set search_path = public as $fn$
+  select business_date, meal_period, order_type, category,
+         count(distinct order_id)::int, sum(quantity), sum(unit_price * quantity)
+  from report_item_lines
+  where business_date between p_start and p_end
+  group by 1, 2, 3, 4
+  order by 1, 2, 3, 4;
+$fn$;
+
+-- 發票／訂單明細（報表頁「歷史單據明細」、下載分析資料用）
+create or replace function public.report_order_invoices(p_start_ts timestamptz, p_end_ts timestamptz)
+returns table (
+  invoice_order_id       bigint,
+  invoice_daily_order_no integer,
+  invoice_number         text,
+  payment_time           timestamptz,
+  total                  numeric,
+  amount                 numeric,
+  items_snapshot         jsonb,
+  invoice_table_name     text,
+  invoice_order_type     text,
+  invoice_customer_count integer,
+  order_timestamp        timestamptz,
+  order_table_number     text,
+  order_customer_count   integer,
+  order_order_type       text,
+  order_daily_order_no   integer,
+  order_is_new_group     boolean
+)
+language sql stable security definer set search_path = public as $fn$
+  select order_id, invoice_daily_order_no, invoice_number, payment_time, total, amount, items_snapshot,
+         invoice_table_name, invoice_order_type, invoice_customer_count,
+         order_timestamp, order_table_number, order_customer_count, order_order_type, order_daily_order_no,
+         order_is_new_group
+  from report_valid_invoices
+  where (p_start_ts is null or payment_time >= p_start_ts)
+    and (p_end_ts   is null or payment_time <  p_end_ts)
+  order by payment_time;
 $fn$;
 
 revoke all on function public.report_sessions(date, date) from public;
+revoke all on function public.report_items(date, date) from public;
+revoke all on function public.report_attach(date, date) from public;
+revoke all on function public.report_order_invoices(timestamptz, timestamptz) from public;
 grant execute on function public.report_sessions(date, date) to anon, authenticated, service_role;
+grant execute on function public.report_items(date, date) to anon, authenticated, service_role;
+grant execute on function public.report_attach(date, date) to anon, authenticated, service_role;
+grant execute on function public.report_order_invoices(timestamptz, timestamptz) to anon, authenticated, service_role;
 grant execute on function public.get_orders_customer_count(integer[]) to anon, authenticated;
 
 select 'Schema 建立/補齊完成' as result;
