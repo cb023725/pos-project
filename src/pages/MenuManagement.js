@@ -7,6 +7,9 @@ import {
     getSettingValue,
 } from '../db';
 
+// 虛擬「年菜」tab 的篩選值：不是真的分類名稱，不會跟 category_settings 的分類衝突
+const NIANFAI_FILTER = '__nianfai__';
+
 // ======================================================================
 // 輔助函式
 // ======================================================================
@@ -551,11 +554,30 @@ const MenuManagementPage = () => {
         }
     };
 
+    // 年菜品項不改分類（維持原本分類），所以用一個虛擬 tab 把所有品項集中起來，
+    // 搭配下面的勾選框直接加入/移除今年的年菜，不用每個品項都開編輯視窗才能打勾
+    // ——尤其第一次初始化、完全沒有舊品項可以繼承時，要一次勾完所有品項會很慢。
+    const handleQuickToggleNianfai = async (item) => {
+        const isTagged = item.nianfaiYear === activeNianfaiYear;
+        const updates = {
+            nianfaiYear: isTagged ? null : activeNianfaiYear,
+            bundleComposition: isTagged ? null : item.bundleComposition,
+        };
+        try {
+            await updateMenuItem(item.id, updates);
+            setMenuItems(prev => prev.map(mi => mi.id === item.id ? { ...mi, ...updates } : mi));
+        } catch (error) {
+            alert(`更新失敗：${error.message}`);
+        }
+    };
+
     if (isLoading) {
         return <div className="p-8 text-center text-2xl text-gray-600">菜單資料載入中...</div>;
     }
 
-    const filteredItems = menuItems.filter(item => item.category === filterCategory);
+    const filteredItems = filterCategory === NIANFAI_FILTER
+        ? menuItems
+        : menuItems.filter(item => item.category === filterCategory);
     const currentCatSetting = categories.find(c => c.name === filterCategory);
 
     return (
@@ -599,6 +621,20 @@ const MenuManagementPage = () => {
                             </button>
                         </div>
                     ))}
+                    {/* 年菜虛擬 tab：品項不改分類，只是把所有品項集中在這裡方便一次勾選/取消今年的年菜；
+                        收單結算後 activeNianfaiYear 會跟著隱藏（資料仍保留），明年初始化新年度才會再出現 */}
+                    {activeNianfaiYear && (
+                        <button
+                            onClick={() => setFilterCategory(NIANFAI_FILTER)}
+                            className={`whitespace-nowrap py-3 px-2 border-b-4 text-lg font-medium transition-colors duration-150 flex-shrink-0
+                                ${filterCategory === NIANFAI_FILTER
+                                    ? 'border-orange-500 text-orange-600 font-black'
+                                    : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
+                                }`}
+                        >
+                            🧧 年菜 ({menuItems.filter(i => i.nianfaiYear === activeNianfaiYear).length})
+                        </button>
+                    )}
                     {/* 新增類別按鈕 */}
                     <button
                         onClick={() => setIsAddingCategory(true)}
@@ -664,7 +700,16 @@ const MenuManagementPage = () => {
                                     <td className="px-3 py-3 whitespace-nowrap text-base text-gray-900 font-black text-right">
                                         NT$ {formatCurrency(item.price)}
                                     </td>
-                                    <td className="px-3 py-3"></td>
+                                    <td className="px-3 py-3 text-center">
+                                        {filterCategory === NIANFAI_FILTER && (
+                                            <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                                                <input type="checkbox" checked={item.nianfaiYear === activeNianfaiYear}
+                                                    onChange={() => handleQuickToggleNianfai(item)}
+                                                    className="form-checkbox text-orange-600 h-5 w-5 rounded"/>
+                                                <span className="text-xs text-gray-500 whitespace-nowrap">加入{activeNianfaiYear}年菜</span>
+                                            </label>
+                                        )}
+                                    </td>
                                     <td className="px-3 py-3 whitespace-nowrap text-center text-base font-medium space-x-3">
                                         <button onClick={() => setEditingItem(item)} className="text-blue-600 hover:bg-blue-100 p-2 rounded-full transition-colors" title="編輯項目">
                                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-9-4l9-9m-4 4l-9 9"/></svg>
@@ -678,7 +723,7 @@ const MenuManagementPage = () => {
                         ) : (
                             <tr>
                                 <td colSpan="6" className="px-3 py-8 text-center text-lg text-gray-500">
-                                    {`「${filterCategory}」類別中沒有任何項目。`}
+                                    {filterCategory === NIANFAI_FILTER ? '目前沒有任何菜單品項。' : `「${filterCategory}」類別中沒有任何項目。`}
                                 </td>
                             </tr>
                         )}
