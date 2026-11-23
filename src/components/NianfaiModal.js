@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { getNianfaiItems, createNianfaiOrder } from '../db';
+import MenuCard from './MenuCard';
 
 // 套餐上限 8、單點上限 9，對應 Google 表單本身的題型上限（下拉 1~8 / 表格 1~9）。
 // 超過的大單無法透過這裡送出，Yw 要自己先填表單送出，再到「表單回應」直接改數量（不拆單）。
@@ -121,7 +122,7 @@ const NianfaiModal = ({ isOpen, year, onClose }) => {
 
     return (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden">
                 <div className="flex-shrink-0 bg-white border-b border-gray-100 px-6 py-4 flex items-center justify-between">
                     <h3 className="text-2xl font-black text-gray-800">🧧 年菜訂購 {year}</h3>
                     <button onClick={onClose} className="text-gray-400 hover:text-gray-700">
@@ -131,36 +132,43 @@ const NianfaiModal = ({ isOpen, year, onClose }) => {
 
                 <div className="flex-grow overflow-y-auto p-6 space-y-5">
                     <div>
-                        <h4 className="text-lg font-bold text-gray-700 mb-3">品項</h4>
-                        <div className="space-y-2">
+                        <h4 className="text-lg font-bold text-gray-700 mb-3">品項（點一下加入，長按減少一份）</h4>
+                        <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
                             {items.map(item => {
-                                const isBundle = !!item.bundleComposition;
-                                const max = isBundle ? BUNDLE_MAX : SINGLE_MAX;
                                 const q = qty[item.id] || 0;
                                 return (
-                                    <div key={item.id} className={`relative flex items-center justify-between p-3 bg-gray-50 rounded-xl ${item.soldOut ? 'opacity-60' : ''}`}>
-                                        <div className="flex-1 min-w-0">
-                                            <p className="font-bold text-gray-800 truncate flex items-center gap-2">
-                                                {item.name}
-                                                {item.soldOut && (
-                                                    <span className="bg-red-600 text-white text-xs font-black px-2 py-0.5 rounded-md tracking-wider flex-shrink-0">停售</span>
-                                                )}
-                                            </p>
-                                            <p className="text-sm text-gray-400">${item.price}{isBundle ? '（套餐）' : ''}</p>
-                                        </div>
-                                        <div className="flex items-center gap-2 flex-shrink-0">
-                                            <button onClick={() => setItemQty(item, q - 1)} disabled={q <= 0}
-                                                className="w-8 h-8 rounded-full bg-white border border-gray-300 font-black text-gray-600 disabled:opacity-40">−</button>
-                                            <span className="w-8 text-center font-bold">{q}</span>
-                                            <button onClick={() => setItemQty(item, q + 1)}
-                                                className={`w-8 h-8 rounded-full bg-white border border-gray-300 font-black text-gray-600 ${q >= max ? 'opacity-40' : ''}`}>+</button>
-                                        </div>
+                                    <div key={item.id} className="relative">
+                                        {q > 0 && (
+                                            <span className="absolute -top-2 -right-2 z-30 min-w-[26px] h-[26px] px-1.5 rounded-full bg-[#D47856] text-white text-sm font-black flex items-center justify-center shadow-lg">
+                                                {q}
+                                            </span>
+                                        )}
+                                        <MenuCard
+                                            item={item}
+                                            onAddItem={() => setItemQty(item, q + 1)}
+                                            onLongPress={() => setItemQty(item, q - 1)}
+                                            allowOverride
+                                        />
                                     </div>
                                 );
                             })}
-                            {items.length === 0 && <p className="text-gray-400 text-center py-6">目前沒有年菜品項，請先到菜單管理設定</p>}
+                            {items.length === 0 && <p className="col-span-full text-gray-400 text-center py-6">目前沒有年菜品項，請先到菜單管理設定</p>}
                         </div>
                         {capNotice && <p className="text-orange-500 font-bold text-sm mt-2">{capNotice}</p>}
+
+                        {cartItems.length > 0 && (
+                            <div className="mt-4 bg-gray-50 rounded-xl p-3 space-y-1.5">
+                                {cartItems.map(it => (
+                                    <div key={it.id} className="flex items-center justify-between text-sm">
+                                        <span className="font-bold text-gray-700">{it.name} × {it.quantity}</span>
+                                        <div className="flex items-center gap-3">
+                                            <span className="text-gray-500">${(it.price * it.quantity).toLocaleString('en-US')}</span>
+                                            <button onClick={() => setItemQty(it, 0)} className="text-gray-300 hover:text-red-500 font-bold">✕</button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
 
                     <div>

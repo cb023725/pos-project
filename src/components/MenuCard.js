@@ -8,11 +8,14 @@ const LONG_PRESS_MS = 600;
 // 本機 /images/... 的靜態圖本來就小、同源，不需要代理
 const toDisplaySrc = (url) => (/^https?:\/\//.test(url) ? `/api/image-proxy?url=${encodeURIComponent(url)}&w=300` : url);
 
-const MenuCard = React.memo(({ item, onAddItem, onLongPress }) => {
+// allowOverride：停售時外觀仍顯示鎖住樣式，但點擊還是會呼叫 onAddItem，交給呼叫端自己決定
+// 要不要跳確認視窗後放行（例如年菜訂購允許「確認後仍要加入已停售品項」）。
+// 預設 false，一般點餐頁維持原本「停售就完全點不動」的行為不變。
+const MenuCard = React.memo(({ item, onAddItem, onLongPress, allowOverride = false }) => {
     const hasInventoryLink = !!(item.consumes?.length); // 有庫存連動才顯示售完/庫存數
     const isSoldOut  = !!item.soldOut;
     const isDepleted = hasInventoryLink && !!item.depleted; // 只有連動品項才有售完狀態
-    const isDisabled = isSoldOut;                           // 停售才完全鎖住
+    const isDisabled = isSoldOut;                           // 停售才完全鎖住（視覺樣式用，allowOverride 不影響外觀）
 
     // 右上角庫存數量：有連動、有數值、且尚未售完時顯示
     const showStockBadge = hasInventoryLink && item.linkedStock != null && !isDepleted;
@@ -33,7 +36,7 @@ const MenuCard = React.memo(({ item, onAddItem, onLongPress }) => {
 
     const handleClick = () => {
         if (didLongPress.current) return;
-        if (isDisabled) return;
+        if (isDisabled && !allowOverride) return;
         onAddItem(item);
     };
 

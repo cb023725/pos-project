@@ -2485,8 +2485,16 @@ app.get('/api/nianfai/demand', async (req, res) => {
 app.get('/api/nianfai/items', async (req, res) => {
     const yearNum = parseInt(req.query.year, 10);
     if (!yearNum) return res.status(400).json({ error: '缺少年度' });
-    const { data, error } = await supabase.from('menu_items').select('*').eq('nianfai_year', yearNum).order('sort_order');
+    const [{ data, error }, { data: allItems, error: allErr }] = await Promise.all([
+        supabase.from('menu_items').select('*').eq('nianfai_year', yearNum).order('sort_order'),
+        supabase.from('menu_items').select('id, category, stock'),
+    ]);
     if (error) return res.status(500).json({ error: error.message });
+    if (allErr) return res.status(500).json({ error: allErr.message });
+    // 庫存品項 stock 對照表，跟 /api/menu 的 linkedStock/depleted 算法一致，
+    // 讓年菜 tab 用 MenuCard 呈現時跟一般營業餐點的庫存徽章/售完樣式完全比照
+    const invMap = {};
+    (allItems || []).forEach(r => { if ((r.category || '').includes('庫存')) invMap[r.id] = r.stock; });
     const demand = await computeNianfaiDemand(yearNum);
     const byId = new Map((data || []).map(r => [r.id, r]));
     const isSoldOut = (r) => {
@@ -2499,18 +2507,25 @@ app.get('/api/nianfai/items', async (req, res) => {
         }
         return r.nianfai_sellout_cap != null && (demand[r.id] || 0) >= r.nianfai_sellout_cap;
     };
-    res.json((data || []).map(r => ({
-        id: r.id, name: r.name, price: r.price, category: r.category,
-        sortOrder: r.sort_order, imageUrl: r.image_url,
-        bundleComposition: r.bundle_composition || null,
-        nianfaiProductionQty: r.nianfai_production_qty,
-        nianfaiSelloutCap: r.nianfai_sellout_cap,
-        demand: demand[r.id] || 0,
-        soldOut: isSoldOut(r),
-        // 平常也賣的品項：本來就有庫存連動（consumes），用既有庫存只警示、不走停售上限機制
-        isRegularSellingItem: !!(r.consumes && r.consumes.length > 0),
-        stock: r.stock,
-    })));
+    res.json((data || []).map(r => {
+        const consumes = r.consumes || [];
+        const linkedStocks = consumes.filter(cId => cId in invMap && invMap[cId] !== null).map(cId => invMap[cId]);
+        const linkedStock = linkedStocks.length > 0 ? Math.min(...linkedStocks) : null;
+        return {
+            id: r.id, name: r.name, price: r.price, category: r.category,
+            sortOrder: r.sort_order, imageUrl: r.image_url,
+            consumes, linkedStock,
+            depleted: consumes.some(cId => cId in invMap && invMap[cId] !== null && invMap[cId] <= 0),
+            bundleComposition: r.bundle_composition || null,
+            nianfaiProductionQty: r.nianfai_production_qty,
+            nianfaiSelloutCap: r.nianfai_sellout_cap,
+            demand: demand[r.id] || 0,
+            soldOut: isSoldOut(r),
+            // 平常也賣的品項：本來就有庫存連動（consumes），用既有庫存只警示、不走停售上限機制
+            isRegularSellingItem: !!(r.consumes && r.consumes.length > 0),
+            stock: r.stock,
+        };
+    }));
 });
 
 // ============================================================
