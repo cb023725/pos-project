@@ -51,7 +51,7 @@ function AppContent() {
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/customers" element={<CustomerManagementPage />} />
         <Route path="/remarks" element={<RemarkManagementPage />} />
-        <Route path="/nianfai" element={<NianfaiAdminPage />} />
+        <Route path="/nianfai-admin" element={<NianfaiAdminPage />} />
         <Route path="/drawertest" element={<DrawerTest />} />
       </Routes>
     </Layout>

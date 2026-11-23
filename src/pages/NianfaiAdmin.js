@@ -1,14 +1,22 @@
 // src/pages/NianfaiAdmin.js — 年菜管理頁（控制中心）
-// 對應 handoff 文件第 8 節「年菜管理頁」表格裡，開賣前階段需要的 3 個按鈕：
-// 新年度初始化、修正品項（連到既有 menu management）、開賣/收單開關。
-// 庫存/停售機制是下一階段的範圍，這裡先不做。
+// 修正單 #01：preparing/selling/closed/archived 單一狀態機取代 season_active，
+// 新年度初始化改成真的複製品項（新 id，去年資料完全不動）。
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { getSettingValue, saveSettingValue, getMenuItems, updateMenuItem, getNianfaiItems, finishNianfaiProduction, addNianfaiProduction } from '../db';
+import { getSettingValue, saveSettingValue, getMenuItems, addMenuItem, updateMenuItem, getNianfaiItems, finishNianfaiProduction, addNianfaiProduction } from '../db';
+
+const STATUS_ORDER = ['preparing', 'selling', 'closed', 'archived'];
+const STATUS_LABELS = { preparing: '準備中', selling: '開賣中', closed: '收單後', archived: '已封存（平常營業）' };
+const NEXT_ACTION_LABELS = { preparing: '開賣（顯示年菜 tab）', selling: '收單（隱藏年菜 tab）', closed: '封存（年度結束，恢復平常營業）' };
+const NEXT_CONFIRM = {
+    preparing: (y) => `確定要開賣 ${y} 年菜嗎？\n\n開賣後 WebPOS 點餐頁會出現「年菜」tab。`,
+    selling:   (y) => `確定要收單嗎？\n\n收單後 WebPOS 點餐頁的「年菜」tab 會立即隱藏，之後只有 Yw 能從後台加單。`,
+    closed:    (y) => `確定要封存 ${y} 年菜嗎？\n\n封存後所有年菜畫面會隱藏、恢復平常營業樣子。資料完全保留，不會刪除。`,
+};
 
 const NianfaiAdminPage = () => {
     const [activeYear, setActiveYear] = useState(null);
-    const [seasonActive, setSeasonActive] = useState(false);
+    const [status, setStatus] = useState('archived');
     const [items, setItems] = useState([]);
     const [inventoryItems, setInventoryItems] = useState([]);
     const [formClosed, setFormClosed] = useState(false);
@@ -24,39 +32,55 @@ const NianfaiAdminPage = () => {
         setActiveYear(activeYearNum);
         setNewYearInput(String((activeYearNum || new Date().getFullYear()) + 1));
         if (activeYearNum) {
-            const active = await getSettingValue(`nianfai_${activeYearNum}_season_active`, 'false');
-            setSeasonActive(active === 'true');
+            const s = await getSettingValue(`nianfai_${activeYearNum}_status`, 'preparing');
+            setStatus(STATUS_ORDER.includes(s) ? s : 'preparing');
             const closed = await getSettingValue(`nianfai_${activeYearNum}_form_closed`, 'false');
             setFormClosed(closed === 'true');
             const nfItems = await getNianfaiItems(activeYearNum).catch(() => []);
             setInventoryItems(nfItems);
         } else {
+            setStatus('archived');
             setFormClosed(false);
             setInventoryItems([]);
         }
         const all = await getMenuItems();
-        setItems(activeYearNum ? all.filter(i => i.nianfaiYear === activeYearNum) : []);
+        setItems(activeYearNum ? all.filter(i => i.category === '年菜' && i.nianfaiYear === activeYearNum) : []);
     }, []);
 
     useEffect(() => { load(); }, [load]);
 
-    // 新年度初始化：沿用去年（目前 active year）標記 nianfai_year 的品項當草稿，
-    // 設成新年度但「不送出」——season_active 固定設 false，Yw 自己到菜單管理頁
-    // 快速修正完（名稱、價格、要不要繼續賣）再手動按「開賣」。
+    // 新年度初始化＝真的複製：去年品項複製成新的 menu_items（新 id、新 nianfai_year），
+    // 套餐的 bundle_composition 重新指向新品項 id；製作入庫/停售上限/流水號都歸零；
+    // 去年的品項與訂單完全不動，只是不再是「目前年度」。
     const handleInitNewYear = async () => {
         const newYear = parseInt(newYearInput, 10);
         if (!newYear) { alert('請輸入有效的年度'); return; }
-        if (!window.confirm(`確定要初始化 ${newYear} 年菜嗎？\n\n會把目前標記 ${activeYear || '（無）'} 年菜的品項複製成 ${newYear} 的草稿（不會建立新品項、不會開賣）。`)) return;
+        if (!window.confirm(`確定要初始化 ${newYear} 年菜嗎？\n\n會把${activeYear ? `${activeYear} 年菜的 ${items.length} 個品項` : '（目前沒有上一年度可複製）'}複製成 ${newYear} 的新品項（新年度資料互相獨立），狀態設為準備中。`)) return;
         setIsInitializing(true);
         try {
-            const all = await getMenuItems();
-            const lastYearItems = activeYear ? all.filter(i => i.nianfaiYear === activeYear) : [];
+            const lastYearItems = items; // 已經是「年菜」分類＋目前年度的品項
+            const idMap = new Map();
+            lastYearItems.forEach(it => idMap.set(it.id, `${it.id}_${newYear}`));
+            // 先建立所有新品項（bundleComposition 先留空，新品項都建好才能回填正確的新 id）
             for (const it of lastYearItems) {
-                await updateMenuItem(it.id, { nianfaiYear: newYear });
+                await addMenuItem({
+                    id: idMap.get(it.id), name: it.name, printName: it.printName, customerPrintName: it.customerPrintName,
+                    price: it.price, category: '年菜', imageUrl: it.imageUrl,
+                    stock: 0, consumes: [], sortOrder: it.sortOrder,
+                    nianfaiYear: newYear, nianfaiStockRef: it.nianfaiStockRef || null,
+                    bundleComposition: null,
+                });
+            }
+            for (const it of lastYearItems) {
+                if (it.bundleComposition && it.bundleComposition.length > 0) {
+                    const remapped = it.bundleComposition.map(c => ({ itemId: idMap.get(c.itemId) || c.itemId, qty: c.qty }));
+                    await updateMenuItem(idMap.get(it.id), { bundleComposition: remapped });
+                }
             }
             await saveSettingValue('nianfai_active_year', String(newYear));
-            await saveSettingValue(`nianfai_${newYear}_season_active`, 'false');
-            alert(`已初始化 ${newYear} 年菜草稿（沿用 ${lastYearItems.length} 筆去年品項），請到菜單管理頁確認/修正後再開賣。`);
+            await saveSettingValue(`nianfai_${newYear}_status`, 'preparing');
+            await saveSettingValue(`nianfai_${newYear}_next_seq`, '1');
+            alert(`已複製 ${lastYearItems.length} 筆品項到 ${newYear}（新品項，${activeYear || '上一年度'}的資料完全不變），請到菜單管理頁確認/修正後再開賣。`);
             await load();
         } catch (e) {
             alert(`初始化失敗：${e.message}`);
@@ -65,15 +89,29 @@ const NianfaiAdminPage = () => {
         }
     };
 
-    const handleToggleSeason = async () => {
-        if (!activeYear) return;
-        const next = !seasonActive;
-        if (next && !window.confirm(`確定要開賣 ${activeYear} 年菜嗎？\n\n開賣後 WebPOS 點餐頁會出現「年菜」tab。`)) return;
-        if (!next && !window.confirm(`確定要收單嗎？\n\n收單後 WebPOS 點餐頁的「年菜」tab 會立即隱藏。`)) return;
+    // 狀態機只能往前走（準備中→開賣中→收單後→已封存），改錯了用下面的「返回上一步」修正
+    const handleAdvanceStatus = async () => {
+        if (!activeYear || status === 'archived') return;
+        const next = STATUS_ORDER[STATUS_ORDER.indexOf(status) + 1];
+        if (!window.confirm(NEXT_CONFIRM[status](activeYear))) return;
         setIsToggling(true);
         try {
-            await saveSettingValue(`nianfai_${activeYear}_season_active`, next ? 'true' : 'false');
-            setSeasonActive(next);
+            await saveSettingValue(`nianfai_${activeYear}_status`, next);
+            setStatus(next);
+        } catch (e) {
+            alert(`設定失敗：${e.message}`);
+        } finally {
+            setIsToggling(false);
+        }
+    };
+    const handleRevertStatus = async () => {
+        if (!activeYear || status === 'preparing') return;
+        const prev = STATUS_ORDER[STATUS_ORDER.indexOf(status) - 1];
+        if (!window.confirm(`確定要把狀態退回「${STATUS_LABELS[prev]}」嗎？（修正誤按用）`)) return;
+        setIsToggling(true);
+        try {
+            await saveSettingValue(`nianfai_${activeYear}_status`, prev);
+            setStatus(prev);
         } catch (e) {
             alert(`設定失敗：${e.message}`);
         } finally {
@@ -123,9 +161,9 @@ const NianfaiAdminPage = () => {
                     目前年度：<span className="font-black text-gray-800">{activeYear || '（尚未設定）'}</span>
                 </p>
                 <p className="text-gray-600 mt-1">
-                    開賣狀態：
-                    <span className={`font-black ml-1 ${seasonActive ? 'text-[#4A9A7A]' : 'text-gray-400'}`}>
-                        {activeYear ? (seasonActive ? '開賣中' : '未開賣／已收單') : '—'}
+                    狀態：
+                    <span className={`font-black ml-1 ${status === 'selling' ? 'text-[#4A9A7A]' : 'text-gray-400'}`}>
+                        {activeYear ? STATUS_LABELS[status] : '—'}
                     </span>
                 </p>
                 <p className="text-gray-600 mt-1">
@@ -140,7 +178,7 @@ const NianfaiAdminPage = () => {
 
             <div className="bg-white rounded-xl shadow p-6 mb-5">
                 <h3 className="text-xl font-bold text-gray-700 mb-3">1. 新年度初始化</h3>
-                <p className="text-sm text-gray-500 mb-3">把目前年度標記為年菜的品項複製成新年度的草稿（不會開賣），複製完請到菜單管理頁修正名稱/價格/是否繼續賣。</p>
+                <p className="text-sm text-gray-500 mb-3">把目前年度的年菜品項「複製」成新年度的新品項（新品項、新年度資料互相獨立，不是改標記），複製完請到菜單管理頁修正名稱/價格/是否繼續賣。</p>
                 <div className="flex items-center gap-3">
                     <input type="number" value={newYearInput} onChange={e => setNewYearInput(e.target.value)}
                         className="w-28 border border-gray-300 rounded-lg p-2.5 text-base" />
@@ -160,12 +198,25 @@ const NianfaiAdminPage = () => {
             </div>
 
             <div className="bg-white rounded-xl shadow p-6">
-                <h3 className="text-xl font-bold text-gray-700 mb-3">3. 開賣 / 收單</h3>
-                <p className="text-sm text-gray-500 mb-3">開賣後 WebPOS 點餐頁才會出現「年菜」tab；收單後立即隱藏（現場已無法再點年菜）。</p>
-                <button onClick={handleToggleSeason} disabled={!activeYear || isToggling}
-                    className={`px-5 py-2.5 rounded-lg font-bold text-white disabled:opacity-50 ${seasonActive ? 'bg-red-500 hover:bg-red-600' : 'bg-[#D47856] hover:bg-[#C46848]'}`}>
-                    {isToggling ? '處理中...' : seasonActive ? '收單（隱藏年菜 tab）' : '開賣（顯示年菜 tab）'}
-                </button>
+                <h3 className="text-xl font-bold text-gray-700 mb-3">3. 開賣 / 收單狀態</h3>
+                <p className="text-sm text-gray-500 mb-3">
+                    準備中→開賣中→收單後→已封存，只隱藏畫面不刪資料；開賣中才會出現年菜佇列/點單頁，收單後只有 Yw 能從後台加單。
+                </p>
+                <div className="flex items-center gap-3">
+                    {status !== 'archived' && (
+                        <button onClick={handleAdvanceStatus} disabled={!activeYear || isToggling}
+                            className="px-5 py-2.5 rounded-lg font-bold text-white bg-[#D47856] hover:bg-[#C46848] disabled:opacity-50">
+                            {isToggling ? '處理中...' : NEXT_ACTION_LABELS[status]}
+                        </button>
+                    )}
+                    {status !== 'preparing' && status !== 'archived' && (
+                        <button onClick={handleRevertStatus} disabled={isToggling}
+                            className="px-4 py-2.5 rounded-lg font-bold text-gray-500 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-sm">
+                            返回上一步（修正誤按）
+                        </button>
+                    )}
+                    {status === 'archived' && <p className="text-gray-400">已封存，明年初始化新年度後才會再出現。</p>}
+                </div>
             </div>
 
             {activeYear && (

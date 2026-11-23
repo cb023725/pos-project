@@ -2511,22 +2511,25 @@ app.get('/api/nianfai/items', async (req, res) => {
         return r.nianfai_sellout_cap != null && (demand[r.id] || 0) >= r.nianfai_sellout_cap;
     };
     res.json((data || []).map(r => {
-        const consumes = r.consumes || [];
-        const linkedStocks = consumes.filter(cId => cId in invMap && invMap[cId] !== null).map(cId => invMap[cId]);
-        const linkedStock = linkedStocks.length > 0 ? Math.min(...linkedStocks) : null;
+        // 修正單 #01 第 3 節：5 個「庫存連動」品項改用 nianfai_stock_ref 指向冷凍包
+        // 庫存（只顯示用，不是 consumes，年菜不扣庫存），分類邏輯也要跟著改用這個欄位判斷
+        const stockRef = r.nianfai_stock_ref || null;
+        const refStock = stockRef && stockRef in invMap ? invMap[stockRef] : null;
         return {
             id: r.id, name: r.name, price: r.price, category: r.category,
             sortOrder: r.sort_order, imageUrl: r.image_url,
-            consumes, linkedStock,
-            depleted: consumes.some(cId => cId in invMap && invMap[cId] !== null && invMap[cId] <= 0),
+            nianfaiStockRef: stockRef,
+            consumes: stockRef ? [stockRef] : [], // 給 MenuCard 判斷庫存徽章用，年菜不會真的扣這個庫存
+            linkedStock: refStock,
+            depleted: refStock !== null && refStock <= 0,
             bundleComposition: r.bundle_composition || null,
             nianfaiProductionQty: r.nianfai_production_qty,
             nianfaiSelloutCap: r.nianfai_sellout_cap,
             demand: demand[r.id] || 0,
             soldOut: isSoldOut(r),
-            // 平常也賣的品項：本來就有庫存連動（consumes），用既有庫存只警示、不走停售上限機制
-            isRegularSellingItem: !!(r.consumes && r.consumes.length > 0),
-            stock: r.stock,
+            // 平常也賣的品項：對應冷凍包庫存只警示，不走停售上限機制；年節限定品項才用製作入庫/完成
+            isRegularSellingItem: !!stockRef,
+            stock: refStock,
         };
     }));
 });

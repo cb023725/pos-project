@@ -1,6 +1,28 @@
 // src/pages/Settings.js
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { getStoreCalendar, saveStoreCalendarDay, deleteStoreCalendarDay, getExternalEvents, saveExternalEvents } from '../db';
+import useNianfaiSeason from '../hooks/useNianfaiSeason';
+
+// 年菜管理入口：修正單 #01 第 2 節，平常（archived）導覽列不顯示年菜，
+// 入口移來這裡常駐，隨時都進得去管理頁
+const STATUS_LABELS = { preparing: '準備中', selling: '開賣中', closed: '收單後', archived: '平常營業中' };
+const NianfaiEntryCard = () => {
+    const { year, status } = useNianfaiSeason();
+    return (
+        <div className="bg-white rounded-xl shadow-sm p-5 flex items-center justify-between">
+            <div>
+                <h2 className="text-lg font-black text-gray-900">🧧 年菜管理</h2>
+                <p className="text-sm text-gray-500 mt-0.5">
+                    {year ? `目前年度：${year}（${STATUS_LABELS[status] || status}）` : '尚未設定年度'}
+                </p>
+            </div>
+            <Link to="/nianfai-admin" className="px-4 py-2 rounded-lg bg-[#4A9A7A] text-white font-bold text-sm hover:bg-[#3A8A6A]">
+                前往管理
+            </Link>
+        </div>
+    );
+};
 
 const pad2 = (n) => String(n).padStart(2, '0');
 const toDateKey = (y, m, d) => `${y}-${pad2(m + 1)}-${pad2(d)}`;
@@ -348,6 +370,7 @@ const SettingsPage = () => (
     <div className="p-5 font-sans bg-gray-50 min-h-full">
         <h1 className="text-2xl font-black text-gray-900 mb-5">設定</h1>
         <div className="max-w-3xl space-y-5">
+            <NianfaiEntryCard />
             <StoreCalendarCard />
             <ExternalEventsCard />
         </div>
