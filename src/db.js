@@ -122,6 +122,8 @@ export const DEFAULT_CATEGORY_SETTINGS = [
     { name: '飲品',   showInDineIn: true, showInTakeout: true, reportGroup: '營業額', printOnKitchen: false, includeInTotal: true,  showInKpi: true },
     { name: '冷凍包', showInDineIn: true, showInTakeout: true, reportGroup: '冷凍包', printOnKitchen: false, includeInTotal: false, showInKpi: true },
     { name: '單點',   showInDineIn: true, showInTakeout: true, reportGroup: '營業額', printOnKitchen: true,  includeInTotal: true,  showInKpi: true },
+    // 年菜：一般內用/外帶點餐頁永遠不顯示（修正單 #01 第 2 節），只在菜單管理頁可見
+    { name: '年菜',   showInDineIn: false, showInTakeout: false, reportGroup: '年菜', printOnKitchen: false, includeInTotal: false, showInKpi: false },
 ];
 
 export async function getCategorySettings() {

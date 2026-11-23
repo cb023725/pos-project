@@ -27,7 +27,8 @@ create table if not exists public.menu_items (
   bundle_composition   jsonb,                    -- 年菜套餐組成 [{"itemId":"...","qty":1}, ...]；單點品項維持 null
   nianfai_year         integer,                  -- 這個品項今年要在年菜通路賣，值是年度（例如 2027）；不是年菜品項則為 null
   nianfai_production_qty integer,                -- 年菜製作入庫數量
-  nianfai_sellout_cap    integer                 -- 年菜停售上限；null=製作中不設上限，按下「製作完成」把當時的 production_qty 複製進來就不再變動
+  nianfai_sellout_cap    integer,                -- 年菜停售上限；null=製作中不設上限，按下「製作完成」把當時的 production_qty 複製進來就不再變動
+  nianfai_stock_ref      text                    -- 修正單 #01 第 3 節：5 個庫存連動品項指向冷凍包庫存品項 id，只顯示用不扣庫存
 );
 
 -- ================================================================
@@ -114,6 +115,30 @@ create unique index if not exists nianfai_orders_year_seq_idx on public.nianfai_
 alter table public.nianfai_orders enable row level security;
 
 -- ================================================================
+-- nianfai_seq_reservations 年菜流水號保留（修正單 #01 第 5 節）
+-- 「確認訂購」當下就要保留流水號、印顧客聯，但這時候還沒有真正的
+-- orders/invoices（要等「結帳」才建立），所以用獨立表記錄保留狀態。
+-- reserved=已確認訂購／used=已結帳（對應到 nianfai_orders）／
+-- abandoned=客人最後沒買，按「取消」才會標記（不做自動過期）。
+-- ================================================================
+create table if not exists public.nianfai_seq_reservations (
+  id              bigint generated always as identity primary key,
+  year            integer not null,
+  seq_no          integer not null,
+  status          text not null default 'reserved' check (status in ('reserved', 'used', 'abandoned')),
+  items_snapshot  jsonb not null,       -- 「確認訂購」當下的購物車內容，結帳前拿來比對購物車有沒有被改過
+  delivery_method text not null check (delivery_method in ('pickup', 'delivery')),
+  pickup_date     date,
+  total           numeric not null,
+  confirmed_at    timestamptz default now(),
+  used_at         timestamptz,
+  abandoned_at    timestamptz
+);
+create unique index if not exists nianfai_seq_reservations_year_seq_idx
+  on public.nianfai_seq_reservations (year, seq_no);
+alter table public.nianfai_seq_reservations enable row level security;
+
+-- ================================================================
 -- invoices 發票（營收的事實來源；一張訂單分次結帳時會有多張）
 -- status：已開立 / 已作廢
 -- ================================================================
@@ -170,7 +195,8 @@ create table if not exists public.customers (
 -- app_settings 設定值
 -- key：category_settings / quick_tags / reserve_amount / pending_transactions /
 --      last_close_time / last_close_order_id / store_holiday_dates（已轉入 store_calendar，程式改完後停用） /
---      nianfai_<year>_season_active（年菜開賣/收單總開關） / nianfai_<year>_next_seq（年菜流水號計數器） /
+--      nianfai_<year>_status（preparing/selling/closed/archived，取代舊的 season_active，見修正單 #01 第 2 節）/
+--      nianfai_<year>_pickup_dates（取貨日清單，JSON 陣列，不寫死在程式碼） / nianfai_<year>_next_seq（年菜流水號計數器） /
 --      nianfai_<year>_form_closed（達停售上限後 WebPOS 認知的表單關閉狀態，控制只有 Yw 能新增訂單）
 -- ================================================================
 create table if not exists public.app_settings (

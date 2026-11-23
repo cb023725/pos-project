@@ -1565,6 +1565,7 @@ app.get('/api/menu', async (req, res) => {
             nianfaiYear: r.nianfai_year || null,
             nianfaiProductionQty: r.nianfai_production_qty,
             nianfaiSelloutCap: r.nianfai_sellout_cap,
+            nianfaiStockRef: r.nianfai_stock_ref || null,
         };
     }));
 });
@@ -1583,7 +1584,8 @@ app.post('/api/menu', async (req, res) => {
         price: b.price, category: b.category||'', sort_order: b.sortOrder,
         stock: b.stock, sold_out: b.soldOut||false, consumes: b.consumes||[],
         image_url: b.imageUrl||null, thresholds: b.thresholds||null,
-        bundle_composition: b.bundleComposition||null, nianfai_year: b.nianfaiYear||null };
+        bundle_composition: b.bundleComposition||null, nianfai_year: b.nianfaiYear||null,
+        nianfai_stock_ref: b.nianfaiStockRef||null };
     const { data, error } = await supabase.from('menu_items').upsert(row).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(rowToCamel(data));
@@ -1606,6 +1608,7 @@ app.patch('/api/menu/:id', async (req, res) => {
     if (b.nianfaiYear !== undefined) updates.nianfai_year = b.nianfaiYear;
     if (b.nianfaiProductionQty !== undefined) updates.nianfai_production_qty = b.nianfaiProductionQty;
     if (b.nianfaiSelloutCap !== undefined) updates.nianfai_sellout_cap = b.nianfaiSelloutCap;
+    if (b.nianfaiStockRef !== undefined) updates.nianfai_stock_ref = b.nianfaiStockRef;
     const { data, error } = await supabase.from('menu_items').update(updates).eq('id', req.params.id).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(rowToCamel(data));
