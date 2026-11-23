@@ -5,6 +5,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getNianfaiQueue, saveNianfaiOrderDetails, submitNianfaiOrder, getSettingValue } from '../db';
 import useNianfaiSeason from '../hooks/useNianfaiSeason';
+import useDialog from '../components/useDialog';
+import { formatPickupDate } from '../utils/nianfaiDate';
 
 const STATUS_META = {
     incomplete: { label: '資料待補', cls: 'bg-orange-100 text-orange-600' },
@@ -17,8 +19,20 @@ const seqLabel = (o) => `${o.year}-${String(o.seqNo).padStart(3, '0')}`;
 const fmtTime = (iso) => new Date(iso).toLocaleString('zh-TW', {
     month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
 });
-const itemSummary = (items) => items.map(it => `${it.name}×${it.quantity}`).join('、');
-const deliveryText = (o) => o.deliveryMethod === 'delivery' ? '宅配' : `自取 ${o.pickupDate || '（未選日期）'}`;
+const fmtMoney = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
+const deliveryText = (o) => o.deliveryMethod === 'delivery' ? '宅配' : `自取 ${formatPickupDate(o.pickupDate) || '（未選日期）'}`;
+
+// 品項條列：一行一項（品名 × 數量）
+const ItemList = ({ items, showPrice = false, className = '' }) => (
+    <ul className={`space-y-0.5 ${className}`}>
+        {items.map((it, i) => (
+            <li key={`${it.id}-${i}`} className="flex justify-between gap-3">
+                <span className="min-w-0 break-words">{it.name} <span className="font-black">× {it.quantity}</span></span>
+                {showPrice && <span className="flex-shrink-0 text-gray-500">{fmtMoney((it.price || 0) * (it.quantity || 1))}</span>}
+            </li>
+        ))}
+    </ul>
+);
 
 // 前端必填檢查，跟後端 nianfaiMissingFields 同一套規則（後端會再擋一次）
 function missingFields(f) {
@@ -26,7 +40,6 @@ function missingFields(f) {
     const m = [];
     if (blank(f.customerName)) m.push('姓名');
     if (blank(f.customerPhone)) m.push('電話');
-    if (!['pickup', 'delivery'].includes(f.deliveryMethod)) m.push('取貨方式');
     if (f.deliveryMethod === 'pickup' && blank(f.pickupDate)) m.push('取貨日');
     if (f.deliveryMethod === 'delivery') {
         if (blank(f.recipientName)) m.push('收件人');
@@ -40,39 +53,46 @@ const OrderRow = ({ order, onClick }) => {
     const meta = STATUS_META[order.status] || STATUS_META.incomplete;
     return (
         <div onClick={onClick}
-            className={`grid grid-cols-12 gap-2 px-4 py-3 items-center border-b border-gray-200 bg-white ${onClick ? 'cursor-pointer hover:bg-gray-50' : ''}`}>
+            className={`grid grid-cols-12 gap-2 px-4 py-3 items-start border-b border-gray-200 bg-white ${onClick ? 'cursor-pointer hover:bg-gray-50' : ''}`}>
             <div className="col-span-2 flex flex-col">
                 <span className="text-xl font-black text-gray-800 leading-none">{seqLabel(order)}</span>
                 <span className={`mt-1 self-start text-[11px] font-black px-1.5 py-0.5 rounded ${meta.cls}`}>{meta.label}</span>
             </div>
             <div className="col-span-2 text-sm font-bold text-gray-600">{fmtTime(order.checkoutTime)}</div>
             <div className="col-span-4 text-sm text-gray-700 min-w-0">
-                <p className="truncate">{itemSummary(order.items)}</p>
-                {order.customerName && <p className="text-xs text-gray-400 truncate">{order.customerName} {order.customerPhone}</p>}
-                {order.status === 'failed' && order.error && <p className="text-xs text-red-500 truncate">{order.error}</p>}
+                <ItemList items={order.items} />
+                {order.customerName && <p className="text-xs text-gray-400 mt-1">{order.customerName} {order.customerPhone}</p>}
+                {order.status === 'failed' && order.error && <p className="text-xs text-red-500">{order.error}</p>}
             </div>
             <div className="col-span-2 text-sm font-bold text-gray-600">{deliveryText(order)}</div>
-            <div className="col-span-2 text-right pr-2 text-lg font-black text-gray-800">${Number(order.total || 0).toLocaleString('en-US')}</div>
+            <div className="col-span-2 text-right pr-2 text-lg font-black text-gray-800">{fmtMoney(order.total)}</div>
         </div>
     );
 };
 
-const DetailsModal = ({ order, pickupDates, onClose, onDone }) => {
+const DetailsModal = ({ order, pickupDates, onClose, onDone, showAlert }) => {
+    // 取貨方式在結帳時已決定（影響運費與總額），這裡只能看不能改
+    const deliveryMethod = order.deliveryMethod || 'pickup';
     const [form, setForm] = useState({
         customerName: order.customerName, customerPhone: order.customerPhone, customerEmail: order.customerEmail,
-        deliveryMethod: order.deliveryMethod || 'pickup', pickupDate: order.pickupDate || '',
+        pickupDate: order.pickupDate || '',
         recipientName: order.recipientName, recipientPhone: order.recipientPhone, recipientAddress: order.recipientAddress,
     });
+    // 收件人同訂購人：勾選時收件人姓名／電話跟著訂購人同步、不能另外編輯
+    const [sameAsCustomer, setSameAsCustomer] = useState(
+        deliveryMethod === 'delivery' && !!order.recipientName
+        && order.recipientName === order.customerName && order.recipientPhone === order.customerPhone);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
     const set = (k) => (e) => setForm(prev => ({ ...prev, [k]: e.target.value }));
-    const missing = missingFields(form);
-    // 取貨方式影響運費，結帳時已依顧客聯計價；這裡改方式不會重算金額，提醒一下
-    const methodChanged = order.deliveryMethod && form.deliveryMethod !== order.deliveryMethod;
+    const effective = sameAsCustomer ? { ...form, recipientName: form.customerName, recipientPhone: form.customerPhone } : form;
+    const missing = missingFields({ ...effective, deliveryMethod });
 
     const payload = () => ({
-        ...form,
-        pickupDate: form.deliveryMethod === 'pickup' ? form.pickupDate : null,
+        customerName: effective.customerName, customerPhone: effective.customerPhone, customerEmail: effective.customerEmail,
+        ...(deliveryMethod === 'pickup'
+            ? { pickupDate: effective.pickupDate }
+            : { recipientName: effective.recipientName, recipientPhone: effective.recipientPhone, recipientAddress: effective.recipientAddress }),
     });
 
     const handleSave = async () => {
@@ -88,9 +108,9 @@ const DetailsModal = ({ order, pickupDates, onClose, onDone }) => {
         try {
             const r = await submitNianfaiOrder(order.orderId, payload());
             if (r.status === 'failed') {
-                alert(`資料已儲存，但送出表單失敗：${r.error}\n系統會每 5 分鐘自動重試。`);
+                await showAlert(`資料已儲存，但送出表單失敗：${r.error}\n系統會每 5 分鐘自動重試。`, { title: '送出失敗' });
             } else if (r.status === 'pending') {
-                alert('資料已儲存。表單送出網址尚未設定，訂單會保持「待傳送」，設定後自動送出。');
+                await showAlert('資料已儲存。表單送出網址尚未設定，訂單會保持「待傳送」，設定後自動送出。', { title: '已儲存' });
             }
             onDone(payload());
         } catch (e) {
@@ -100,7 +120,7 @@ const DetailsModal = ({ order, pickupDates, onClose, onDone }) => {
         }
     };
 
-    const input = 'w-full border border-gray-300 rounded-lg p-2.5 text-base';
+    const input = 'w-full border border-gray-300 rounded-lg p-2.5 text-base disabled:bg-gray-100 disabled:text-gray-500';
     const label = 'block text-sm font-bold text-gray-600 mb-1';
 
     return (
@@ -110,9 +130,13 @@ const DetailsModal = ({ order, pickupDates, onClose, onDone }) => {
                     <h3 className="text-xl font-black text-gray-800">補填資料 {seqLabel(order)}</h3>
                     <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
                 </div>
-                <p className="text-sm text-gray-500 mb-4">
-                    結帳 {fmtTime(order.checkoutTime)}｜${Number(order.total || 0).toLocaleString('en-US')}｜{itemSummary(order.items)}
-                </p>
+                <p className="text-sm text-gray-500 mb-2">結帳 {fmtTime(order.checkoutTime)}</p>
+                <div className="bg-gray-50 rounded-xl p-3 mb-4 text-sm text-gray-700">
+                    <ItemList items={order.items} showPrice />
+                    <div className="flex justify-between border-t border-gray-200 mt-2 pt-2 font-black text-gray-800">
+                        <span>總額</span><span>{fmtMoney(order.total)}</span>
+                    </div>
+                </div>
 
                 <div className="space-y-3">
                     <div className="grid grid-cols-2 gap-3">
@@ -124,28 +148,30 @@ const DetailsModal = ({ order, pickupDates, onClose, onDone }) => {
                         <input className={input} type="email" value={form.customerEmail} onChange={set('customerEmail')} />
                     </div>
                     <div>
-                        <label className={label}>取貨方式 *</label>
-                        <div className="flex gap-2">
-                            {[['pickup', '自取'], ['delivery', '宅配']].map(([v, t]) => (
-                                <button key={v} type="button" onClick={() => setForm(prev => ({ ...prev, deliveryMethod: v }))}
-                                    className={`flex-1 py-2.5 rounded-xl font-bold ${form.deliveryMethod === v ? 'bg-[#4A9A7A] text-white' : 'bg-gray-100 text-gray-600'}`}>{t}</button>
-                            ))}
+                        <label className={label}>取貨方式</label>
+                        <div className="flex items-center gap-2">
+                            <span className="px-4 py-2 rounded-xl bg-[#4A9A7A] text-white font-bold">{deliveryMethod === 'delivery' ? '宅配' : '自取'}</span>
+                            <span className="text-xs text-gray-400">結帳後不能變更，如需更改請作廢後重新點單</span>
                         </div>
-                        {methodChanged && <p className="text-xs text-orange-500 font-bold mt-1">與結帳時的取貨方式不同，運費不會重新計算；如需改金額請作廢重新點單。</p>}
                     </div>
-                    {form.deliveryMethod === 'pickup' ? (
+                    {deliveryMethod === 'pickup' ? (
                         <div>
                             <label className={label}>取貨日 *</label>
                             <select className={input} value={form.pickupDate} onChange={set('pickupDate')}>
                                 <option value="">請選擇取貨日</option>
-                                {pickupDates.map(d => <option key={d} value={d}>{d}</option>)}
+                                {pickupDates.map(d => <option key={d} value={d}>{formatPickupDate(d)}</option>)}
                             </select>
                         </div>
                     ) : (
                         <>
+                            <label className="flex items-center gap-2 text-base font-bold text-gray-700 cursor-pointer select-none">
+                                <input type="checkbox" className="w-5 h-5 accent-[#4A9A7A]" checked={sameAsCustomer}
+                                    onChange={e => setSameAsCustomer(e.target.checked)} />
+                                收件人同訂購人
+                            </label>
                             <div className="grid grid-cols-2 gap-3">
-                                <div><label className={label}>收件人 *</label><input className={input} value={form.recipientName} onChange={set('recipientName')} /></div>
-                                <div><label className={label}>收件電話 *</label><input className={input} type="tel" value={form.recipientPhone} onChange={set('recipientPhone')} /></div>
+                                <div><label className={label}>收件人 *</label><input className={input} value={effective.recipientName} onChange={set('recipientName')} disabled={sameAsCustomer} /></div>
+                                <div><label className={label}>收件電話 *</label><input className={input} type="tel" value={effective.recipientPhone} onChange={set('recipientPhone')} disabled={sameAsCustomer} /></div>
                             </div>
                             <div><label className={label}>收件地址 *</label><input className={input} value={form.recipientAddress} onChange={set('recipientAddress')} /></div>
                         </>
@@ -168,6 +194,7 @@ const DetailsModal = ({ order, pickupDates, onClose, onDone }) => {
 
 const NianfaiQueuePage = () => {
     const navigate = useNavigate();
+    const { dialog, showAlert } = useDialog();
     const { year, showOrderQueue, loading: seasonLoading } = useNianfaiSeason();
     const [queue, setQueue] = useState({ pending: [], history: [] });
     const [isLoading, setIsLoading] = useState(true);
@@ -257,7 +284,7 @@ const NianfaiQueuePage = () => {
             </div>
 
             {editing && (
-                <DetailsModal order={editing} pickupDates={pickupDates}
+                <DetailsModal order={editing} pickupDates={pickupDates} showAlert={showAlert}
                     onClose={() => setEditing(null)}
                     onDone={(saved) => {
                         // 先把剛存的資料寫回列表，避免重新載入完成前再點開時拿到舊資料、存檔蓋掉
@@ -269,6 +296,7 @@ const NianfaiQueuePage = () => {
                         load();
                     }} />
             )}
+            {dialog}
         </div>
     );
 };

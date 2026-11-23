@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { getInvoices, getInvoiceSequence, performDayClose, getCategorySettings, getQuickTags, saveQuickTags, DEFAULT_QUICK_TAGS, getSettingValue, saveSettingValue, getAbandonedOrders, getNianfaiCloseCheck } from '../db';
+import useDialog from '../components/useDialog';
 
 const BACKEND_URL = '';
 const RESERVE_KEY      = 'pos_reserve_amount';
@@ -397,6 +398,7 @@ const AdjustmentModal = ({ invoices, getDisplayInvNum, onConfirm, onCancel }) =>
 // 主頁面
 // ─────────────────────────────────────────────────────────────────────────────
 const CashDrawerPage = () => {
+    const { dialog, showAlert } = useDialog();
 
     // ── 結算狀態（需在 periodStart 之前宣告） ─────────────────────────────────
     const [withdrawalAmount, setWithdrawalAmount] = useState(0);
@@ -745,7 +747,7 @@ const CashDrawerPage = () => {
         // 按下當下再查一次，避免畫面停留期間又有新的年菜單結帳
         const latestBlocking = await refreshNianfaiBlocking();
         if (latestBlocking && latestBlocking.length > 0) {
-            alert(`還有年菜訂單資料待補，不能關帳：\n${latestBlocking.map(b => b.label).join('、')}\n\n請到桌位頁「年菜」補齊資料並送出。`);
+            await showAlert(`還有年菜訂單資料待補，不能關帳：\n${latestBlocking.map(b => b.label).join('、')}\n\n請到桌位頁「年菜」補齊資料並送出。`, { title: '不能關帳' });
             return;
         }
         if (!window.confirm(
@@ -1370,6 +1372,7 @@ const CashDrawerPage = () => {
                     onClose={() => setTagManagerOpen(null)}
                 />
             )}
+            {dialog}
         </div>
     );
 };

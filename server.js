@@ -700,6 +700,15 @@ async function printPDF(filePath, pageH, copies = 1) {
 }
 
 // ----------------------------------------------------
+// 年菜取貨日加星期：'2027-01-29' → '2027-01-29（五）'（日期字串直接解析，不受時區影響）
+function fmtPickupDateWithWeekday(dateStr) {
+    if (!dateStr) return '';
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr);
+    if (!m) return dateStr;
+    const wd = '日一二三四五六'[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()];
+    return `${m[1]}-${m[2]}-${m[3]}（${wd}）`;
+}
+
 // 【關帳報表 PDF】buildCloseReportPDF
 // ----------------------------------------------------
 function buildCloseReportPDF(data, filePath) {
@@ -1320,7 +1329,7 @@ function buildNianfaiConfirmPDF(data, filePath) {
 
         const deliveryLine = data.deliveryMethod === 'delivery'
             ? `取貨方式：宅配　寄出期間：${data.deliveryPeriod || ''}`
-            : `取貨方式：自取　取貨日：${data.pickupDate || ''}`;
+            : `取貨方式：自取　取貨日：${fmtPickupDateWithWeekday(data.pickupDate)}`;
 
         let h = (C_STO_SZ + 3) + (C_HDR_SZ + 3) + (C_SUB_SZ + 4) + 4
               + (C_COL_SZ + 3) + 3 + measureNianfaiRowsHeight(mDoc, rows)
@@ -2672,8 +2681,9 @@ async function saveNianfaiDetails(orderId, body) {
         const v = typeof body[k] === 'string' ? body[k].trim() : body[k];
         updates[col] = v === '' ? null : v;
     }
-    if (updates.delivery_method && !['pickup', 'delivery'].includes(updates.delivery_method)) {
-        return { status: 400, error: '取貨方式錯誤' };
+    // 取貨方式在確認訂購時就決定（影響運費與總額），結帳後不能再改
+    if (updates.delivery_method && updates.delivery_method !== nf.delivery_method) {
+        return { status: 400, error: '已結帳的訂單不能變更取貨方式，如需更改請作廢後重新點單' };
     }
     // 切換取貨方式時清掉另一種方式的欄位，避免送出時帶到不相干的舊資料
     const method = updates.delivery_method || nf.delivery_method;
