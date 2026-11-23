@@ -291,7 +291,8 @@ select
   o.is_new_group     as order_is_new_group
 from public.invoices i
 left join public.orders o on o.id = i.order_id
-where i.status = '已開立';
+where i.status = '已開立'
+  and (o.is_nianfai is not true);
 
 -- 第 2 層：每筆訂單彙總出 business_date／meal_period／營業額
 create or replace view public.report_base_orders as
@@ -306,6 +307,7 @@ select
   sum(v.total) as gross_revenue
 from public.orders o
 join public.report_valid_invoices v on v.order_id = o.id
+where (o.is_nianfai is not true)
 group by o.id;
 
 -- 第 3 層：品項行展開，帶 business_date／meal_period
@@ -333,7 +335,7 @@ revoke all on public.report_item_lines     from public, anon, authenticated;
 -- ================================================================
 
 -- 彙總報表資料（午/晚各一列），四個地方的「營業額」「客單價」共用的單一來源
-create or replace function public.report_sessions(p_start date, p_end date)
+create function public.report_sessions(p_start date, p_end date)
 returns table (
   business_date        date,
   meal_period          text,     -- 'lunch' | 'dinner'（依開單時間，15:45 分界）
@@ -353,7 +355,9 @@ returns table (
   adjustment_amount    numeric,  -- 折扣、退款，依原發票日期歸屬
   net_revenue          numeric,  -- 實收營業額
   frozen_revenue       numeric,  -- 冷凍包（另計）
-  meal_net_revenue     numeric   -- 餐點實收，客單價分子
+  meal_net_revenue     numeric,  -- 餐點實收，客單價分子
+  nianfai_revenue       numeric  -- 年菜（另計，不計入來客數/組數；訂單整張被 report_valid_invoices
+                                  -- 排除，所以直接查 invoices+orders 再跟主查詢 full outer join）
 )
 language sql stable security definer set search_path = public as $fn$
   with items as (
@@ -374,28 +378,63 @@ language sql stable security definer set search_path = public as $fn$
     left join items it on it.order_id = bo.order_id
     left join adj on adj.order_id = bo.order_id
     where bo.business_date between p_start and p_end
+  ), main as (
+    select x.business_date, x.meal_period,
+           count(*)::int as orders,
+           count(*) filter (where order_type = '內用')::int as dine_in_orders,
+           count(*) filter (where order_type = '外帶')::int as takeout_orders,
+           coalesce(sum(customer_count) filter (where is_meal_order), 0)::int as customers,
+           coalesce(sum(customer_count) filter (where is_meal_order and order_type = '內用'), 0)::int as dine_in_customers,
+           count(*) filter (where is_meal_order)::int as total_groups,
+           count(*) filter (where is_meal_order and is_new_group is true)::int as new_groups,
+           coalesce(sum(customer_count) filter (where is_meal_order and is_new_group is true), 0)::int as new_customers,
+           count(*) filter (where is_meal_order and is_new_group is false)::int as returning_groups,
+           coalesce(sum(customer_count) filter (where is_meal_order and is_new_group is false), 0)::int as returning_customers,
+           count(*) filter (where is_meal_order and is_new_group is null)::int as unmarked_groups,
+           coalesce(sum(customer_count) filter (where is_meal_order and is_new_group is null), 0)::int as unmarked_customers,
+           sum(gross_revenue) as gross_revenue,
+           sum(adj_amount) as adjustment_amount,
+           sum(gross_revenue) + sum(adj_amount) as net_revenue,
+           sum(frozen) as frozen_revenue,
+           sum(meal) + sum(adj_amount) as meal_net_revenue
+    from x
+    group by x.business_date, x.meal_period
+  ), nf as (
+    select
+      (i.payment_time at time zone 'Asia/Taipei')::date as business_date,
+      case when ((o.timestamp at time zone 'Asia/Taipei')::time < time '15:45')
+           then 'lunch' else 'dinner' end as meal_period,
+      sum(i.total) as revenue
+    from public.invoices i
+    join public.orders o on o.id = i.order_id
+    where i.status = '已開立' and o.is_nianfai is true
+    group by 1, 2
   )
-  select x.business_date, x.meal_period,
-         count(*)::int,
-         count(*) filter (where order_type = '內用')::int,
-         count(*) filter (where order_type = '外帶')::int,
-         coalesce(sum(customer_count) filter (where is_meal_order), 0)::int,
-         coalesce(sum(customer_count) filter (where is_meal_order and order_type = '內用'), 0)::int,
-         count(*) filter (where is_meal_order)::int,
-         count(*) filter (where is_meal_order and is_new_group is true)::int,
-         coalesce(sum(customer_count) filter (where is_meal_order and is_new_group is true), 0)::int,
-         count(*) filter (where is_meal_order and is_new_group is false)::int,
-         coalesce(sum(customer_count) filter (where is_meal_order and is_new_group is false), 0)::int,
-         count(*) filter (where is_meal_order and is_new_group is null)::int,
-         coalesce(sum(customer_count) filter (where is_meal_order and is_new_group is null), 0)::int,
-         sum(gross_revenue),
-         sum(adj_amount),
-         sum(gross_revenue) + sum(adj_amount),
-         sum(frozen),
-         sum(meal) + sum(adj_amount)
-  from x
-  group by x.business_date, x.meal_period
-  order by x.business_date, x.meal_period;
+  select
+    coalesce(main.business_date, nf.business_date),
+    coalesce(main.meal_period, nf.meal_period),
+    coalesce(main.orders, 0),
+    coalesce(main.dine_in_orders, 0),
+    coalesce(main.takeout_orders, 0),
+    coalesce(main.customers, 0),
+    coalesce(main.dine_in_customers, 0),
+    coalesce(main.total_groups, 0),
+    coalesce(main.new_groups, 0),
+    coalesce(main.new_customers, 0),
+    coalesce(main.returning_groups, 0),
+    coalesce(main.returning_customers, 0),
+    coalesce(main.unmarked_groups, 0),
+    coalesce(main.unmarked_customers, 0),
+    coalesce(main.gross_revenue, 0),
+    coalesce(main.adjustment_amount, 0),
+    coalesce(main.net_revenue, 0),
+    coalesce(main.frozen_revenue, 0),
+    coalesce(main.meal_net_revenue, 0),
+    coalesce(nf.revenue, 0)
+  from main
+  full outer join nf on nf.business_date = main.business_date and nf.meal_period = main.meal_period
+  where coalesce(main.business_date, nf.business_date) between p_start and p_end
+  order by 1, 2;
 $fn$;
 
 -- 品項銷售排行（POS 銷售排行頁、週報 email 可用；目前兩者仍各自重算，尚未改用這個）

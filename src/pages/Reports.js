@@ -606,11 +606,11 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
 
     // 期間內（依選定時段）彙總：營業額＝net_revenue、客單價分子＝meal_net_revenue（四個地方共用的算法）
     const aggSessions = useCallback((startD, endD, slot) => {
-        let netRevenue = 0, mealNetRevenue = 0, frozenRevenue = 0, adjustmentAmount = 0;
+        let netRevenue = 0, mealNetRevenue = 0, frozenRevenue = 0, nianfaiRevenue = 0, adjustmentAmount = 0;
         let customers = 0, lunchNet = 0, dinnerNet = 0, lunchCust = 0, dinnerCust = 0, lunchMealNet = 0, dinnerMealNet = 0;
         // startD/endD 為 undefined（例如沒有比較期間）時回傳全 0；空字串代表「全部」= 不限制範圍
         if (startD === undefined || endD === undefined) {
-            return { total: 0, dineIn: 0, frozen: 0, customers: 0, adjustmentAmount: 0, day: 0, night: 0, dayCustomers: 0, nightCustomers: 0, avgSpend: 0, dayAvgSpend: 0, nightAvgSpend: 0 };
+            return { total: 0, dineIn: 0, frozen: 0, nianfai: 0, customers: 0, adjustmentAmount: 0, day: 0, night: 0, dayCustomers: 0, nightCustomers: 0, avgSpend: 0, dayAvgSpend: 0, nightAvgSpend: 0 };
         }
         sessionsByDate.forEach((day, date) => {
             if (startD && date < startD) return;
@@ -620,13 +620,14 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
                 const r = day[mp];
                 if (!r) return;
                 netRevenue += r.netRevenue; mealNetRevenue += r.mealNetRevenue; frozenRevenue += r.frozenRevenue;
+                nianfaiRevenue += r.nianfaiRevenue || 0;
                 adjustmentAmount += r.adjustmentAmount; customers += r.customers;
                 if (mp === 'lunch') { lunchNet += r.netRevenue; lunchCust += r.customers; lunchMealNet += r.mealNetRevenue; }
                 else                { dinnerNet += r.netRevenue; dinnerCust += r.customers; dinnerMealNet += r.mealNetRevenue; }
             });
         });
         return {
-            total: netRevenue, dineIn: mealNetRevenue, frozen: frozenRevenue, customers, adjustmentAmount,
+            total: netRevenue, dineIn: mealNetRevenue, frozen: frozenRevenue, nianfai: nianfaiRevenue, customers, adjustmentAmount,
             day: lunchNet, night: dinnerNet, dayCustomers: lunchCust, nightCustomers: dinnerCust,
             avgSpend:      customers  > 0 ? Math.round(mealNetRevenue / customers)  : 0,
             dayAvgSpend:   lunchCust  > 0 ? Math.round(lunchMealNet  / lunchCust)   : 0,
@@ -826,6 +827,15 @@ const SummaryTab = ({ filteredOrders, compOrders, compPeriod, startDate, endDate
             delta: <Delta curr={agg.dineIn} prev={prevAgg.dineIn} isCurrency enabled={!!compPeriod} />,
         },
         ...groupCards,
+        // 年菜收益：跟冷凍包一樣另外統計、不計入總營收，但年菜不是 category_settings 的分組
+        // （整張訂單在 report_valid_invoices 就被排除了，不會進 groupSalesMap），所以獨立出一張卡；
+        // 不在賣年菜的期間（agg.nianfai 和比較期間都是 0）就不顯示，避免平常擠版面
+        ...(agg.nianfai > 0 || prevAgg.nianfai > 0 ? [{
+            label: '年菜收益', value: `$${formatCurrency(agg.nianfai)}`,
+            gradFrom: '#B03838', gradTo: '#D97070', textColor: 'text-[#7A1818]',
+            sub: '不計入總營收',
+            delta: <Delta curr={agg.nianfai} prev={prevAgg.nianfai} isCurrency enabled={!!compPeriod} />,
+        }] : []),
         {
             label: '來客數',   value: `${agg.customers} 人`,
             gradFrom: '#D0A830', gradTo: '#EAC860', textColor: 'text-[#7A5800]',

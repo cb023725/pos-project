@@ -1850,6 +1850,7 @@ app.get('/api/report/sessions', async (req, res) => {
         unmarkedGroups: r.unmarked_groups, unmarkedCustomers: r.unmarked_customers,
         grossRevenue: r.gross_revenue, adjustmentAmount: r.adjustment_amount,
         netRevenue: r.net_revenue, frozenRevenue: r.frozen_revenue, mealNetRevenue: r.meal_net_revenue,
+        nianfaiRevenue: r.nianfai_revenue,
     })));
 });
 // 下載分析資料：meal_period_sessions / order_items / orders_fact / external_events + 資料字典，打包成 zip
