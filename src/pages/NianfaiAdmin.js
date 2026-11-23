@@ -217,6 +217,11 @@ const NianfaiAdminPage = () => {
                     )}
                     {status === 'archived' && <p className="text-gray-400">已封存，明年初始化新年度後才會再出現。</p>}
                 </div>
+                {(status === 'selling' || status === 'closed') && (
+                    <Link to="/nianfai-order" className="inline-block mt-3 px-4 py-2 rounded-lg bg-gray-700 text-white font-bold text-sm hover:bg-gray-800">
+                        前往年菜點單頁
+                    </Link>
+                )}
             </div>
 
             {activeYear && (

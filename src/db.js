@@ -330,8 +330,15 @@ export async function resetDevTestData() {
 export async function getNianfaiItems(year) {
     return api('GET', `/api/nianfai/items?year=${year}`);
 }
-export async function createNianfaiOrder(payload) {
-    return api('POST', '/api/nianfai/orders', payload);
+// 確認訂購：payload 不帶 reservationId 建新保留，帶了就沿用同一流水號改內容重印
+export async function confirmNianfaiReservation(payload) {
+    return api('POST', '/api/nianfai/reservations', payload);
+}
+export async function abandonNianfaiReservation(reservationId) {
+    return api('POST', `/api/nianfai/reservations/${reservationId}/abandon`);
+}
+export async function checkoutNianfaiReservation(reservationId, payload) {
+    return api('POST', `/api/nianfai/reservations/${reservationId}/checkout`, payload);
 }
 export async function finishNianfaiProduction(itemId, year) {
     return api('POST', `/api/nianfai/items/${itemId}/finish-production`, { year });

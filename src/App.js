@@ -23,6 +23,7 @@ import CustomerManagementPage from './pages/CustomerManagement';
 import RemarkManagementPage from './pages/RemarkManagement';
 import SettingsPage from './pages/Settings';
 import NianfaiAdminPage from './pages/NianfaiAdmin';
+import NianfaiOrderPage from './pages/NianfaiOrder';
 
 import './index.css';
 
@@ -52,6 +53,7 @@ function AppContent() {
         <Route path="/customers" element={<CustomerManagementPage />} />
         <Route path="/remarks" element={<RemarkManagementPage />} />
         <Route path="/nianfai-admin" element={<NianfaiAdminPage />} />
+        <Route path="/nianfai-order" element={<NianfaiOrderPage />} />
         <Route path="/drawertest" element={<DrawerTest />} />
       </Routes>
     </Layout>
