@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getInvoices, getInvoiceSequence, voidInvoice, getOrderById, getTableStatuses } from '../db';
+import { getInvoices, getInvoiceSequence, voidInvoice, getOrderById, getTableStatuses, getNianfaiOrderStatus } from '../db';
 
 const BACKEND_URL = '';
 
@@ -169,6 +169,13 @@ const InvoiceManagementPage = () => {
             return;
         }
         const displayNum = getDisplayInvoiceNumber(invoice.id);
+        if (invoice.isNianfai) {
+            // 年菜單（修正單 #01 第 6 節）：已送出表單的要提醒同時到表單回應取消
+            getNianfaiOrderStatus(invoice.orderId)
+                .then(nf => setVoidModal({ invoice, displayNum, nianfai: nf }))
+                .catch(() => setVoidModal({ invoice, displayNum, nianfai: { status: 'unknown' } }));
+            return;
+        }
         setVoidModal({ invoice, displayNum });
     };
 
@@ -412,6 +419,30 @@ const InvoiceManagementPage = () => {
                     <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full">
                         <h3 className="text-xl font-black text-gray-800 mb-2">確認作廢發票</h3>
                         <p className="text-gray-600 mb-1">發票 <span className="font-mono font-bold text-red-600">{voidModal.displayNum}</span></p>
+                        {voidModal.nianfai ? (
+                            <>
+                                {voidModal.nianfai.status === 'sent' ? (
+                                    <p className="text-red-600 font-bold bg-red-50 rounded-xl p-3 my-3">
+                                        此單已送出表單，請同時到表單回應用「年菜工具 → 取消訂單」處理
+                                    </p>
+                                ) : voidModal.nianfai.status === 'unknown' ? (
+                                    <p className="text-orange-600 font-bold bg-orange-50 rounded-xl p-3 my-3">
+                                        無法確認此年菜單是否已送出表單；如已送出，請同時到表單回應用「年菜工具 → 取消訂單」處理
+                                    </p>
+                                ) : (
+                                    <p className="text-gray-600 my-3">此年菜單尚未送出表單，作廢後請重新點單。</p>
+                                )}
+                                <div className="flex flex-col gap-3">
+                                    <button onClick={() => handleVoidConfirm(false)} className="w-full py-3 bg-red-500 text-white rounded-xl font-bold hover:bg-red-600 transition-colors">
+                                        確認作廢
+                                    </button>
+                                    <button onClick={() => setVoidModal(null)} className="w-full py-3 bg-gray-200 text-gray-700 rounded-xl font-bold hover:bg-gray-300 transition-colors">
+                                        取消
+                                    </button>
+                                </div>
+                            </>
+                        ) : (
+                        <>
                         <p className="text-gray-600 mb-6">作廢後是否要將此筆訂單消耗的庫存歸還？</p>
                         <div className="flex flex-col gap-3">
                             <button onClick={() => handleVoidConfirm(true)} className="w-full py-3 bg-green-600 text-white rounded-xl font-bold hover:bg-green-700 transition-colors">
@@ -424,6 +455,8 @@ const InvoiceManagementPage = () => {
                                 取消
                             </button>
                         </div>
+                        </>
+                        )}
                     </div>
                 </div>
             )}

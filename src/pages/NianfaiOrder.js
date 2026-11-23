@@ -1,9 +1,9 @@
 // src/pages/NianfaiOrder.js — 年菜點單頁（修正單 #01 第 5 節）
 // 取代舊的 NianfaiModal 彈窗。版面比照一般點單頁：左側工作區、右側品項卡片。
 // 兩步流程：「確認訂購」保留流水號、印顧客聯（不含訂購人資料）；
-// 「結帳」才真的成立訂單/發票，資料待補，交給年菜佇列頁處理（Phase D）。
+// 「結帳」才真的成立訂單/發票，資料待補，結帳完回到年菜佇列頁補登。
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
     getNianfaiItems, getSettingValue,
     confirmNianfaiReservation, abandonNianfaiReservation, checkoutNianfaiReservation,
@@ -17,6 +17,7 @@ const SHIPPING_FEE = 160;
 const FREE_SHIPPING_THRESHOLD = 3000;
 
 const NianfaiOrderPage = () => {
+    const navigate = useNavigate();
     const { year, status } = useNianfaiSeason();
     const [items, setItems] = useState([]);
     const [qty, setQty] = useState({});
@@ -138,8 +139,9 @@ const NianfaiOrderPage = () => {
                 deliveryMethod, items: buildPrintItems(), total: result.total,
             }),
         }).catch(e => console.warn('年菜存根聯列印失敗：', e));
-        alert(`結帳完成！流水號 ${label}\n\n請讓客人在存根聯上填寫姓名/電話等資料，稍後到「年菜佇列」頁補登。`);
+        alert(`結帳完成！流水號 ${label}\n\n請讓客人在存根聯上填寫姓名/電話等資料，稍後在年菜訂單佇列補登。`);
         resetOrder();
+        navigate('/nianfai-queue');
     };
 
     const handleCheckout = async () => {
@@ -176,7 +178,7 @@ const NianfaiOrderPage = () => {
             <div className="w-[340px] flex-shrink-0 space-y-4">
                 <div className="flex items-center justify-between">
                     <h2 className="text-2xl font-black text-gray-800">🧧 年菜點單 {year}</h2>
-                    <Link to="/tables" className="text-sm text-gray-400 hover:text-gray-600">返回桌位</Link>
+                    <Link to="/nianfai-queue" className="text-sm text-gray-400 hover:text-gray-600">返回年菜訂單</Link>
                 </div>
 
                 <div className="bg-white rounded-xl shadow p-4">

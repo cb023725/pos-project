@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { getInvoices, getInvoiceSequence, performDayClose, getCategorySettings, getQuickTags, saveQuickTags, DEFAULT_QUICK_TAGS, getSettingValue, saveSettingValue, getAbandonedOrders } from '../db';
+import { getInvoices, getInvoiceSequence, performDayClose, getCategorySettings, getQuickTags, saveQuickTags, DEFAULT_QUICK_TAGS, getSettingValue, saveSettingValue, getAbandonedOrders, getNianfaiCloseCheck } from '../db';
 
 const BACKEND_URL = '';
 const RESERVE_KEY      = 'pos_reserve_amount';
@@ -635,7 +635,21 @@ const CashDrawerPage = () => {
                        - summary.expense - summary.nonCash - periodVoided + adjustmentTotal;
     const diff         = cashTotal - expectedCash;
     const finalReserve = cashTotal - withdrawalAmount;
-    const canComplete  = diff === 0 || (diff !== 0 && discrepancyNote.trim().length > 0);
+    // 年菜關帳限制（修正單 #01 第 6 節）：關帳區間內有「資料待補」的有效年菜單就不能關帳
+    const [nianfaiBlocking, setNianfaiBlocking] = useState([]);
+    const refreshNianfaiBlocking = useCallback(async () => {
+        try {
+            const r = await getNianfaiCloseCheck(new Date(periodStart).toISOString());
+            setNianfaiBlocking(r.blocking || []);
+            return r.blocking || [];
+        } catch (e) {
+            console.error('[關帳] 年菜待補檢查失敗:', e);
+            return null; // 查詢失敗不擋關帳，避免網路問題卡住整個關帳流程
+        }
+    }, [periodStart]);
+    useEffect(() => { refreshNianfaiBlocking(); }, [refreshNianfaiBlocking]);
+
+    const canComplete  = nianfaiBlocking.length === 0 && (diff === 0 || (diff !== 0 && discrepancyNote.trim().length > 0));
 
     // ── 開錢櫃 ────────────────────────────────────────────────────────────────
     const openDrawer = useCallback(async () => {
@@ -728,6 +742,12 @@ const CashDrawerPage = () => {
         }
 
         if (!canComplete) return;
+        // 按下當下再查一次，避免畫面停留期間又有新的年菜單結帳
+        const latestBlocking = await refreshNianfaiBlocking();
+        if (latestBlocking && latestBlocking.length > 0) {
+            alert(`還有年菜訂單資料待補，不能關帳：\n${latestBlocking.map(b => b.label).join('、')}\n\n請到桌位頁「年菜」補齊資料並送出。`);
+            return;
+        }
         if (!window.confirm(
             '確定執行關帳？\n\n' +
             '• 訂單流水號將從 001 重新計算\n' +
@@ -1215,6 +1235,13 @@ const CashDrawerPage = () => {
                                     <span className="text-sm font-black text-gray-900">${fmt(finalReserve)}</span>
                                 </div>
                             </div>
+
+                            {/* 年菜資料待補 → 不能關帳 */}
+                            {!isClosed && nianfaiBlocking.length > 0 && (
+                                <div className="bg-red-50 border border-red-200 text-red-600 rounded-xl px-3 py-2 text-sm font-bold">
+                                    還有年菜訂單資料待補，補齊送出後才能關帳：{nianfaiBlocking.map(b => b.label).join('、')}
+                                </div>
+                            )}
 
                             {/* 關帳按鈕 + 補印按鈕 */}
                             <div className="flex gap-2 items-stretch">

@@ -14,9 +14,11 @@ import {
     saveStoreCalendarDay,
     recordTurnaway,
     resetDevTestData,
+    getNianfaiQueue,
 } from '../db';
 
 import TableCard from '../components/TableCard';
+import useNianfaiSeason from '../hooks/useNianfaiSeason';
 
 const TABLE_OPTIONS = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8'];
 
@@ -371,6 +373,15 @@ const TableManagementPage = () => {
     const [clearTarget, setClearTarget]         = useState(null);    // { tableNumber, orderId, label }
     const [paidClearTarget, setPaidClearTarget] = useState(null);    // { tableNumber, orderId, label }
     const [hasTakeoutOrders, setHasTakeoutOrders] = useState(false);
+    // 年菜卡片（修正單 #01 第 4 節）：只在 selling／closed 顯示，標示資料待補／送出失敗張數
+    const { year: nianfaiYear, showTableCard: showNianfaiCard } = useNianfaiSeason();
+    const [nianfaiTodoCount, setNianfaiTodoCount] = useState(0);
+    useEffect(() => {
+        if (!showNianfaiCard || !nianfaiYear) return;
+        getNianfaiQueue(nianfaiYear)
+            .then(q => setNianfaiTodoCount(q.pending.filter(o => o.status === 'incomplete' || o.status === 'failed').length))
+            .catch(() => setNianfaiTodoCount(0));
+    }, [showNianfaiCard, nianfaiYear]);
     const [conflictData, setConflictData] = useState(null);      // { movedOrder, fromTable, toTable, toOrders }
     const [moveSource, setMoveSource] = useState(null);           // { tableId, order }
     const [mergeSource, setMergeSource] = useState(null);         // { tableId, order, allOrders }
@@ -912,6 +923,25 @@ const TableManagementPage = () => {
                                 </div>
                             ))}
                         </div>
+                        {/* 年菜按鈕（右下角，selling／closed 才顯示） */}
+                        {showNianfaiCard && (
+                            <div className="h-full min-h-0 overflow-hidden">
+                                <div
+                                    onClick={() => navigate('/nianfai-queue')}
+                                    className={`w-full h-full rounded-2xl flex flex-col items-center justify-center shadow-lg transition-all cursor-pointer border-2
+                                        ${nianfaiTodoCount > 0
+                                            ? 'bg-[#C1032F] border-[#C1032F] text-white hover:brightness-95'
+                                            : 'bg-white border-[#C1032F]/40 text-[#C1032F] hover:border-[#C1032F]'
+                                        }`}
+                                >
+                                    <span className="text-3xl leading-none mb-1">🧧</span>
+                                    <span className="text-xl font-black tracking-wide">年菜</span>
+                                    <span className={`text-xs font-bold mt-0.5 ${nianfaiTodoCount > 0 ? 'text-white/80' : 'text-[#C1032F]/60'}`}>
+                                        {nianfaiTodoCount > 0 ? `資料待補 ${nianfaiTodoCount} 張` : '點擊管理'}
+                                    </span>
+                                </div>
+                            </div>
+                        )}
 
                     </div>
                 </>

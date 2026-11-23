@@ -24,6 +24,7 @@ import RemarkManagementPage from './pages/RemarkManagement';
 import SettingsPage from './pages/Settings';
 import NianfaiAdminPage from './pages/NianfaiAdmin';
 import NianfaiOrderPage from './pages/NianfaiOrder';
+import NianfaiQueuePage from './pages/NianfaiQueue';
 
 import './index.css';
 
@@ -35,7 +36,7 @@ function AppContent() {
   const location = useLocation();
   
   // 💡 判斷邏輯：如果目前在 /tables 或 /takeout 頁面，則標記為需要隱藏時間列
-  const hideTimeBar = location.pathname === '/tables' || location.pathname === '/takeout';
+  const hideTimeBar = location.pathname === '/tables' || location.pathname === '/takeout' || location.pathname === '/nianfai-queue';
 
   return (
     <Layout hideTimeBar={hideTimeBar}>
@@ -54,6 +55,7 @@ function AppContent() {
         <Route path="/remarks" element={<RemarkManagementPage />} />
         <Route path="/nianfai-admin" element={<NianfaiAdminPage />} />
         <Route path="/nianfai-order" element={<NianfaiOrderPage />} />
+        <Route path="/nianfai-queue" element={<NianfaiQueuePage />} />
         <Route path="/drawertest" element={<DrawerTest />} />
       </Routes>
     </Layout>

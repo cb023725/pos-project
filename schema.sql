@@ -94,7 +94,8 @@ create table if not exists public.orders (
 -- nianfai_orders 年菜訂單明細（1 筆對應 1 筆 orders，is_nianfai=true）
 -- 年菜專屬欄位獨立成表，不污染共用的 orders。流水號每年從 001 起，不含線上單
 -- （線上單用表單時間戳記辨識，不在這張表）。
--- form_submission_status：pending(待送)/sent(已送)/failed(失敗，會重試)
+-- form_submission_status：incomplete(資料待補，結帳後預設)/pending(資料完整待送)/
+--   sent(已送)/failed(失敗，會重試)
 -- ================================================================
 create table if not exists public.nianfai_orders (
   order_id               bigint primary key references public.orders(id) on delete cascade,
@@ -102,13 +103,15 @@ create table if not exists public.nianfai_orders (
   seq_no                 integer not null,
   customer_name          text,
   customer_phone         text,
+  customer_email         text,                 -- 客人有填才存；送表單時沒填用店家預設 email
   delivery_method        text check (delivery_method in ('pickup', 'delivery')),
   pickup_date            date,
   recipient_name         text,
   recipient_phone        text,
   recipient_address      text,
-  form_submission_status text default 'pending',
+  form_submission_status text default 'incomplete',
   form_submission_error  text,
+  submitted_at           timestamptz,          -- 成功送出表單時間（結帳時間在 orders.timestamp）
   created_at             timestamptz default now()
 );
 create unique index if not exists nianfai_orders_year_seq_idx on public.nianfai_orders (year, seq_no);

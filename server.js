@@ -1938,8 +1938,9 @@ app.post('/api/orders/:id/move-table', async (req, res) => {
 
 // 注意：specific routes 必須在 /:id 前面
 app.get('/api/orders/active', async (req, res) => {
+    // 年菜現場單（is_nianfai）有自己的佇列頁，不能混進桌位/外帶的進行中訂單
     const { data, error } = await supabase.from('orders').select('*')
-        .in('status', ['open','served','paid']).order('id');
+        .in('status', ['open','served','paid']).or('is_nianfai.is.null,is_nianfai.eq.false').order('id');
     if (error) return res.status(500).json({ error: error.message });
     res.json((data||[]).map(orderToCamel));
 });
@@ -2390,14 +2391,34 @@ app.post('/api/orders/:id/complete', async (req, res) => {
 // 年菜（nianfai）：訂單與通路完全獨立於一般內用外帶，不扣庫存
 // ============================================================
 
-// 現場年菜單結帳後自動送同一個 Google Form（GAS doPost），讓 Yw 不用手動填兩次。
-// NIANFAI_GAS_URL 還沒設定好之前（測試 GAS 尚未部署）一律留在待傳狀態，不視為錯誤；
-// 之後補上網址、或前次失敗，都靠下面的定時器重試（見本檔案稍後的 setInterval）。
+// 現場年菜單資料補齊後送同一個 Google Form（GAS doPost），讓 Yw 不用手動填兩次。
+// 修正單 #01 第 6 節：結帳當下資料是空的（客人手寫在存根聯），要等佇列頁補齊、
+// 按「送出」才會走到這裡。NIANFAI_GAS_URL 還沒設定好之前一律停在 pending（待傳），
+// 不視為錯誤；之後補上網址、或前次失敗，都靠下面的定時器重試。
+const NIANFAI_DEFAULT_EMAIL = 'goodgoodeatrestaurant@gmail.com'; // 客人沒填 email 時用店家信箱
+
+// 第 6 節必填欄位：缺一不能送出。回傳缺少的欄位名稱（空陣列 = 完整）
+function nianfaiMissingFields(nf) {
+    const missing = [];
+    const blank = v => !v || !String(v).trim();
+    if (blank(nf.customer_name)) missing.push('姓名');
+    if (blank(nf.customer_phone)) missing.push('電話');
+    if (!['pickup', 'delivery'].includes(nf.delivery_method)) missing.push('取貨方式');
+    if (nf.delivery_method === 'pickup' && blank(nf.pickup_date)) missing.push('取貨日');
+    if (nf.delivery_method === 'delivery') {
+        if (blank(nf.recipient_name)) missing.push('收件人');
+        if (blank(nf.recipient_phone)) missing.push('收件電話');
+        if (blank(nf.recipient_address)) missing.push('收件地址');
+    }
+    return missing;
+}
+
 async function submitToNianfaiForm(orderId) {
     const gasUrl = process.env.NIANFAI_GAS_URL;
     if (!gasUrl) return; // 尚未設定，保持 pending，不算失敗
     const { data: nf } = await supabase.from('nianfai_orders').select('*').eq('order_id', orderId).single();
     if (!nf || nf.form_submission_status === 'sent') return;
+    if (nianfaiMissingFields(nf).length > 0) return; // 防呆：資料不完整絕不送出
     const { data: order } = await supabase.from('orders').select('items').eq('id', orderId).single();
     try {
         const resp = await fetch(gasUrl, {
@@ -2407,6 +2428,9 @@ async function submitToNianfaiForm(orderId) {
                 secret: process.env.NIANFAI_GAS_SECRET || '',
                 year: nf.year, seqNo: nf.seq_no,
                 customerName: nf.customer_name, customerPhone: nf.customer_phone,
+                email: (nf.customer_email && nf.customer_email.trim()) || NIANFAI_DEFAULT_EMAIL,
+                // 匯款末五碼欄位填「現結＋流水號」，Sheet 用它搜尋對應的現場單
+                remittanceLast5: `現結${String(nf.seq_no).padStart(3, '0')}`,
                 deliveryMethod: nf.delivery_method, pickupDate: nf.pickup_date,
                 recipientName: nf.recipient_name, recipientPhone: nf.recipient_phone,
                 recipientAddress: nf.recipient_address,
@@ -2414,15 +2438,17 @@ async function submitToNianfaiForm(orderId) {
             }),
         });
         if (!resp.ok) throw new Error(`GAS 回應 ${resp.status}`);
-        await supabase.from('nianfai_orders').update({ form_submission_status: 'sent', form_submission_error: null }).eq('order_id', orderId);
+        await supabase.from('nianfai_orders').update({
+            form_submission_status: 'sent', form_submission_error: null, submitted_at: new Date().toISOString(),
+        }).eq('order_id', orderId);
     } catch (error) {
         await supabase.from('nianfai_orders').update({ form_submission_status: 'failed', form_submission_error: error.message }).eq('order_id', orderId);
         throw error;
     }
 }
 
-// 待傳佇列重試：結帳當下送表單失敗（或 GAS 網址還沒設定）的訂單，每 5 分鐘補送一次。
-// 現場年菜單量很小，不需要更積極的重試頻率；GAS 網址還沒設定時這裡會直接跳過，不會洗錯誤記錄。
+// 待傳佇列重試：資料已補齊但還沒送成功的訂單（pending=GAS 網址當時未設定、failed=送出失敗），
+// 每 5 分鐘補送一次。incomplete（資料待補）不在這裡，submitToNianfaiForm 內也會再擋一次。
 setInterval(async () => {
     if (!process.env.NIANFAI_GAS_URL) return;
     const { data: pendingRows } = await supabase
@@ -2550,6 +2576,7 @@ app.post('/api/nianfai/reservations/:id/checkout', async (req, res) => {
         const { error: nfErr } = await supabase.from('nianfai_orders').insert({
             order_id: order.id, year, seq_no: seqNo,
             delivery_method: deliveryMethod, pickup_date: pickupDate,
+            form_submission_status: 'incomplete', // 資料待補，佇列頁補齊送出後才 doPost
         });
         if (nfErr) throw nfErr;
 
@@ -2569,6 +2596,138 @@ app.post('/api/nianfai/reservations/:id/checkout', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+// ── 年菜佇列（修正單 #01 第 4、6 節）────────────────────────────────────────
+// 取有效（發票未作廢）的年菜現場單，合併 orders（結帳時間、品項、金額）與
+// nianfai_orders（資料、送出狀態）。year 給定時只取該年度；since 給定時只取結帳時間在之後的。
+async function fetchValidNianfaiOrders({ year, since, statuses } = {}) {
+    let q = supabase.from('nianfai_orders').select('*');
+    if (year) q = q.eq('year', year);
+    if (statuses) q = q.in('form_submission_status', statuses);
+    const { data: nfRows, error } = await q;
+    if (error) throw error;
+    if (!nfRows || nfRows.length === 0) return [];
+    const ids = nfRows.map(r => r.order_id);
+    const [{ data: orders, error: oErr }, { data: invoices, error: iErr }] = await Promise.all([
+        supabase.from('orders').select('id, items, total, timestamp').in('id', ids),
+        supabase.from('invoices').select('id, order_id, status').in('order_id', ids).eq('status', '已開立'),
+    ]);
+    if (oErr) throw oErr;
+    if (iErr) throw iErr;
+    const oMap = new Map((orders || []).map(o => [o.id, o]));
+    const invMap = new Map((invoices || []).map(i => [i.order_id, i]));
+    const sinceMs = since ? new Date(since).getTime() : null;
+    return nfRows
+        .filter(nf => invMap.has(nf.order_id) && oMap.has(nf.order_id))
+        .map(nf => ({ nf, order: oMap.get(nf.order_id), invoice: invMap.get(nf.order_id) }))
+        .filter(({ order }) => sinceMs == null || new Date(order.timestamp).getTime() >= sinceMs);
+}
+
+function nianfaiQueueEntry({ nf, order, invoice }) {
+    return {
+        orderId: nf.order_id, invoiceId: invoice.id, year: nf.year, seqNo: nf.seq_no,
+        checkoutTime: order.timestamp, total: order.total,
+        items: (order.items || []).map(it => ({ id: it.id, name: it.name, quantity: it.quantity || 1, price: it.price })),
+        customerName: nf.customer_name || '', customerPhone: nf.customer_phone || '',
+        customerEmail: nf.customer_email || '',
+        deliveryMethod: nf.delivery_method, pickupDate: nf.pickup_date,
+        recipientName: nf.recipient_name || '', recipientPhone: nf.recipient_phone || '',
+        recipientAddress: nf.recipient_address || '',
+        status: nf.form_submission_status || 'incomplete',
+        error: nf.form_submission_error || null,
+        submittedAt: nf.submitted_at || null,
+        missingFields: nianfaiMissingFields(nf),
+    };
+}
+
+// 佇列頁：待補區（資料待補／送出失敗／待傳）與歷史區（已送出），都是最新的在最上面
+app.get('/api/nianfai/queue', async (req, res) => {
+    const year = parseInt(req.query.year, 10);
+    if (!year) return res.status(400).json({ error: '缺少年度' });
+    try {
+        const rows = (await fetchValidNianfaiOrders({ year })).map(nianfaiQueueEntry)
+            .sort((a, b) => new Date(b.checkoutTime) - new Date(a.checkoutTime));
+        res.json({
+            pending: rows.filter(r => r.status !== 'sent'),
+            history: rows.filter(r => r.status === 'sent'),
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// 補填資料（只儲存不送出）。已送出的單不能在 WebPOS 改（第 6 節：由 Yw 到表單回應修正）。
+const NIANFAI_DETAIL_FIELDS = {
+    customerName: 'customer_name', customerPhone: 'customer_phone', customerEmail: 'customer_email',
+    deliveryMethod: 'delivery_method', pickupDate: 'pickup_date',
+    recipientName: 'recipient_name', recipientPhone: 'recipient_phone', recipientAddress: 'recipient_address',
+};
+async function saveNianfaiDetails(orderId, body) {
+    const { data: nf, error } = await supabase.from('nianfai_orders').select('*').eq('order_id', orderId).single();
+    if (error || !nf) return { status: 404, error: '找不到年菜訂單' };
+    if (nf.form_submission_status === 'sent') return { status: 409, error: '此單已送出表單，請到「表單回應」修正' };
+    const updates = {};
+    for (const [k, col] of Object.entries(NIANFAI_DETAIL_FIELDS)) {
+        if (body[k] === undefined) continue;
+        const v = typeof body[k] === 'string' ? body[k].trim() : body[k];
+        updates[col] = v === '' ? null : v;
+    }
+    if (updates.delivery_method && !['pickup', 'delivery'].includes(updates.delivery_method)) {
+        return { status: 400, error: '取貨方式錯誤' };
+    }
+    // 切換取貨方式時清掉另一種方式的欄位，避免送出時帶到不相干的舊資料
+    const method = updates.delivery_method || nf.delivery_method;
+    if (method === 'pickup') Object.assign(updates, { recipient_name: null, recipient_phone: null, recipient_address: null });
+    if (method === 'delivery') updates.pickup_date = null;
+    const { data: saved, error: updErr } = await supabase.from('nianfai_orders').update(updates).eq('order_id', orderId).select().single();
+    if (updErr) return { status: 500, error: updErr.message };
+    return { nf: saved };
+}
+
+app.patch('/api/nianfai/orders/:orderId/details', async (req, res) => {
+    const result = await saveNianfaiDetails(req.params.orderId, req.body || {});
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    res.json({ ok: true, missingFields: nianfaiMissingFields(result.nf) });
+});
+
+// 送出：先存資料，資料完整才標成 pending 並 doPost。GAS 網址未設定時停在 pending（待傳），不報錯。
+app.post('/api/nianfai/orders/:orderId/submit', async (req, res) => {
+    const orderId = req.params.orderId;
+    const result = await saveNianfaiDetails(orderId, req.body || {});
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    const missing = nianfaiMissingFields(result.nf);
+    if (missing.length > 0) return res.status(400).json({ error: 'INCOMPLETE', message: `資料不完整：${missing.join('、')}`, missingFields: missing });
+    await supabase.from('nianfai_orders').update({ form_submission_status: 'pending', form_submission_error: null }).eq('order_id', orderId);
+    try {
+        await submitToNianfaiForm(orderId);
+    } catch (e) {
+        return res.json({ ok: true, status: 'failed', error: e.message });
+    }
+    const { data: after } = await supabase.from('nianfai_orders').select('form_submission_status').eq('order_id', orderId).single();
+    res.json({ ok: true, status: after?.form_submission_status || 'pending', gasConfigured: !!process.env.NIANFAI_GAS_URL });
+});
+
+// 作廢前查詢年菜單送出狀態：已送出的要提醒 Yw 同時到表單回應取消（第 6 節）
+app.get('/api/nianfai/orders/:orderId/status', async (req, res) => {
+    const { data: nf, error } = await supabase.from('nianfai_orders')
+        .select('year, seq_no, form_submission_status').eq('order_id', req.params.orderId).single();
+    if (error || !nf) return res.status(404).json({ error: '找不到年菜訂單' });
+    res.json({ year: nf.year, seqNo: nf.seq_no, status: nf.form_submission_status });
+});
+
+// 關帳限制（第 6 節）：關帳區間內有「資料待補」的有效年菜單就不能關帳。
+// 送出失敗／待傳的單資料已完整、會自動重試，不擋關帳。
+app.get('/api/nianfai/close-check', async (req, res) => {
+    try {
+        const rows = await fetchValidNianfaiOrders({ since: req.query.since || null, statuses: ['incomplete'] });
+        const blocking = rows.map(nianfaiQueueEntry)
+            .sort((a, b) => a.year - b.year || a.seqNo - b.seqNo)
+            .map(r => ({ orderId: r.orderId, label: `${r.year}-${String(r.seqNo).padStart(3, '0')}` }));
+        res.json({ blocking });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.post('/api/nianfai/items/:id/finish-production', async (req, res) => {
     const { year } = req.body;
     if (!year) return res.status(400).json({ error: '缺少年度' });

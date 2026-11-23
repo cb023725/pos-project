@@ -340,6 +340,21 @@ export async function abandonNianfaiReservation(reservationId) {
 export async function checkoutNianfaiReservation(reservationId, payload) {
     return api('POST', `/api/nianfai/reservations/${reservationId}/checkout`, payload);
 }
+export async function getNianfaiQueue(year) {
+    return api('GET', `/api/nianfai/queue?year=${year}`);
+}
+export async function saveNianfaiOrderDetails(orderId, details) {
+    return api('PATCH', `/api/nianfai/orders/${orderId}/details`, details);
+}
+export async function submitNianfaiOrder(orderId, details) {
+    return api('POST', `/api/nianfai/orders/${orderId}/submit`, details);
+}
+export async function getNianfaiOrderStatus(orderId) {
+    return api('GET', `/api/nianfai/orders/${orderId}/status`);
+}
+export async function getNianfaiCloseCheck(since) {
+    return api('GET', `/api/nianfai/close-check${since ? `?since=${encodeURIComponent(since)}` : ''}`);
+}
 export async function finishNianfaiProduction(itemId, year) {
     return api('POST', `/api/nianfai/items/${itemId}/finish-production`, { year });
 }
