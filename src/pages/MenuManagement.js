@@ -4,11 +4,8 @@ import {
     getMenuItems, getInventoryItems,
     updateMenuItem, addMenuItem, deleteMenuItem,
     getCategorySettings, saveCategorySettings, DEFAULT_CATEGORY_SETTINGS,
-    getSettingValue,
 } from '../db';
-
-// 虛擬「年菜」tab 的篩選值：不是真的分類名稱，不會跟 category_settings 的分類衝突
-const NIANFAI_FILTER = '__nianfai__';
+import useNianfaiSeason from '../hooks/useNianfaiSeason';
 
 // ======================================================================
 // 輔助函式
@@ -248,7 +245,7 @@ const AddCategoryModal = ({ existingNames, onClose, onAdd }) => {
 // ItemModal — 新增/編輯菜單品項
 // ======================================================================
 const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [], categories = [], menuItems = [], activeNianfaiYear = null }) => {
-    const baseItem = { name: '', printName: '', customerPrintName: '', price: 0, category: categories[0]?.name || '', imageUrl: '', stock: 0, consumes: [], bundleComposition: null, nianfaiYear: null };
+    const baseItem = { name: '', printName: '', customerPrintName: '', price: 0, category: categories[0]?.name || '', imageUrl: '', stock: 0, consumes: [], bundleComposition: null, nianfaiYear: null, nianfaiStockRef: null };
     const initialData = isAdding ? baseItem : {
         ...baseItem,
         ...item,
@@ -259,12 +256,27 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
         customerPrintName: item?.customerPrintName || '',
         bundleComposition: item?.bundleComposition || null,
         nianfaiYear: item?.nianfaiYear || null,
+        nianfaiStockRef: item?.nianfaiStockRef || null,
     };
     const [formData, setFormData] = useState(initialData);
     const [submitting, setSubmitting] = useState(false);
 
     const handleChange = (e) => {
         const { name, value } = e.target;
+        // 「年菜」改成真的分類（修正單 #01 第 3 節），不再是任何品項都能勾選的旗標：
+        // 切進年菜分類自動帶入目前年度，切出去則清空年菜專屬欄位
+        if (name === 'category') {
+            setFormData(prev => {
+                if (value === '年菜' && prev.category !== '年菜') {
+                    return { ...prev, category: value, nianfaiYear: activeNianfaiYear };
+                }
+                if (value !== '年菜' && prev.category === '年菜') {
+                    return { ...prev, category: value, nianfaiYear: null, bundleComposition: null, nianfaiStockRef: null };
+                }
+                return { ...prev, category: value };
+            });
+            return;
+        }
         setFormData(prev => ({
             ...prev,
             [name]: name === 'price' || name === 'stock' ? Math.max(0, parseFloat(value) || 0) : value,
@@ -283,11 +295,6 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
         });
     };
 
-    const handleToggleNianfai = () => {
-        setFormData(prev => prev.nianfaiYear
-            ? { ...prev, nianfaiYear: null, bundleComposition: null } // 取消年菜連帶取消套餐設定
-            : { ...prev, nianfaiYear: activeNianfaiYear });
-    };
     const handleToggleBundle = () => {
         setFormData(prev => ({ ...prev, bundleComposition: prev.bundleComposition ? null : [] }));
     };
@@ -390,36 +397,43 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
                             )}
                         </div>
                     </div>
-                    {activeNianfaiYear && (
+                    {formData.category === '年菜' && (
                         <div className="mb-6 border p-5 rounded-xl bg-orange-50">
-                            <h4 className="text-xl font-bold text-gray-700 mb-4 border-l-4 border-orange-400 pl-3">🧧 年菜</h4>
+                            <h4 className="text-xl font-bold text-gray-700 mb-4 border-l-4 border-orange-400 pl-3">🧧 年菜設定</h4>
+                            <p className="text-sm text-gray-600 mb-3">
+                                年度：<span className="font-bold text-gray-800">{formData.nianfaiYear || '（未設定，請確認年菜管理頁的目前年度）'}</span>
+                            </p>
                             <label className="flex items-center space-x-2 cursor-pointer mb-3">
-                                <input type="checkbox" checked={!!formData.nianfaiYear} onChange={handleToggleNianfai} className="form-checkbox text-orange-600 h-5 w-5 rounded"/>
-                                <span className="font-bold text-gray-800">加入 {activeNianfaiYear} 年菜</span>
+                                <input type="checkbox" checked={!!formData.bundleComposition} onChange={handleToggleBundle} className="form-checkbox text-orange-600 h-5 w-5 rounded"/>
+                                <span className="text-gray-700">這是套餐（由多個品項組成）</span>
                             </label>
-                            {formData.nianfaiYear && (
-                                <>
-                                    <label className="flex items-center space-x-2 cursor-pointer mb-3">
-                                        <input type="checkbox" checked={!!formData.bundleComposition} onChange={handleToggleBundle} className="form-checkbox text-orange-600 h-5 w-5 rounded"/>
-                                        <span className="text-gray-700">這是套餐（由多個品項組成）</span>
-                                    </label>
-                                    {formData.bundleComposition && (
-                                        <div className="space-y-1.5 max-h-56 overflow-y-auto pr-2 border-t border-orange-200 pt-3">
-                                            <p className="text-sm text-gray-600 mb-2">套餐組成與份量（供需庫存統計用，不影響結帳金額）：</p>
-                                            {menuItems.filter(mi => mi.id !== formData.id).map(mi => {
-                                                const comp = formData.bundleComposition.find(c => c.itemId === mi.id);
-                                                return (
-                                                    <div key={mi.id} className="flex items-center justify-between p-2 bg-white rounded-lg border border-orange-200">
-                                                        <span className="text-sm text-gray-700 truncate flex-1">{mi.name}</span>
-                                                        <input type="number" min="0" value={comp?.qty || 0}
-                                                            onChange={e => handleBundleQtyChange(mi.id, Math.max(0, parseInt(e.target.value, 10) || 0))}
-                                                            className="w-16 border border-gray-300 rounded p-1 text-right text-sm" />
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    )}
-                                </>
+                            {formData.bundleComposition ? (
+                                <div className="space-y-1.5 max-h-56 overflow-y-auto pr-2 border-t border-orange-200 pt-3">
+                                    <p className="text-sm text-gray-600 mb-2">套餐組成與份量（供需庫存統計用，不影響結帳金額）：</p>
+                                    {menuItems.filter(mi => mi.category === '年菜' && mi.nianfaiYear === formData.nianfaiYear && mi.id !== formData.id && !mi.bundleComposition).map(mi => {
+                                        const comp = formData.bundleComposition.find(c => c.itemId === mi.id);
+                                        return (
+                                            <div key={mi.id} className="flex items-center justify-between p-2 bg-white rounded-lg border border-orange-200">
+                                                <span className="text-sm text-gray-700 truncate flex-1">{mi.name}</span>
+                                                <input type="number" min="0" value={comp?.qty || 0}
+                                                    onChange={e => handleBundleQtyChange(mi.id, Math.max(0, parseInt(e.target.value, 10) || 0))}
+                                                    className="w-16 border border-gray-300 rounded p-1 text-right text-sm" />
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <div className="border-t border-orange-200 pt-3">
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">對應冷凍包庫存（只顯示用，不會扣庫存）</label>
+                                    <select value={formData.nianfaiStockRef || ''}
+                                        onChange={e => setFormData(prev => ({ ...prev, nianfaiStockRef: e.target.value || null }))}
+                                        className="w-full border border-gray-300 rounded-lg p-2 text-sm">
+                                        <option value="">（無，年節限定品項）</option>
+                                        {inventoryItems.filter(inv => inv.category === '冷凍包庫存').map(inv => (
+                                            <option key={inv.id} value={inv.id}>{inv.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
                             )}
                         </div>
                     )}
@@ -446,11 +460,8 @@ const MenuManagementPage = () => {
     const [isAddingNew, setIsAddingNew] = useState(false);
     const [editingCategory, setEditingCategory] = useState(null); // category settings modal
     const [isAddingCategory, setIsAddingCategory] = useState(false);
-    const [activeNianfaiYear, setActiveNianfaiYear] = useState(null);
-
-    useEffect(() => {
-        getSettingValue('nianfai_active_year', null).then(y => { if (y) setActiveNianfaiYear(parseInt(y, 10)); });
-    }, []);
+    // 年菜分類顯示與否只看這個 hook（修正單 #01 第 2 節），preparing/selling/closed 顯示，archived 隱藏
+    const { year: activeNianfaiYear, showMenuCategory: showNianfaiCategory } = useNianfaiSeason();
     const [filterCategory, setFilterCategory] = useState(null);
 
     useEffect(() => {
@@ -554,30 +565,14 @@ const MenuManagementPage = () => {
         }
     };
 
-    // 年菜品項不改分類（維持原本分類），所以用一個虛擬 tab 把所有品項集中起來，
-    // 搭配下面的勾選框直接加入/移除今年的年菜，不用每個品項都開編輯視窗才能打勾
-    // ——尤其第一次初始化、完全沒有舊品項可以繼承時，要一次勾完所有品項會很慢。
-    const handleQuickToggleNianfai = async (item) => {
-        const isTagged = item.nianfaiYear === activeNianfaiYear;
-        const updates = {
-            nianfaiYear: isTagged ? null : activeNianfaiYear,
-            bundleComposition: isTagged ? null : item.bundleComposition,
-        };
-        try {
-            await updateMenuItem(item.id, updates);
-            setMenuItems(prev => prev.map(mi => mi.id === item.id ? { ...mi, ...updates } : mi));
-        } catch (error) {
-            alert(`更新失敗：${error.message}`);
-        }
-    };
-
     if (isLoading) {
         return <div className="p-8 text-center text-2xl text-gray-600">菜單資料載入中...</div>;
     }
 
-    const filteredItems = filterCategory === NIANFAI_FILTER
-        ? menuItems
-        : menuItems.filter(item => item.category === filterCategory);
+    // 年菜改成真分類後，preparing/selling/closed 以外（archived）不顯示這個分類 tab，
+    // 資料不受影響，明年初始化新年度時會依 useNianfaiSeason 重新出現
+    const visibleCategories = showNianfaiCategory ? categories : categories.filter(c => c.name !== '年菜');
+    const filteredItems = menuItems.filter(item => item.category === filterCategory);
     const currentCatSetting = categories.find(c => c.name === filterCategory);
 
     return (
@@ -596,7 +591,7 @@ const MenuManagementPage = () => {
             {/* 類別 Tab 導航列 */}
             <div className="mb-6 border-b border-gray-200">
                 <nav className="-mb-px flex items-center space-x-2 overflow-x-auto" aria-label="Tabs">
-                    {categories.map(cat => (
+                    {visibleCategories.map(cat => (
                         <div key={cat.name} className="flex items-center flex-shrink-0">
                             <button
                                 onClick={() => setFilterCategory(cat.name)}
@@ -621,20 +616,6 @@ const MenuManagementPage = () => {
                             </button>
                         </div>
                     ))}
-                    {/* 年菜虛擬 tab：品項不改分類，只是把所有品項集中在這裡方便一次勾選/取消今年的年菜；
-                        收單結算後 activeNianfaiYear 會跟著隱藏（資料仍保留），明年初始化新年度才會再出現 */}
-                    {activeNianfaiYear && (
-                        <button
-                            onClick={() => setFilterCategory(NIANFAI_FILTER)}
-                            className={`whitespace-nowrap py-3 px-2 border-b-4 text-lg font-medium transition-colors duration-150 flex-shrink-0
-                                ${filterCategory === NIANFAI_FILTER
-                                    ? 'border-orange-500 text-orange-600 font-black'
-                                    : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
-                                }`}
-                        >
-                            🧧 年菜 ({menuItems.filter(i => i.nianfaiYear === activeNianfaiYear).length})
-                        </button>
-                    )}
                     {/* 新增類別按鈕 */}
                     <button
                         onClick={() => setIsAddingCategory(true)}
@@ -700,16 +681,7 @@ const MenuManagementPage = () => {
                                     <td className="px-3 py-3 whitespace-nowrap text-base text-gray-900 font-black text-right">
                                         NT$ {formatCurrency(item.price)}
                                     </td>
-                                    <td className="px-3 py-3 text-center">
-                                        {filterCategory === NIANFAI_FILTER && (
-                                            <label className="inline-flex items-center gap-1.5 cursor-pointer">
-                                                <input type="checkbox" checked={item.nianfaiYear === activeNianfaiYear}
-                                                    onChange={() => handleQuickToggleNianfai(item)}
-                                                    className="form-checkbox text-orange-600 h-5 w-5 rounded"/>
-                                                <span className="text-xs text-gray-500 whitespace-nowrap">加入{activeNianfaiYear}年菜</span>
-                                            </label>
-                                        )}
-                                    </td>
+                                    <td className="px-3 py-3"></td>
                                     <td className="px-3 py-3 whitespace-nowrap text-center text-base font-medium space-x-3">
                                         <button onClick={() => setEditingItem(item)} className="text-blue-600 hover:bg-blue-100 p-2 rounded-full transition-colors" title="編輯項目">
                                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-9-4l9-9m-4 4l-9 9"/></svg>
@@ -723,7 +695,7 @@ const MenuManagementPage = () => {
                         ) : (
                             <tr>
                                 <td colSpan="6" className="px-3 py-8 text-center text-lg text-gray-500">
-                                    {filterCategory === NIANFAI_FILTER ? '目前沒有任何菜單品項。' : `「${filterCategory}」類別中沒有任何項目。`}
+                                    {`「${filterCategory}」類別中沒有任何項目。`}
                                 </td>
                             </tr>
                         )}
