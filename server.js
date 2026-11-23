@@ -1629,8 +1629,8 @@ app.post('/api/menu/reset-soldout', async (req, res) => {
 // ============================================================
 app.get('/api/inventory-logs', async (req, res) => {
     const { item_id } = req.query;
-    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
-    let q = supabase.from('inventory_logs').select('*').gte('created_at', threeDaysAgo).order('created_at', { ascending: false }).limit(200);
+    const oneMonthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    let q = supabase.from('inventory_logs').select('*').gte('created_at', oneMonthAgo).order('created_at', { ascending: false }).limit(500);
     if (item_id) q = q.eq('item_id', item_id);
     const { data, error } = await q;
     if (error) return res.status(500).json({ error: error.message });
