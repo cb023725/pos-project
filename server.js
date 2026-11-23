@@ -207,6 +207,15 @@ const PRINTER_IP   = process.env.PRINTER_IP   || '192.168.0.104';
 const PRINTER_PORT = Number(process.env.PRINTER_PORT) || 9100;
 const CUPS_PRINTER = process.env.CUPS_PRINTER  || '_192_168_0_104';
 
+// 列印沙盒：只在 dev 且明確設定 PRINT_MODE=preview 時生效，正式模式完全不受影響。
+// 開啟後所有會碰到實體印表機/錢櫃的動作都改成寫檔案到本機，供在 iPad 上直接預覽 PDF。
+const PRINT_SANDBOX = IS_DEV && process.env.PRINT_MODE === 'preview';
+const PREVIEW_DIR = path.join(__dirname, 'logs', 'print-preview');
+if (PRINT_SANDBOX) {
+    fs.mkdirSync(PREVIEW_DIR, { recursive: true });
+    console.log('🧪 列印沙盒模式：不送印表機、不開錢櫃、不清列印佇列');
+}
+
 // 印表機是單一連線裝置：開錢櫃走原始 TCP（不經過 CUPS），列印走 CUPS lp。
 // 兩邊各自獨立發起連線，若不同桌的列印/開錢櫃請求時間點重疊（例如出餐尖峰時段），
 // 會同時搶佔印表機同一個連線埠，造成連線被拒或延遲重試 → 印單「有時很慢」。
@@ -259,6 +268,10 @@ function printRateLimit(req, res, next) {
 // 若不設連線逾時，會在 withPrinterQueue 佇列裡卡住整批列印請求，因此設定固定逾時、逾時就放棄。
 const DRAWER_CONNECT_TIMEOUT_MS = 4000;
 function kickCashDrawer() {
+    if (PRINT_SANDBOX) {
+        console.log('🧪 [沙盒] 開錢櫃（未執行）');
+        return Promise.resolve({ success: true, message: '沙盒模式：未開錢櫃' });
+    }
     return new Promise((resolve) => {
         const client = new net.Socket();
         let settled = false;
@@ -667,6 +680,17 @@ function printOnce(filePath, pageH) {
 }
 
 async function printPDF(filePath, pageH, copies = 1) {
+    if (PRINT_SANDBOX) {
+        const ts = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }).replace(/[: ]/g, '-');
+        const previewName = `${ts}_x${copies}_${path.basename(filePath)}`;
+        try {
+            fs.copyFileSync(filePath, path.join(PREVIEW_DIR, previewName));
+        } finally {
+            fs.unlink(filePath, () => {});
+        }
+        console.log(`🧪 [沙盒] 預覽 PDF 已儲存：${previewName}（${copies} 份）`);
+        return;
+    }
     try {
         // 多份同時送出（parallel），避免循序等待造成延遲
         await Promise.all(Array.from({ length: copies }, () => printOnce(filePath, pageH)));
@@ -1446,6 +1470,39 @@ app.get('/api/health', async (req, res) => {
     const { error } = await supabase.from('menu_items').select('id').limit(1);
     res.json({ ok: !error, supabase: error ? error.message : 'connected', dev: IS_DEV });
 });
+
+// ---- 列印沙盒：預覽 PDF 清單（只在 PRINT_SANDBOX 開啟時註冊這兩個路由） ----
+if (PRINT_SANDBOX) {
+    app.use('/dev/print-preview/files', express.static(PREVIEW_DIR));
+    app.get('/dev/print-preview', (req, res) => {
+        const files = fs.readdirSync(PREVIEW_DIR)
+            .filter(f => f.endsWith('.pdf'))
+            .sort((a, b) => b.localeCompare(a))
+            .slice(0, 50);
+        const items = files.map(f =>
+            `<li><a href="/dev/print-preview/files/${encodeURIComponent(f)}" target="_blank">${f}</a></li>`
+        ).join('\n');
+        res.send(`<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>列印沙盒預覽</title>
+<style>
+body { font-family: -apple-system, sans-serif; padding: 16px; font-size: 18px; }
+h2 { margin-bottom: 12px; }
+ul { list-style: none; padding: 0; }
+li { padding: 12px 8px; border-bottom: 1px solid #ddd; }
+a { color: #1a5a45; text-decoration: none; word-break: break-all; }
+</style>
+</head>
+<body>
+<h2>🧪 列印沙盒預覽（最新 ${files.length} 筆）</h2>
+<ul>${items || '<li>目前沒有預覽檔案</li>'}</ul>
+</body>
+</html>`);
+    });
+}
 
 // ============================================================
 // 圖片代理縮圖：菜單圖片目前是外部 CDN 的原圖（實測平均 1.4MB、最大 1080x1080），
@@ -2907,11 +2964,15 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`CUPS Printer: ${CUPS_PRINTER}`);
 
     // 啟動時清空 CUPS 佇列，避免藍牙重連後印出積壓的舊工作
-    execFile('cancel', ['-a', CUPS_PRINTER], (err, stdout, stderr) => {
-        if (err && !stderr.includes('No jobs')) {
-            console.warn('清空 CUPS 佇列失敗：', stderr || err.message);
-        } else {
-            console.log('CUPS 佇列已清空');
-        }
-    });
+    if (PRINT_SANDBOX) {
+        console.log('🧪 [沙盒] 略過清空 CUPS 佇列');
+    } else {
+        execFile('cancel', ['-a', CUPS_PRINTER], (err, stdout, stderr) => {
+            if (err && !stderr.includes('No jobs')) {
+                console.warn('清空 CUPS 佇列失敗：', stderr || err.message);
+            } else {
+                console.log('CUPS 佇列已清空');
+            }
+        });
+    }
 });
