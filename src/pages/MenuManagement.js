@@ -4,6 +4,7 @@ import {
     getMenuItems, getInventoryItems,
     updateMenuItem, addMenuItem, deleteMenuItem,
     getCategorySettings, saveCategorySettings, DEFAULT_CATEGORY_SETTINGS,
+    getSettingValue,
 } from '../db';
 
 // ======================================================================
@@ -243,8 +244,8 @@ const AddCategoryModal = ({ existingNames, onClose, onAdd }) => {
 // ======================================================================
 // ItemModal — 新增/編輯菜單品項
 // ======================================================================
-const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [], categories = [] }) => {
-    const baseItem = { name: '', printName: '', customerPrintName: '', price: 0, category: categories[0]?.name || '', imageUrl: '', stock: 0, consumes: [] };
+const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [], categories = [], menuItems = [], activeNianfaiYear = null }) => {
+    const baseItem = { name: '', printName: '', customerPrintName: '', price: 0, category: categories[0]?.name || '', imageUrl: '', stock: 0, consumes: [], bundleComposition: null, nianfaiYear: null };
     const initialData = isAdding ? baseItem : {
         ...baseItem,
         ...item,
@@ -253,6 +254,8 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
         sortOrder: item?.sortOrder !== undefined ? item.sortOrder : Infinity,
         printName: item?.printName || '',
         customerPrintName: item?.customerPrintName || '',
+        bundleComposition: item?.bundleComposition || null,
+        nianfaiYear: item?.nianfaiYear || null,
     };
     const [formData, setFormData] = useState(initialData);
     const [submitting, setSubmitting] = useState(false);
@@ -274,6 +277,21 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
                     ? current.filter(id => id !== inventoryId)
                     : [...current, inventoryId],
             };
+        });
+    };
+
+    const handleToggleNianfai = () => {
+        setFormData(prev => prev.nianfaiYear
+            ? { ...prev, nianfaiYear: null, bundleComposition: null } // 取消年菜連帶取消套餐設定
+            : { ...prev, nianfaiYear: activeNianfaiYear });
+    };
+    const handleToggleBundle = () => {
+        setFormData(prev => ({ ...prev, bundleComposition: prev.bundleComposition ? null : [] }));
+    };
+    const handleBundleQtyChange = (itemId, qty) => {
+        setFormData(prev => {
+            const current = (prev.bundleComposition || []).filter(c => c.itemId !== itemId);
+            return { ...prev, bundleComposition: qty > 0 ? [...current, { itemId, qty }] : current };
         });
     };
 
@@ -369,6 +387,39 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
                             )}
                         </div>
                     </div>
+                    {activeNianfaiYear && (
+                        <div className="mb-6 border p-5 rounded-xl bg-orange-50">
+                            <h4 className="text-xl font-bold text-gray-700 mb-4 border-l-4 border-orange-400 pl-3">🧧 年菜</h4>
+                            <label className="flex items-center space-x-2 cursor-pointer mb-3">
+                                <input type="checkbox" checked={!!formData.nianfaiYear} onChange={handleToggleNianfai} className="form-checkbox text-orange-600 h-5 w-5 rounded"/>
+                                <span className="font-bold text-gray-800">加入 {activeNianfaiYear} 年菜</span>
+                            </label>
+                            {formData.nianfaiYear && (
+                                <>
+                                    <label className="flex items-center space-x-2 cursor-pointer mb-3">
+                                        <input type="checkbox" checked={!!formData.bundleComposition} onChange={handleToggleBundle} className="form-checkbox text-orange-600 h-5 w-5 rounded"/>
+                                        <span className="text-gray-700">這是套餐（由多個品項組成）</span>
+                                    </label>
+                                    {formData.bundleComposition && (
+                                        <div className="space-y-1.5 max-h-56 overflow-y-auto pr-2 border-t border-orange-200 pt-3">
+                                            <p className="text-sm text-gray-600 mb-2">套餐組成與份量（供需庫存統計用，不影響結帳金額）：</p>
+                                            {menuItems.filter(mi => mi.id !== formData.id).map(mi => {
+                                                const comp = formData.bundleComposition.find(c => c.itemId === mi.id);
+                                                return (
+                                                    <div key={mi.id} className="flex items-center justify-between p-2 bg-white rounded-lg border border-orange-200">
+                                                        <span className="text-sm text-gray-700 truncate flex-1">{mi.name}</span>
+                                                        <input type="number" min="0" value={comp?.qty || 0}
+                                                            onChange={e => handleBundleQtyChange(mi.id, Math.max(0, parseInt(e.target.value, 10) || 0))}
+                                                            className="w-16 border border-gray-300 rounded p-1 text-right text-sm" />
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    )}
                     <div className="flex justify-end space-x-4 pt-4 border-t">
                         <button type="button" onClick={onClose} className="px-6 py-3 text-base font-medium text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300">取消</button>
                         <button type="submit" disabled={submitting} className={`px-6 py-3 text-base font-bold text-white rounded-lg shadow-md transition-colors ${submitting ? 'bg-blue-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>{submitting ? '處理中...' : isAdding ? '確認新增' : '儲存變更'}</button>
@@ -392,6 +443,11 @@ const MenuManagementPage = () => {
     const [isAddingNew, setIsAddingNew] = useState(false);
     const [editingCategory, setEditingCategory] = useState(null); // category settings modal
     const [isAddingCategory, setIsAddingCategory] = useState(false);
+    const [activeNianfaiYear, setActiveNianfaiYear] = useState(null);
+
+    useEffect(() => {
+        getSettingValue('nianfai_active_year', null).then(y => { if (y) setActiveNianfaiYear(parseInt(y, 10)); });
+    }, []);
     const [filterCategory, setFilterCategory] = useState(null);
 
     useEffect(() => {
@@ -639,6 +695,8 @@ const MenuManagementPage = () => {
                     isAdding={false}
                     inventoryItems={inventoryItems}
                     categories={categories}
+                    menuItems={menuItems}
+                    activeNianfaiYear={activeNianfaiYear}
                 />
             )}
             {isAddingNew && (
@@ -649,6 +707,8 @@ const MenuManagementPage = () => {
                     isAdding={true}
                     inventoryItems={inventoryItems}
                     categories={categories}
+                    menuItems={menuItems}
+                    activeNianfaiYear={activeNianfaiYear}
                 />
             )}
             {editingCategory && (

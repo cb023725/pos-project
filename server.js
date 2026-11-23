@@ -1504,6 +1504,8 @@ app.get('/api/menu', async (req, res) => {
             thresholds: r.thresholds || null,
             depleted: consumes.some(cId => cId in invMap && invMap[cId] !== null && invMap[cId] <= 0),
             linkedStock,
+            bundleComposition: r.bundle_composition || null,
+            nianfaiYear: r.nianfai_year || null,
         };
     }));
 });
@@ -1521,7 +1523,8 @@ app.post('/api/menu', async (req, res) => {
     const row = { id, name: b.name, print_name: b.printName||'', customer_print_name: b.customerPrintName||'',
         price: b.price, category: b.category||'', sort_order: b.sortOrder,
         stock: b.stock, sold_out: b.soldOut||false, consumes: b.consumes||[],
-        image_url: b.imageUrl||null, thresholds: b.thresholds||null };
+        image_url: b.imageUrl||null, thresholds: b.thresholds||null,
+        bundle_composition: b.bundleComposition||null, nianfai_year: b.nianfaiYear||null };
     const { data, error } = await supabase.from('menu_items').upsert(row).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(rowToCamel(data));
@@ -1540,6 +1543,8 @@ app.patch('/api/menu/:id', async (req, res) => {
     if (b.consumes    !== undefined) updates.consumes    = b.consumes;
     if (b.imageUrl    !== undefined) updates.image_url  = b.imageUrl;
     if (b.thresholds  !== undefined) updates.thresholds = b.thresholds;
+    if (b.bundleComposition !== undefined) updates.bundle_composition = b.bundleComposition;
+    if (b.nianfaiYear !== undefined) updates.nianfai_year = b.nianfaiYear;
     const { data, error } = await supabase.from('menu_items').update(updates).eq('id', req.params.id).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(rowToCamel(data));

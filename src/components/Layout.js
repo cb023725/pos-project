@@ -83,6 +83,14 @@ const Icon = ({ name, className = 'w-5 h-5' }) => {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M8 13h2m4 0h2m-8 4h2m4 0h2" />
             </svg>
         ),
+        nianfai: (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <rect x="3" y="9" width="18" height="12" rx="1.5" strokeWidth="1.8" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M2 9h20M12 9v12" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8"
+                    d="M12 9c-2-3-6-4-6-1.5S9 9 12 9c3 0 6-1 6-3.5S14 6 12 9z" />
+            </svg>
+        ),
         hamburger: (
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
@@ -100,6 +108,7 @@ const navItems = [
     { name: '庫存',   path: '/inventory',   icon: 'inventory'  },
     { name: '菜單',   path: '/menu',        icon: 'menu'       },
     { name: '註記',   path: '/remarks',     icon: 'remarks'    },
+    { name: '年菜',   path: '/nianfai',     icon: 'nianfai'    },
     { name: '顧客',   path: '/customers',   icon: 'customers'  },
     { name: '設定',   path: '/settings',    icon: 'calendar'   },
 ];
