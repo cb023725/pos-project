@@ -1506,6 +1506,8 @@ app.get('/api/menu', async (req, res) => {
             linkedStock,
             bundleComposition: r.bundle_composition || null,
             nianfaiYear: r.nianfai_year || null,
+            nianfaiProductionQty: r.nianfai_production_qty,
+            nianfaiSelloutCap: r.nianfai_sellout_cap,
         };
     }));
 });
@@ -1545,6 +1547,8 @@ app.patch('/api/menu/:id', async (req, res) => {
     if (b.thresholds  !== undefined) updates.thresholds = b.thresholds;
     if (b.bundleComposition !== undefined) updates.bundle_composition = b.bundleComposition;
     if (b.nianfaiYear !== undefined) updates.nianfai_year = b.nianfaiYear;
+    if (b.nianfaiProductionQty !== undefined) updates.nianfai_production_qty = b.nianfaiProductionQty;
+    if (b.nianfaiSelloutCap !== undefined) updates.nianfai_sellout_cap = b.nianfaiSelloutCap;
     const { data, error } = await supabase.from('menu_items').update(updates).eq('id', req.params.id).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(rowToCamel(data));
@@ -2274,10 +2278,55 @@ setInterval(async () => {
     }
 }, 5 * 60 * 1000);
 
+// 需求計算：加總 WebPOS 現場單（年菜訂單一律全額付清，只排除發票已作廢的），
+// 套餐依 bundle_composition 展開成單品數量。目前只有 WebPOS 現場單，還沒串接
+// 線上表單（GAS 尚未部署），所以是「部分」需求，不是 Sheet 上完整的線上+現場加總。
+async function computeNianfaiDemand(year) {
+    const { data: nfOrders } = await supabase.from('nianfai_orders').select('order_id').eq('year', year);
+    const orderIds = (nfOrders || []).map(o => o.order_id);
+    const demand = {};
+    if (orderIds.length === 0) return demand;
+
+    const { data: invoices } = await supabase.from('invoices').select('order_id').in('order_id', orderIds).eq('status', '已開立');
+    const validOrderIds = new Set((invoices || []).map(i => i.order_id));
+    const { data: orders } = await supabase.from('orders').select('id, items').in('id', orderIds);
+    const { data: menuItems } = await supabase.from('menu_items').select('id, bundle_composition').eq('nianfai_year', year);
+    const bundleMap = new Map((menuItems || []).map(m => [m.id, m.bundle_composition]));
+
+    for (const o of (orders || [])) {
+        if (!validOrderIds.has(o.id)) continue; // 發票已作廢，不計入
+        for (const it of (o.items || [])) {
+            const qty = it.quantity || 1;
+            const bundle = bundleMap.get(it.id);
+            if (bundle && bundle.length > 0) {
+                for (const comp of bundle) demand[comp.itemId] = (demand[comp.itemId] || 0) + comp.qty * qty;
+            } else {
+                demand[it.id] = (demand[it.id] || 0) + qty;
+            }
+        }
+    }
+    return demand;
+}
+
+// 任一已完成（sellout_cap 不是 null）的品項，需求達到或超過上限，就關閉整份表單
+// （WebPOS 認知的狀態；Google 表單本身的關閉要等 GAS 部署好才能真的連動）。
+async function checkAndCloseFormIfNeeded(year) {
+    const { data: items } = await supabase.from('menu_items').select('id, nianfai_sellout_cap')
+        .eq('nianfai_year', year).not('nianfai_sellout_cap', 'is', null);
+    if (!items || items.length === 0) return;
+    const demand = await computeNianfaiDemand(year);
+    const anyReached = items.some(it => (demand[it.id] || 0) >= it.nianfai_sellout_cap);
+    if (anyReached) {
+        await supabase.from('app_settings').upsert({
+            key: `nianfai_${year}_form_closed`, value: 'true', updated_at: new Date().toISOString(),
+        });
+    }
+}
+
 app.post('/api/nianfai/orders', async (req, res) => {
     const {
         items, year, customerName, customerPhone, deliveryMethod,
-        pickupDate, recipientName, recipientPhone, recipientAddress,
+        pickupDate, recipientName, recipientPhone, recipientAddress, override,
     } = req.body;
     if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: '品項不可為空' });
     if (!year) return res.status(400).json({ error: '缺少年度' });
@@ -2287,6 +2336,14 @@ app.post('/api/nianfai/orders', async (req, res) => {
     const now = new Date().toISOString();
 
     try {
+        // 表單關閉後只有 Yw 能繼續新增（前端會跳確認視窗，確認後帶 override:true 重送）
+        if (!override) {
+            const { data: closedRow } = await supabase.from('app_settings').select('value').eq('key', `nianfai_${year}_form_closed`).single();
+            if (closedRow?.value === 'true') {
+                return res.status(409).json({ error: 'FORM_CLOSED', message: '年菜表單已關閉，只有確認過的人員能繼續新增訂單' });
+            }
+        }
+
         // 流水號：app_settings 存當年度計數器，年菜現場單量很小，接受極小機率的競態
         const seqKey = `nianfai_${year}_next_seq`;
         const { data: seqRow } = await supabase.from('app_settings').select('value').eq('key', seqKey).single();
@@ -2318,21 +2375,63 @@ app.post('/api/nianfai/orders', async (req, res) => {
         if (invErr) throw invErr;
 
         submitToNianfaiForm(order.id).catch(e => console.error('[年菜] 送表單失敗（已留待傳佇列）:', e.message));
+        await checkAndCloseFormIfNeeded(year);
 
         res.json({ ok: true, orderId: order.id, seqNo, invoiceId: invoice.id, total });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
-app.get('/api/nianfai/items', async (req, res) => {
+app.post('/api/nianfai/items/:id/finish-production', async (req, res) => {
+    const { year } = req.body;
+    if (!year) return res.status(400).json({ error: '缺少年度' });
+    try {
+        const { data: item, error: fetchErr } = await supabase.from('menu_items').select('*').eq('id', req.params.id).single();
+        if (fetchErr || !item) return res.status(404).json({ error: '找不到品項' });
+        const cap = item.nianfai_production_qty || 0;
+        const { error: updErr } = await supabase.from('menu_items').update({ nianfai_sellout_cap: cap }).eq('id', req.params.id);
+        if (updErr) throw updErr;
+        await checkAndCloseFormIfNeeded(parseInt(year, 10));
+        res.json({ ok: true, cap });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+app.get('/api/nianfai/demand', async (req, res) => {
     const { year } = req.query;
     if (!year) return res.status(400).json({ error: '缺少年度' });
-    const { data, error } = await supabase.from('menu_items').select('*').eq('nianfai_year', parseInt(year, 10)).order('sort_order');
+    try {
+        const demand = await computeNianfaiDemand(parseInt(year, 10));
+        res.json({ demand, source: 'webpos_onsite_only' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+app.get('/api/nianfai/items', async (req, res) => {
+    const yearNum = parseInt(req.query.year, 10);
+    if (!yearNum) return res.status(400).json({ error: '缺少年度' });
+    const { data, error } = await supabase.from('menu_items').select('*').eq('nianfai_year', yearNum).order('sort_order');
     if (error) return res.status(500).json({ error: error.message });
+    const demand = await computeNianfaiDemand(yearNum);
+    const byId = new Map((data || []).map(r => [r.id, r]));
+    const isSoldOut = (r) => {
+        const bundle = r.bundle_composition;
+        if (bundle && bundle.length > 0) {
+            return bundle.some(comp => {
+                const sub = byId.get(comp.itemId);
+                return sub && sub.nianfai_sellout_cap != null && (demand[comp.itemId] || 0) >= sub.nianfai_sellout_cap;
+            });
+        }
+        return r.nianfai_sellout_cap != null && (demand[r.id] || 0) >= r.nianfai_sellout_cap;
+    };
     res.json((data || []).map(r => ({
         id: r.id, name: r.name, price: r.price, category: r.category,
         sortOrder: r.sort_order, imageUrl: r.image_url,
         bundleComposition: r.bundle_composition || null,
+        nianfaiProductionQty: r.nianfai_production_qty,
+        nianfaiSelloutCap: r.nianfai_sellout_cap,
+        demand: demand[r.id] || 0,
+        soldOut: isSoldOut(r),
     })));
 });
 

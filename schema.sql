@@ -25,7 +25,9 @@ create table if not exists public.menu_items (
   created_at           timestamptz default now(),
   thresholds           jsonb,
   bundle_composition   jsonb,                    -- 年菜套餐組成 [{"itemId":"...","qty":1}, ...]；單點品項維持 null
-  nianfai_year         integer                   -- 這個品項今年要在年菜通路賣，值是年度（例如 2027）；不是年菜品項則為 null
+  nianfai_year         integer,                  -- 這個品項今年要在年菜通路賣，值是年度（例如 2027）；不是年菜品項則為 null
+  nianfai_production_qty integer,                -- 年菜製作入庫數量
+  nianfai_sellout_cap    integer                 -- 年菜停售上限；null=製作中不設上限，按下「製作完成」把當時的 production_qty 複製進來就不再變動
 );
 
 -- ================================================================
@@ -168,7 +170,8 @@ create table if not exists public.customers (
 -- app_settings 設定值
 -- key：category_settings / quick_tags / reserve_amount / pending_transactions /
 --      last_close_time / last_close_order_id / store_holiday_dates（已轉入 store_calendar，程式改完後停用） /
---      nianfai_<year>_season_active（年菜開賣/收單總開關） / nianfai_<year>_next_seq（年菜流水號計數器）
+--      nianfai_<year>_season_active（年菜開賣/收單總開關） / nianfai_<year>_next_seq（年菜流水號計數器） /
+--      nianfai_<year>_form_closed（達停售上限後 WebPOS 認知的表單關閉狀態，控制只有 Yw 能新增訂單）
 -- ================================================================
 create table if not exists public.app_settings (
   key         text primary key,

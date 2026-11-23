@@ -329,6 +329,12 @@ export async function getNianfaiItems(year) {
 export async function createNianfaiOrder(payload) {
     return api('POST', '/api/nianfai/orders', payload);
 }
+export async function finishNianfaiProduction(itemId, year) {
+    return api('POST', `/api/nianfai/items/${itemId}/finish-production`, { year });
+}
+export async function getNianfaiDemand(year) {
+    return api('GET', `/api/nianfai/demand?year=${year}`);
+}
 export async function moveOrderToTable(orderId, { newTable, fromTable, mergeWithOrderId = null }) {
     return api('POST', `/api/orders/${orderId}/move-table`, { newTable, fromTable, mergeWithOrderId });
 }
