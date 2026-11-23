@@ -601,6 +601,14 @@ const CashDrawerPage = () => {
         customGroupsForDisplay.reduce((s, g) => s + g.amount, 0),
         [customGroupsForDisplay]);
 
+    // 年菜現金（WebPOS 現場單自算，含作廢以對齊本期營業額的扣除邏輯）。
+    // 只是從「本期營業額」拆出來單獨顯示，不影響 expectedCash 的加總，因為
+    // periodGrossSales 本來就已經含年菜發票金額（年菜訂單走 invoices 表同一條路）。
+    // Google 表單端的訂購量目前還沒串進來對帳，所以只能顯示 WebPOS 這邊看得到的金額。
+    const periodNianfaiSales = useMemo(() =>
+        [...activeInvoices, ...voidedInvoices].filter(i => i.isNianfai).reduce((s, i) => s + (i.amount || 0), 0),
+        [activeInvoices, voidedInvoices]);
+
     // ── 收支彙總 ──────────────────────────────────────────────────────────────
     const summary = useMemo(() =>
         transactions.reduce((acc, t) => {
@@ -1111,19 +1119,27 @@ const CashDrawerPage = () => {
                                     <span className="text-xs text-gray-400 font-mono">+${fmt(reserveAmount)}</span>
                                 </div>
 
-                                {/* 本期營業額（含作廢，不含自訂分組） */}
+                                {/* 本期營業額（含作廢，不含自訂分組、不含年菜） */}
                                 <div className="flex justify-between items-center py-0.5">
                                     <span className="text-xs text-gray-400">本期營業額</span>
-                                    <span className="text-xs text-gray-400 font-mono">+${fmt(periodGrossSales - periodAllFrozenSales)}</span>
+                                    <span className="text-xs text-gray-400 font-mono">+${fmt(periodGrossSales - periodAllFrozenSales - periodNianfaiSales)}</span>
                                 </div>
 
-                                {/* 各自訂分組（冷凍包/年菜等，含作廢，有才顯示） */}
+                                {/* 各自訂分組（冷凍包等，含作廢，有才顯示） */}
                                 {customGroupsForDisplay.map(g => (
                                     <div key={g.name} className="flex justify-between items-center py-0.5">
                                         <span className="text-xs text-gray-400">{g.name}</span>
                                         <span className="text-xs text-gray-400 font-mono">+${fmt(g.amount)}</span>
                                     </div>
                                 ))}
+
+                                {/* 年菜現金（WebPOS 現場單自算，Google 表單端待串接對帳） */}
+                                {periodNianfaiSales > 0 && (
+                                    <div className="flex justify-between items-center py-0.5">
+                                        <span className="text-xs text-gray-400">年菜現金（WebPOS現場，待串接表單對帳）</span>
+                                        <span className="text-xs text-gray-400 font-mono">+${fmt(periodNianfaiSales)}</span>
+                                    </div>
+                                )}
 
                                 {/* 臨時收入 */}
                                 <div className="flex justify-between items-center py-0.5">
