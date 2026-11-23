@@ -2455,6 +2455,23 @@ app.post('/api/nianfai/items/:id/finish-production', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+// 分批製作入庫：Yw 不一定一次做完全部（例如這週做 50、下週再做 50），
+// 用累加而不是整筆覆蓋，才不用每次自己心算目前累計是多少。
+app.post('/api/nianfai/items/:id/add-production', async (req, res) => {
+    const { addQty } = req.body;
+    const add = parseInt(addQty, 10);
+    if (!add || add <= 0) return res.status(400).json({ error: 'addQty 必須是正整數' });
+    try {
+        const { data: item, error: fetchErr } = await supabase.from('menu_items').select('nianfai_production_qty').eq('id', req.params.id).single();
+        if (fetchErr || !item) return res.status(404).json({ error: '找不到品項' });
+        const newQty = (item.nianfai_production_qty || 0) + add;
+        const { error: updErr } = await supabase.from('menu_items').update({ nianfai_production_qty: newQty }).eq('id', req.params.id);
+        if (updErr) throw updErr;
+        res.json({ ok: true, nianfaiProductionQty: newQty });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 app.get('/api/nianfai/demand', async (req, res) => {
     const { year } = req.query;
     if (!year) return res.status(400).json({ error: '缺少年度' });

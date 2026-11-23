@@ -4,7 +4,7 @@
 // 庫存/停售機制是下一階段的範圍，這裡先不做。
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { getSettingValue, saveSettingValue, getMenuItems, updateMenuItem, getNianfaiItems, finishNianfaiProduction } from '../db';
+import { getSettingValue, saveSettingValue, getMenuItems, updateMenuItem, getNianfaiItems, finishNianfaiProduction, addNianfaiProduction } from '../db';
 
 const NianfaiAdminPage = () => {
     const [activeYear, setActiveYear] = useState(null);
@@ -81,16 +81,18 @@ const NianfaiAdminPage = () => {
         }
     };
 
-    const handleProductionSave = async (itemId) => {
+    // 製作入庫用累加而不是整筆覆蓋：Yw 不一定一次做完全部（例如這週做 50、
+    // 下週再做 50），用累加才不用每次自己心算目前累計總共是多少。
+    const handleAddProduction = async (itemId) => {
         const draft = productionDrafts[itemId];
-        if (draft === undefined) return;
-        const qty = Math.max(0, parseInt(draft, 10) || 0);
+        const addQty = parseInt(draft, 10);
+        if (!addQty || addQty <= 0) return;
         try {
-            await updateMenuItem(itemId, { nianfaiProductionQty: qty });
+            await addNianfaiProduction(itemId, addQty);
             setProductionDrafts(prev => { const n = { ...prev }; delete n[itemId]; return n; });
             await load();
         } catch (e) {
-            alert(`儲存失敗：${e.message}`);
+            alert(`新增入庫失敗：${e.message}`);
         }
     };
 
@@ -193,7 +195,7 @@ const NianfaiAdminPage = () => {
                                             const isBundle = !!item.bundleComposition;
                                             const completed = item.nianfaiSelloutCap != null;
                                             const diff = completed ? item.nianfaiSelloutCap - item.demand : null;
-                                            const draftValue = productionDrafts[item.id] !== undefined ? productionDrafts[item.id] : (item.nianfaiProductionQty ?? '');
+                                            const draftValue = productionDrafts[item.id] ?? '';
                                             return (
                                                 <tr key={item.id}>
                                                     <td className="py-2 pr-2 font-bold text-gray-800">{item.name}{isBundle && <span className="ml-1 text-xs font-normal text-gray-400">（套餐）</span>}</td>
@@ -201,10 +203,22 @@ const NianfaiAdminPage = () => {
                                                         {isBundle ? (
                                                             <span className="text-gray-300">—</span>
                                                         ) : (
-                                                            <input type="number" min="0" value={draftValue} disabled={completed}
-                                                                onChange={e => setProductionDrafts(prev => ({ ...prev, [item.id]: e.target.value }))}
-                                                                onBlur={() => handleProductionSave(item.id)}
-                                                                className="w-20 border border-gray-300 rounded p-1 text-right disabled:bg-gray-50 disabled:text-gray-400" />
+                                                            <div className="flex items-center justify-end gap-1.5">
+                                                                <span className="font-bold text-gray-800 w-10 text-right">{item.nianfaiProductionQty || 0}</span>
+                                                                {!completed && (
+                                                                    <>
+                                                                        <span className="text-gray-300">+</span>
+                                                                        <input type="number" min="1" placeholder="本次新增" value={draftValue}
+                                                                            onChange={e => setProductionDrafts(prev => ({ ...prev, [item.id]: e.target.value }))}
+                                                                            onKeyDown={e => e.key === 'Enter' && handleAddProduction(item.id)}
+                                                                            className="w-20 border border-gray-300 rounded p-1 text-right text-xs" />
+                                                                        <button onClick={() => handleAddProduction(item.id)} disabled={!draftValue}
+                                                                            className="text-xs font-bold text-white bg-gray-600 px-2 py-1.5 rounded disabled:opacity-30 whitespace-nowrap">
+                                                                            入庫
+                                                                        </button>
+                                                                    </>
+                                                                )}
+                                                            </div>
                                                         )}
                                                     </td>
                                                     <td className="py-2 px-2 text-right text-gray-700">{item.demand}</td>
