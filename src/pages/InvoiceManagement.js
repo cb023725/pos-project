@@ -32,6 +32,7 @@ const InvoiceManagementPage = () => {
 
     // UI 狀態控制
     const [activeTab, setActiveTab] = useState('active'); // 'active' | 'voided'
+    const [showNianfai, setShowNianfai] = useState(false); // 預設隱藏年菜發票，跟報表頁「顯示店休日」同樣做法
     const [startDate, setStartDate] = useState(getLocalDateString(new Date()));
     const [endDate, setEndDate] = useState(getLocalDateString(new Date()));
     
@@ -71,16 +72,22 @@ const InvoiceManagementPage = () => {
     /**
      * 過濾與排序發票數據
      */
-    const filteredInvoices = useMemo(() => {
-        return invoices
-            .filter(inv => {
-                const statusMatch = activeTab === 'active' ? inv.status === '已開立' : inv.status === '已作廢';
-                if (!statusMatch) return false;
-                const dateStr = getLocalDateString(new Date(inv.paymentTime));
-                return dateStr >= startDate && dateStr <= endDate;
-            })
-            .sort((a, b) => new Date(b.paymentTime).getTime() - new Date(a.paymentTime).getTime());
+    const dateFilteredInvoices = useMemo(() => {
+        return invoices.filter(inv => {
+            const statusMatch = activeTab === 'active' ? inv.status === '已開立' : inv.status === '已作廢';
+            if (!statusMatch) return false;
+            const dateStr = getLocalDateString(new Date(inv.paymentTime));
+            return dateStr >= startDate && dateStr <= endDate;
+        });
     }, [invoices, startDate, endDate, activeTab]);
+
+    const nianfaiCount = useMemo(() => dateFilteredInvoices.filter(inv => inv.isNianfai).length, [dateFilteredInvoices]);
+
+    const filteredInvoices = useMemo(() => {
+        return dateFilteredInvoices
+            .filter(inv => showNianfai || !inv.isNianfai)
+            .sort((a, b) => new Date(b.paymentTime).getTime() - new Date(a.paymentTime).getTime());
+    }, [dateFilteredInvoices, showNianfai]);
 
     /**
      * 財務統計計算
@@ -88,7 +95,8 @@ const InvoiceManagementPage = () => {
     const stats = useMemo(() => {
         const rangeInvoices = invoices.filter(inv => {
             const dateStr = getLocalDateString(new Date(inv.paymentTime));
-            return dateStr >= startDate && dateStr <= endDate;
+            if (!(dateStr >= startDate && dateStr <= endDate)) return false;
+            return showNianfai || !inv.isNianfai; // 跟下面清單的顯示範圍保持一致，金額才對得起來
         });
 
         const activeInvs = rangeInvoices.filter(i => i.status === '已開立');
@@ -100,7 +108,7 @@ const InvoiceManagementPage = () => {
             activeCount: activeInvs.length,
             voidedCount: voidedInvs.length
         };
-    }, [invoices, startDate, endDate]);
+    }, [invoices, startDate, endDate, showNianfai]);
 
     // 以 invoiceId 為 key 的 adjustments map
     const adjByInvoice = useMemo(() => {
@@ -292,19 +300,32 @@ const InvoiceManagementPage = () => {
             </div>
 
             {/* Tabs */}
-            <div className="flex gap-2 mb-4">
-                <button 
-                    onClick={() => setActiveTab('active')}
-                    className={`px-6 py-2 rounded-t-xl font-black transition-all ${activeTab === 'active' ? 'bg-white text-[#4A9A7A] border-t-2 border-[#4A9A7A] shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
-                >
-                    結帳紀錄
-                </button>
-                <button 
-                    onClick={() => setActiveTab('voided')}
-                    className={`px-6 py-2 rounded-t-xl font-black transition-all ${activeTab === 'voided' ? 'bg-white text-red-600 border-t-2 border-red-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
-                >
-                    作廢紀錄
-                </button>
+            <div className="flex items-center justify-between mb-4">
+                <div className="flex gap-2">
+                    <button
+                        onClick={() => setActiveTab('active')}
+                        className={`px-6 py-2 rounded-t-xl font-black transition-all ${activeTab === 'active' ? 'bg-white text-[#4A9A7A] border-t-2 border-[#4A9A7A] shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                    >
+                        結帳紀錄
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('voided')}
+                        className={`px-6 py-2 rounded-t-xl font-black transition-all ${activeTab === 'voided' ? 'bg-white text-red-600 border-t-2 border-red-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                    >
+                        作廢紀錄
+                    </button>
+                </div>
+                {nianfaiCount > 0 && (
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                        <span className="text-xs font-bold text-gray-500">顯示年菜發票（{nianfaiCount}）</span>
+                        <div
+                            onClick={() => setShowNianfai(v => !v)}
+                            className={`relative w-9 h-5 rounded-full transition-colors ${showNianfai ? 'bg-[#4A9A7A]' : 'bg-gray-300'}`}
+                        >
+                            <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${showNianfai ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                        </div>
+                    </label>
+                )}
             </div>
 
             {/* Main Table */}

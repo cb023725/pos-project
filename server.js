@@ -2399,7 +2399,7 @@ app.get('/api/invoices', async (req, res) => {
     // JOIN orders 取得最新的 daily_order_no、table_number、order_type（以訂單為準，避免換桌後發票欄位過期）
     const orderIds = [...new Set((data||[]).map(r => r.order_id).filter(Boolean))];
     const ords = orderIds.length
-        ? await fetchAllRows(() => supabase.from('orders').select('id, daily_order_no, table_number, order_type').in('id', orderIds))
+        ? await fetchAllRows(() => supabase.from('orders').select('id, daily_order_no, table_number, order_type, is_nianfai').in('id', orderIds))
         : [];
     const oMap = new Map((ords||[]).map(o => [o.id, o]));
     res.json((data||[]).map(r => {
@@ -2409,6 +2409,7 @@ app.get('/api/invoices', async (req, res) => {
             daily_order_no: r.daily_order_no || ord?.daily_order_no,
             table_name:  ord?.table_number  || r.table_name,
             order_type:  ord?.order_type    || r.order_type,
+            is_nianfai:  ord?.is_nianfai    || false,
         });
     }));
 });
@@ -2652,6 +2653,7 @@ function invoiceToCamel(r) {
         itemsSnapshot: r.items_snapshot||[], dailyOrderNo: r.daily_order_no,
         orderType: r.order_type || (r.table_name === '外帶' ? '外帶' : '內用'), tableName: r.table_name,
         customerCount: r.customer_count||0, voidTime: r.void_time||null,
+        isNianfai: r.is_nianfai || false,
     };
 }
 
