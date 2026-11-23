@@ -358,9 +358,6 @@ export async function getNianfaiCloseCheck(since) {
 export async function finishNianfaiProduction(itemId, year) {
     return api('POST', `/api/nianfai/items/${itemId}/finish-production`, { year });
 }
-export async function addNianfaiProduction(itemId, addQty) {
-    return api('POST', `/api/nianfai/items/${itemId}/add-production`, { addQty });
-}
 export async function getNianfaiDemand(year) {
     return api('GET', `/api/nianfai/demand?year=${year}`);
 }

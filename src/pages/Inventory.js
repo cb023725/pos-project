@@ -1,6 +1,13 @@
 // src/pages/Inventory.js
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { getInventoryItems, addMenuItem, updateMenuItem, deleteMenuItem, getMenuItems, getInventoryLogs, addInventoryLog } from '../db';
+import useNianfaiSeason from '../hooks/useNianfaiSeason';
+
+// 「年菜庫存」每年各自一組（id 為 nfstock_<年度>_…），只顯示目前年度、且年菜沒有封存時
+const nianfaiStockYear = (item) => {
+    const m = /^nfstock_(\d{4})_/.exec(item.id || '');
+    return m ? parseInt(m[1], 10) : null;
+};
 
 const DEFAULT_THRESHOLDS = { full: 30, low: 10, urgent: 5 };
 
@@ -638,10 +645,13 @@ const InventoryPage = () => {
 
     const existingCategories = useMemo(() => [...new Set(inventory.map(i => i.category))], [inventory]);
 
+    const { year: nianfaiYear, isArchived: nianfaiArchived } = useNianfaiSeason();
     const filteredInventory = useMemo(() => {
-        if (filterStatus === '全部') return inventory;
-        return inventory.filter(item => getStockStatus(item).status === filterStatus);
-    }, [inventory, filterStatus, getStockStatus]);
+        const visible = inventory.filter(item => item.category !== '年菜庫存'
+            || (!nianfaiArchived && nianfaiStockYear(item) === nianfaiYear));
+        if (filterStatus === '全部') return visible;
+        return visible.filter(item => getStockStatus(item).status === filterStatus);
+    }, [inventory, filterStatus, getStockStatus, nianfaiYear, nianfaiArchived]);
 
     const groupedInventory = useMemo(() =>
         filteredInventory.reduce((acc, item) => {

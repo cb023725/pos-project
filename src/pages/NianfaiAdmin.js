@@ -3,7 +3,7 @@
 // 新年度初始化改成真的複製品項（新 id，去年資料完全不動）。
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { getSettingValue, saveSettingValue, getMenuItems, addMenuItem, updateMenuItem, getNianfaiItems, finishNianfaiProduction, addNianfaiProduction } from '../db';
+import { getSettingValue, saveSettingValue, getMenuItems, getInventoryItems, addMenuItem, updateMenuItem, getNianfaiItems, finishNianfaiProduction } from '../db';
 
 const STATUS_ORDER = ['preparing', 'selling', 'closed', 'archived'];
 const STATUS_LABELS = { preparing: '準備中', selling: '開賣中', closed: '收單後', archived: '已封存（平常營業）' };
@@ -23,7 +23,6 @@ const NianfaiAdminPage = () => {
     const [newYearInput, setNewYearInput] = useState('');
     const [isInitializing, setIsInitializing] = useState(false);
     const [isToggling, setIsToggling] = useState(false);
-    const [productionDrafts, setProductionDrafts] = useState({}); // itemId -> 輸入中但還沒存檔的值
     const [finishingId, setFinishingId] = useState(null);
 
     const load = useCallback(async () => {
@@ -61,13 +60,23 @@ const NianfaiAdminPage = () => {
             const lastYearItems = items; // 已經是「年菜」分類＋目前年度的品項
             const idMap = new Map();
             lastYearItems.forEach(it => idMap.set(it.id, `${it.id}_${newYear}`));
+            // 年節限定品項的「年菜庫存」每年各自一筆（庫存從 0 開始），平常也賣的冷凍包庫存照原樣沿用
+            const inventory = await getInventoryItems();
+            const stockMap = new Map(); // 去年年菜庫存 id -> 新年度年菜庫存 id
+            for (const it of lastYearItems) {
+                const ref = inventory.find(inv => inv.id === it.nianfaiStockRef);
+                if (!ref || ref.category !== '年菜庫存') continue;
+                const newStockId = `nfstock_${newYear}_${idMap.get(it.id)}`;
+                await addMenuItem({ id: newStockId, name: ref.name, category: '年菜庫存', price: null, stock: 0, consumes: [], sortOrder: ref.sortOrder, thresholds: ref.thresholds || null });
+                stockMap.set(ref.id, newStockId);
+            }
             // 先建立所有新品項（bundleComposition 先留空，新品項都建好才能回填正確的新 id）
             for (const it of lastYearItems) {
                 await addMenuItem({
                     id: idMap.get(it.id), name: it.name, printName: it.printName, customerPrintName: it.customerPrintName,
                     price: it.price, category: '年菜', imageUrl: it.imageUrl,
                     stock: 0, consumes: [], sortOrder: it.sortOrder,
-                    nianfaiYear: newYear, nianfaiStockRef: it.nianfaiStockRef || null,
+                    nianfaiYear: newYear, nianfaiStockRef: stockMap.get(it.nianfaiStockRef) || it.nianfaiStockRef || null,
                     bundleComposition: null,
                 });
             }
@@ -119,23 +128,8 @@ const NianfaiAdminPage = () => {
         }
     };
 
-    // 製作入庫用累加而不是整筆覆蓋：Yw 不一定一次做完全部（例如這週做 50、
-    // 下週再做 50），用累加才不用每次自己心算目前累計總共是多少。
-    const handleAddProduction = async (itemId) => {
-        const draft = productionDrafts[itemId];
-        const addQty = parseInt(draft, 10);
-        if (!addQty || addQty <= 0) return;
-        try {
-            await addNianfaiProduction(itemId, addQty);
-            setProductionDrafts(prev => { const n = { ...prev }; delete n[itemId]; return n; });
-            await load();
-        } catch (e) {
-            alert(`新增入庫失敗：${e.message}`);
-        }
-    };
-
     const handleFinishProduction = async (item) => {
-        if (!window.confirm(`確定「${item.name}」製作完成嗎？\n\n目前製作入庫 ${item.nianfaiProductionQty || 0} 份會變成停售上限，之後不能再調整。`)) return;
+        if (!window.confirm(`確定「${item.name}」製作完成嗎？\n\n目前年菜庫存 ${item.nianfaiProductionQty || 0} 份會變成停售上限，之後不能再調整。`)) return;
         setFinishingId(item.id);
         try {
             await finishNianfaiProduction(item.id, activeYear);
@@ -200,7 +194,7 @@ const NianfaiAdminPage = () => {
             <div className="bg-white rounded-xl shadow p-6">
                 <h3 className="text-xl font-bold text-gray-700 mb-3">3. 開賣 / 收單狀態</h3>
                 <p className="text-sm text-gray-500 mb-3">
-                    準備中→開賣中→收單後→已封存，只隱藏畫面不刪資料；開賣中才會出現年菜佇列/點單頁，收單後只有 Yw 能從後台加單。
+                    準備中→開賣中→收單後→已封存，只隱藏畫面不刪資料；封存以外桌位頁都會出現年菜卡片（佇列/點單頁），收單後只有 Yw 能從後台加單。
                 </p>
                 <div className="flex items-center gap-3">
                     {status !== 'archived' && (
@@ -228,13 +222,16 @@ const NianfaiAdminPage = () => {
 
                     {seasonalItems.length > 0 && (
                         <>
-                            <p className="text-sm font-bold text-gray-600 mb-2">年節限定品項（做完再賣，製作完成後設上限）</p>
+                            <p className="text-sm font-bold text-gray-600 mb-1">年節限定品項（做完再賣，製作完成後設上限）</p>
+                            <p className="text-xs text-gray-400 mb-2">
+                                製作入庫請到 <Link to="/inventory" className="text-[#4A9A7A] font-bold underline">庫存管理頁</Link>「年菜庫存」分類補貨／盤點；按「製作完成」時以當下庫存數作為停售上限。
+                            </p>
                             <div className="overflow-x-auto mb-6">
                                 <table className="w-full text-sm">
                                     <thead>
                                         <tr className="border-b border-gray-200 text-left text-xs font-bold text-gray-400">
                                             <th className="py-2 pr-2">品項</th>
-                                            <th className="py-2 px-2 text-right">製作入庫</th>
+                                            <th className="py-2 px-2 text-right">年菜庫存</th>
                                             <th className="py-2 px-2 text-right">訂購需求</th>
                                             <th className="py-2 px-2 text-right">差額</th>
                                             <th className="py-2 px-2 text-center">狀態</th>
@@ -245,8 +242,7 @@ const NianfaiAdminPage = () => {
                                         {seasonalItems.map(item => {
                                             const isBundle = !!item.bundleComposition;
                                             const completed = item.nianfaiSelloutCap != null;
-                                            const diff = completed ? item.nianfaiSelloutCap - item.demand : null;
-                                            const draftValue = productionDrafts[item.id] ?? '';
+                                            const diff = completed ? item.nianfaiSelloutCap - item.demand : (item.nianfaiProductionQty ?? 0) - item.demand;
                                             return (
                                                 <tr key={item.id}>
                                                     <td className="py-2 pr-2 font-bold text-gray-800">{item.name}{isBundle && <span className="ml-1 text-xs font-normal text-gray-400">（套餐）</span>}</td>
@@ -254,22 +250,9 @@ const NianfaiAdminPage = () => {
                                                         {isBundle ? (
                                                             <span className="text-gray-300">—</span>
                                                         ) : (
-                                                            <div className="flex items-center justify-end gap-1.5">
-                                                                <span className="font-bold text-gray-800 w-10 text-right">{item.nianfaiProductionQty || 0}</span>
-                                                                {!completed && (
-                                                                    <>
-                                                                        <span className="text-gray-300">+</span>
-                                                                        <input type="number" min="1" placeholder="本次新增" value={draftValue}
-                                                                            onChange={e => setProductionDrafts(prev => ({ ...prev, [item.id]: e.target.value }))}
-                                                                            onKeyDown={e => e.key === 'Enter' && handleAddProduction(item.id)}
-                                                                            className="w-20 border border-gray-300 rounded p-1 text-right text-xs" />
-                                                                        <button onClick={() => handleAddProduction(item.id)} disabled={!draftValue}
-                                                                            className="text-xs font-bold text-white bg-gray-600 px-2 py-1.5 rounded disabled:opacity-30 whitespace-nowrap">
-                                                                            入庫
-                                                                        </button>
-                                                                    </>
-                                                                )}
-                                                            </div>
+                                                            item.nianfaiStockRef
+                                                                ? <span className="font-bold text-gray-800">{completed ? item.nianfaiSelloutCap : (item.nianfaiProductionQty ?? 0)}</span>
+                                                                : <span className="text-xs text-red-500 font-bold">未設定對應庫存</span>
                                                         )}
                                                     </td>
                                                     <td className="py-2 px-2 text-right text-gray-700">{item.demand}</td>
@@ -286,7 +269,7 @@ const NianfaiAdminPage = () => {
                                                         )}
                                                     </td>
                                                     <td className="py-2 pl-2 text-right">
-                                                        {!isBundle && !completed && (
+                                                        {!isBundle && !completed && item.nianfaiStockRef && (
                                                             <button onClick={() => handleFinishProduction(item)} disabled={finishingId === item.id}
                                                                 className="text-xs font-bold text-white bg-[#4A9A7A] px-3 py-1.5 rounded-lg disabled:opacity-50 whitespace-nowrap">
                                                                 {finishingId === item.id ? '處理中...' : '製作完成'}

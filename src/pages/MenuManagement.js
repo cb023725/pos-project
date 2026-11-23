@@ -378,7 +378,8 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
                             {inventoryItems.length === 0 ? (
                                 <p className="text-sm text-gray-400">無庫存項目</p>
                             ) : (
-                                Object.entries(inventoryItems.reduce((acc, inv) => {
+                                // 年菜庫存只給年菜品項對應用（不扣庫存），不列入一般品項的庫存連動選項
+                                Object.entries(inventoryItems.filter(inv => inv.category !== '年菜庫存').reduce((acc, inv) => {
                                     (acc[inv.category] = acc[inv.category] || []).push(inv);
                                     return acc;
                                 }, {})).map(([category, items]) => (
@@ -424,14 +425,21 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
                                 </div>
                             ) : (
                                 <div className="border-t border-orange-200 pt-3">
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">對應冷凍包庫存（只顯示用，不會扣庫存）</label>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">對應庫存（只顯示用，不會扣庫存；年節限定品項選同年度的年菜庫存）</label>
                                     <select value={formData.nianfaiStockRef || ''}
                                         onChange={e => setFormData(prev => ({ ...prev, nianfaiStockRef: e.target.value || null }))}
                                         className="w-full border border-gray-300 rounded-lg p-2 text-sm">
-                                        <option value="">（無，年節限定品項）</option>
-                                        {inventoryItems.filter(inv => inv.category === '冷凍包庫存').map(inv => (
-                                            <option key={inv.id} value={inv.id}>{inv.name}</option>
-                                        ))}
+                                        <option value="">（無）</option>
+                                        <optgroup label="年菜庫存（年節限定，製作入庫量）">
+                                            {inventoryItems.filter(inv => inv.category === '年菜庫存' && (inv.id || '').startsWith(`nfstock_${formData.nianfaiYear}_`)).map(inv => (
+                                                <option key={inv.id} value={inv.id}>{inv.name}</option>
+                                            ))}
+                                        </optgroup>
+                                        <optgroup label="冷凍包庫存（平常也賣）">
+                                            {inventoryItems.filter(inv => inv.category === '冷凍包庫存').map(inv => (
+                                                <option key={inv.id} value={inv.id}>{inv.name}</option>
+                                            ))}
+                                        </optgroup>
                                     </select>
                                 </div>
                             )}
