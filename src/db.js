@@ -14,7 +14,9 @@ async function api(method, path, body) {
     const res = await fetch(`${API}${path}`, opts);
     if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(err.error || res.statusText);
+        const e = new Error(err.message || err.error || res.statusText);
+        e.code = err.error;
+        throw e;
     }
     return res.json();
 }

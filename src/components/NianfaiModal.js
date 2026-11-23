@@ -47,6 +47,12 @@ const NianfaiModal = ({ isOpen, year, onClose }) => {
             setCapNotice(`「${item.name}」已達上限 ${max} 份，超過請先在表單送出後，到「表單回應」直接修改數量（不拆單）`);
             return;
         }
+        const current = qty[item.id] || 0;
+        // 已停售的品項第一次加入時跳確認（比照一般餐點停售的做法），確認後才放行；
+        // 已經加過的話再加減不用每次都問
+        if (item.soldOut && current === 0 && value > current) {
+            if (!window.confirm(`「${item.name}」已停售，確定要加入嗎？`)) return;
+        }
         setCapNotice('');
         setQty(prev => ({ ...prev, [item.id]: Math.max(0, value) }));
     };
@@ -72,7 +78,21 @@ const NianfaiModal = ({ isOpen, year, onClose }) => {
                 recipientPhone: deliveryMethod === 'delivery' ? recipientPhone.trim() : null,
                 recipientAddress: deliveryMethod === 'delivery' ? recipientAddress.trim() : null,
             };
-            const result = await createNianfaiOrder(payload);
+            let result;
+            try {
+                result = await createNianfaiOrder(payload);
+            } catch (e) {
+                // 表單已因達停售上限自動關閉：跳確認視窗，確認後才用 override 繼續送出
+                if (e.code === 'FORM_CLOSED') {
+                    if (!window.confirm(`${e.message || '年菜表單已關閉'}\n\n確定要繼續新增這筆訂單嗎？`)) {
+                        setSubmitting(false);
+                        return;
+                    }
+                    result = await createNianfaiOrder({ ...payload, override: true });
+                } else {
+                    throw e;
+                }
+            }
             const seqLabel = `${year}-${String(result.seqNo).padStart(3, '0')}`;
 
             // 二聯單列印：不用等這個 fetch 回應，失敗也不擋結帳成功的流程
@@ -118,9 +138,14 @@ const NianfaiModal = ({ isOpen, year, onClose }) => {
                                 const max = isBundle ? BUNDLE_MAX : SINGLE_MAX;
                                 const q = qty[item.id] || 0;
                                 return (
-                                    <div key={item.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                                    <div key={item.id} className={`relative flex items-center justify-between p-3 bg-gray-50 rounded-xl ${item.soldOut ? 'opacity-60' : ''}`}>
                                         <div className="flex-1 min-w-0">
-                                            <p className="font-bold text-gray-800 truncate">{item.name}</p>
+                                            <p className="font-bold text-gray-800 truncate flex items-center gap-2">
+                                                {item.name}
+                                                {item.soldOut && (
+                                                    <span className="bg-red-600 text-white text-xs font-black px-2 py-0.5 rounded-md tracking-wider flex-shrink-0">停售</span>
+                                                )}
+                                            </p>
                                             <p className="text-sm text-gray-400">${item.price}{isBundle ? '（套餐）' : ''}</p>
                                         </div>
                                         <div className="flex items-center gap-2 flex-shrink-0">
