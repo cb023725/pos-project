@@ -34,8 +34,9 @@ export default function useNianfaiSeason() {
         loading,
         reload: load,
         // 畫面顯示旗標，對應修正單第 2 節的表格
-        showTableCard:   status === 'selling' || status === 'closed',   // 桌位頁年菜卡片
-        showOrderQueue:  status === 'selling' || status === 'closed',   // 年菜佇列頁／點單頁可用
+        // 2026-11-24 Yw 調整：準備中也顯示桌位頁卡片與佇列頁（修正單第 2 節原本只有 selling／closed）
+        showTableCard:   !isArchived,                                   // 桌位頁年菜卡片
+        showOrderQueue:  !isArchived,                                   // 年菜佇列頁／點單頁可用
         showNavEntry:    !isArchived,                                   // 導覽列「年菜」（管理頁）
         showMenuCategory: !isArchived,                                  // 菜單管理「年菜」類別
         isArchived,

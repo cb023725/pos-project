@@ -16,6 +16,14 @@ const SINGLE_MAX = 9;
 const SHIPPING_FEE = 160;
 const FREE_SHIPPING_THRESHOLD = 3000;
 
+// 卡片排列：套餐一律在最前面（左上角第一個），其餘照菜單管理的排序（sort_order）
+const sortForCards = (list) => list.slice().sort((a, b) =>
+    (!!b.bundleComposition - !!a.bundleComposition) || ((a.sortOrder ?? 99) - (b.sortOrder ?? 99)));
+
+// 套餐卡片只顯示品名本體（「富貴套餐：五菜一湯 (六人份)」→「富貴套餐」），
+// 只影響卡片顯示，資料庫品名與收據不變（品名是對應表單欄位的依據，不能改）
+const cardName = (item) => item.bundleComposition ? item.name.split(/[：:]/)[0].trim() : item.name;
+
 const NianfaiOrderPage = () => {
     const navigate = useNavigate();
     const { year, status } = useNianfaiSeason();
@@ -36,7 +44,7 @@ const NianfaiOrderPage = () => {
 
     useEffect(() => {
         if (!year) return;
-        getNianfaiItems(year).then(setItems).catch(() => setItems([]));
+        getNianfaiItems(year).then(list => setItems(sortForCards(list))).catch(() => setItems([]));
         getSettingValue(`nianfai_${year}_pickup_dates`, '[]').then(v => {
             try { setPickupDates(JSON.parse(v) || []); } catch { setPickupDates([]); }
         });
@@ -270,7 +278,7 @@ const NianfaiOrderPage = () => {
                                     <span className="absolute top-1 right-1 z-20 bg-[#C1032F] text-white text-[10px] font-black px-1.5 py-0.5 rounded pointer-events-none">套餐</span>
                                 )}
                                 <div className={isBundle ? 'ring-4 ring-[#C1032F] rounded-xl' : ''}>
-                                    <MenuCard item={item} onAddItem={() => setItemQty(item, q + 1)} onLongPress={() => setItemQty(item, q - 1)} allowOverride />
+                                    <MenuCard item={isBundle ? { ...item, name: cardName(item) } : item} onAddItem={() => setItemQty(item, q + 1)} onLongPress={() => setItemQty(item, q - 1)} allowOverride hideStock />
                                 </div>
                             </div>
                         );

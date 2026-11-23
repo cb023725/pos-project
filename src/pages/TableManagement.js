@@ -373,7 +373,7 @@ const TableManagementPage = () => {
     const [clearTarget, setClearTarget]         = useState(null);    // { tableNumber, orderId, label }
     const [paidClearTarget, setPaidClearTarget] = useState(null);    // { tableNumber, orderId, label }
     const [hasTakeoutOrders, setHasTakeoutOrders] = useState(false);
-    // 年菜卡片（修正單 #01 第 4 節）：只在 selling／closed 顯示，標示資料待補／送出失敗張數
+    // 年菜卡片（修正單 #01 第 4 節）：preparing／selling／closed 顯示（archived 隱藏），標示資料待補／送出失敗張數
     const { year: nianfaiYear, showTableCard: showNianfaiCard } = useNianfaiSeason();
     const [nianfaiTodoCount, setNianfaiTodoCount] = useState(0);
     useEffect(() => {
@@ -923,7 +923,7 @@ const TableManagementPage = () => {
                                 </div>
                             ))}
                         </div>
-                        {/* 年菜按鈕（右下角，selling／closed 才顯示） */}
+                        {/* 年菜按鈕（右下角，archived 以外都顯示） */}
                         {showNianfaiCard && (
                             <div className="h-full min-h-0 overflow-hidden">
                                 <div

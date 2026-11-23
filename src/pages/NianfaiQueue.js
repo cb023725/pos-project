@@ -197,7 +197,7 @@ const NianfaiQueuePage = () => {
     }, [year]);
 
     if (!seasonLoading && !showOrderQueue) {
-        return <div className="p-8 text-center text-gray-400">目前不是年菜開賣／收單期間。</div>;
+        return <div className="p-8 text-center text-gray-400">目前沒有進行中的年菜活動。</div>;
     }
 
     return (
