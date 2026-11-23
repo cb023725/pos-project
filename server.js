@@ -2432,6 +2432,9 @@ app.get('/api/nianfai/items', async (req, res) => {
         nianfaiSelloutCap: r.nianfai_sellout_cap,
         demand: demand[r.id] || 0,
         soldOut: isSoldOut(r),
+        // 平常也賣的品項：本來就有庫存連動（consumes），用既有庫存只警示、不走停售上限機制
+        isRegularSellingItem: !!(r.consumes && r.consumes.length > 0),
+        stock: r.stock,
     })));
 });
 

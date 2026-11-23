@@ -4,15 +4,19 @@
 // 庫存/停售機制是下一階段的範圍，這裡先不做。
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { getSettingValue, saveSettingValue, getMenuItems, updateMenuItem } from '../db';
+import { getSettingValue, saveSettingValue, getMenuItems, updateMenuItem, getNianfaiItems, finishNianfaiProduction } from '../db';
 
 const NianfaiAdminPage = () => {
     const [activeYear, setActiveYear] = useState(null);
     const [seasonActive, setSeasonActive] = useState(false);
     const [items, setItems] = useState([]);
+    const [inventoryItems, setInventoryItems] = useState([]);
+    const [formClosed, setFormClosed] = useState(false);
     const [newYearInput, setNewYearInput] = useState('');
     const [isInitializing, setIsInitializing] = useState(false);
     const [isToggling, setIsToggling] = useState(false);
+    const [productionDrafts, setProductionDrafts] = useState({}); // itemId -> 輸入中但還沒存檔的值
+    const [finishingId, setFinishingId] = useState(null);
 
     const load = useCallback(async () => {
         const year = await getSettingValue('nianfai_active_year', null);
@@ -22,6 +26,13 @@ const NianfaiAdminPage = () => {
         if (activeYearNum) {
             const active = await getSettingValue(`nianfai_${activeYearNum}_season_active`, 'false');
             setSeasonActive(active === 'true');
+            const closed = await getSettingValue(`nianfai_${activeYearNum}_form_closed`, 'false');
+            setFormClosed(closed === 'true');
+            const nfItems = await getNianfaiItems(activeYearNum).catch(() => []);
+            setInventoryItems(nfItems);
+        } else {
+            setFormClosed(false);
+            setInventoryItems([]);
         }
         const all = await getMenuItems();
         setItems(activeYearNum ? all.filter(i => i.nianfaiYear === activeYearNum) : []);
@@ -70,6 +81,36 @@ const NianfaiAdminPage = () => {
         }
     };
 
+    const handleProductionSave = async (itemId) => {
+        const draft = productionDrafts[itemId];
+        if (draft === undefined) return;
+        const qty = Math.max(0, parseInt(draft, 10) || 0);
+        try {
+            await updateMenuItem(itemId, { nianfaiProductionQty: qty });
+            setProductionDrafts(prev => { const n = { ...prev }; delete n[itemId]; return n; });
+            await load();
+        } catch (e) {
+            alert(`儲存失敗：${e.message}`);
+        }
+    };
+
+    const handleFinishProduction = async (item) => {
+        if (!window.confirm(`確定「${item.name}」製作完成嗎？\n\n目前製作入庫 ${item.nianfaiProductionQty || 0} 份會變成停售上限，之後不能再調整。`)) return;
+        setFinishingId(item.id);
+        try {
+            await finishNianfaiProduction(item.id, activeYear);
+            await load();
+        } catch (e) {
+            alert(`設定失敗：${e.message}`);
+        } finally {
+            setFinishingId(null);
+        }
+    };
+
+    // 「平常也賣」的 5 項本來就有庫存連動（consumes），用既有庫存比對只警示，不走停售上限
+    const specialItems = inventoryItems.filter(i => i.isRegularSellingItem);
+    const seasonalItems = inventoryItems.filter(i => !i.isRegularSellingItem);
+
     return (
         <div className="p-6 max-w-3xl mx-auto">
             <h2 className="text-4xl font-black text-gray-800 mb-6">🧧 年菜管理</h2>
@@ -88,6 +129,11 @@ const NianfaiAdminPage = () => {
                 <p className="text-gray-600 mt-1">
                     目前年度品項數：<span className="font-black text-gray-800">{items.length}</span>
                 </p>
+                {formClosed && (
+                    <p className="mt-2 text-sm font-bold text-red-600 bg-red-50 rounded-lg px-3 py-2">
+                        ⚠️ 已有品項達停售上限，表單已自動關閉。WebPOS 現場要繼續新增年菜訂單需要額外確認。
+                    </p>
+                )}
             </div>
 
             <div className="bg-white rounded-xl shadow p-6 mb-5">
@@ -119,6 +165,112 @@ const NianfaiAdminPage = () => {
                     {isToggling ? '處理中...' : seasonActive ? '收單（隱藏年菜 tab）' : '開賣（顯示年菜 tab）'}
                 </button>
             </div>
+
+            {activeYear && (
+                <div className="bg-white rounded-xl shadow p-6 mt-5">
+                    <h3 className="text-xl font-bold text-gray-700 mb-3">4. 年菜庫存</h3>
+                    <p className="text-sm text-gray-500 mb-4">
+                        訂購需求目前僅計算 WebPOS 現場單（GAS 還沒部署，不含線上表單），實際需求會比這裡顯示的更多。
+                    </p>
+
+                    {seasonalItems.length > 0 && (
+                        <>
+                            <p className="text-sm font-bold text-gray-600 mb-2">年節限定品項（做完再賣，製作完成後設上限）</p>
+                            <div className="overflow-x-auto mb-6">
+                                <table className="w-full text-sm">
+                                    <thead>
+                                        <tr className="border-b border-gray-200 text-left text-xs font-bold text-gray-400">
+                                            <th className="py-2 pr-2">品項</th>
+                                            <th className="py-2 px-2 text-right">製作入庫</th>
+                                            <th className="py-2 px-2 text-right">訂購需求</th>
+                                            <th className="py-2 px-2 text-right">差額</th>
+                                            <th className="py-2 px-2 text-center">狀態</th>
+                                            <th className="py-2 pl-2"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-100">
+                                        {seasonalItems.map(item => {
+                                            const isBundle = !!item.bundleComposition;
+                                            const completed = item.nianfaiSelloutCap != null;
+                                            const diff = completed ? item.nianfaiSelloutCap - item.demand : null;
+                                            const draftValue = productionDrafts[item.id] !== undefined ? productionDrafts[item.id] : (item.nianfaiProductionQty ?? '');
+                                            return (
+                                                <tr key={item.id}>
+                                                    <td className="py-2 pr-2 font-bold text-gray-800">{item.name}{isBundle && <span className="ml-1 text-xs font-normal text-gray-400">（套餐）</span>}</td>
+                                                    <td className="py-2 px-2 text-right">
+                                                        {isBundle ? (
+                                                            <span className="text-gray-300">—</span>
+                                                        ) : (
+                                                            <input type="number" min="0" value={draftValue} disabled={completed}
+                                                                onChange={e => setProductionDrafts(prev => ({ ...prev, [item.id]: e.target.value }))}
+                                                                onBlur={() => handleProductionSave(item.id)}
+                                                                className="w-20 border border-gray-300 rounded p-1 text-right disabled:bg-gray-50 disabled:text-gray-400" />
+                                                        )}
+                                                    </td>
+                                                    <td className="py-2 px-2 text-right text-gray-700">{item.demand}</td>
+                                                    <td className={`py-2 px-2 text-right font-bold ${diff != null && diff < 0 ? 'text-red-600' : 'text-gray-700'}`}>
+                                                        {isBundle ? <span className="text-gray-300">—</span> : (diff != null ? diff : '—')}
+                                                    </td>
+                                                    <td className="py-2 px-2 text-center">
+                                                        {isBundle ? (
+                                                            <span className="text-xs text-gray-400">跟隨組成</span>
+                                                        ) : (
+                                                            <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${completed ? 'bg-gray-100 text-gray-500' : 'bg-orange-100 text-orange-600'}`}>
+                                                                {completed ? '已完成' : '製作中'}
+                                                            </span>
+                                                        )}
+                                                    </td>
+                                                    <td className="py-2 pl-2 text-right">
+                                                        {!isBundle && !completed && (
+                                                            <button onClick={() => handleFinishProduction(item)} disabled={finishingId === item.id}
+                                                                className="text-xs font-bold text-white bg-[#4A9A7A] px-3 py-1.5 rounded-lg disabled:opacity-50 whitespace-nowrap">
+                                                                {finishingId === item.id ? '處理中...' : '製作完成'}
+                                                            </button>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </>
+                    )}
+
+                    {specialItems.length > 0 && (
+                        <>
+                            <p className="text-sm font-bold text-gray-600 mb-2">平常也賣的品項（用既有庫存比對，只警示不停售）</p>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                    <thead>
+                                        <tr className="border-b border-gray-200 text-left text-xs font-bold text-gray-400">
+                                            <th className="py-2 pr-2">品項</th>
+                                            <th className="py-2 px-2 text-right">現有庫存</th>
+                                            <th className="py-2 px-2 text-right">訂購需求</th>
+                                            <th className="py-2 px-2 text-right">差額</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-100">
+                                        {specialItems.map(item => {
+                                            const diff = (item.stock ?? 0) - item.demand;
+                                            return (
+                                                <tr key={item.id}>
+                                                    <td className="py-2 pr-2 font-bold text-gray-800">{item.name}</td>
+                                                    <td className="py-2 px-2 text-right text-gray-700">{item.stock ?? '—'}</td>
+                                                    <td className="py-2 px-2 text-right text-gray-700">{item.demand}</td>
+                                                    <td className={`py-2 px-2 text-right font-bold ${diff < 0 ? 'text-red-600' : 'text-gray-700'}`}>{diff}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </>
+                    )}
+
+                    {inventoryItems.length === 0 && <p className="text-gray-400 text-center py-6">目前沒有年菜品項</p>}
+                </div>
+            )}
         </div>
     );
 };
