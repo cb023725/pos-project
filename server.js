@@ -2464,31 +2464,56 @@ function nianfaiMissingFields(nf) {
     return missing;
 }
 
+// ── Google 表單／Sheet（GAS Web App）────────────────────────────────────────
+// GAS 程式在 repo 的 gas/nianfai/，綁在當年度的年菜試算表上，部署成網頁應用程式。
+// Apps Script 不能自訂 HTTP 狀態碼，成功與否看回應 JSON 的 ok。
+const nianfaiGasConfigured = () => !!(process.env.NIANFAI_GAS_URL && process.env.NIANFAI_GAS_SECRET);
+
+async function callNianfaiGas(action, payload = {}, { method = 'POST', timeoutMs = 30000 } = {}) {
+    const url = process.env.NIANFAI_GAS_URL;
+    const secret = process.env.NIANFAI_GAS_SECRET || '';
+    if (!url) throw new Error('GAS 網址尚未設定');
+    let resp;
+    if (method === 'GET') {
+        const qs = new URLSearchParams({ action, secret, ...payload });
+        resp = await fetch(`${url}?${qs}`, { signal: AbortSignal.timeout(timeoutMs) });
+    } else {
+        resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, secret, ...payload }),
+            signal: AbortSignal.timeout(timeoutMs),
+        });
+    }
+    const text = await resp.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch { /* GAS 錯誤頁是 HTML */ }
+    if (!resp.ok || !json) throw new Error(`GAS 回應異常（HTTP ${resp.status}）`);
+    if (!json.ok) throw new Error(json.error || 'GAS 回報失敗');
+    return json;
+}
+
 async function submitToNianfaiForm(orderId) {
-    const gasUrl = process.env.NIANFAI_GAS_URL;
-    if (!gasUrl) return; // 尚未設定，保持 pending，不算失敗
+    if (!nianfaiGasConfigured()) return; // 尚未設定，保持 pending，不算失敗
     const { data: nf } = await supabase.from('nianfai_orders').select('*').eq('order_id', orderId).single();
     if (!nf || nf.form_submission_status === 'sent') return;
     if (nianfaiMissingFields(nf).length > 0) return; // 防呆：資料不完整絕不送出
     const { data: order } = await supabase.from('orders').select('items').eq('id', orderId).single();
     try {
-        const resp = await fetch(gasUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                secret: process.env.NIANFAI_GAS_SECRET || '',
-                year: nf.year, seqNo: nf.seq_no,
+        // 表單題目依品名對應（GAS 端用「設定」的品名比對），GAS 用「現結＋流水號」防重複
+        await callNianfaiGas('submitOrder', {
+            order: {
+                seqLabel: nianfaiSeqLabel(nf.year, nf.seq_no),
                 customerName: nf.customer_name, customerPhone: nf.customer_phone,
+                // 客人有填就用客人的（GAS 寄給客人並 bcc 店家）；沒填用店家信箱（只寄給店家）
                 email: (nf.customer_email && nf.customer_email.trim()) || NIANFAI_DEFAULT_EMAIL,
-                // 匯款末五碼欄位填「現結＋流水號」，Sheet 用它搜尋對應的現場單
-                remittanceLast5: `現結${nianfaiSeqLabel(nf.year, nf.seq_no)}`,
                 deliveryMethod: nf.delivery_method, pickupDate: nf.pickup_date,
                 recipientName: nf.recipient_name, recipientPhone: nf.recipient_phone,
                 recipientAddress: nf.recipient_address,
-                items: order?.items || [],
-            }),
+                items: (order?.items || []).map(it => ({ id: it.id, name: it.name, qty: it.quantity || 1 })),
+            },
         });
-        if (!resp.ok) throw new Error(`GAS 回應 ${resp.status}`);
+        nianfaiDemandCache.clear();
         await supabase.from('nianfai_orders').update({
             form_submission_status: 'sent', form_submission_error: null, submitted_at: new Date().toISOString(),
         }).eq('order_id', orderId);
@@ -2501,7 +2526,7 @@ async function submitToNianfaiForm(orderId) {
 // 待傳佇列重試：資料已補齊但還沒送成功的訂單（pending=GAS 網址當時未設定、failed=送出失敗），
 // 每 5 分鐘補送一次。incomplete（資料待補）不在這裡，submitToNianfaiForm 內也會再擋一次。
 setInterval(async () => {
-    if (!process.env.NIANFAI_GAS_URL) return;
+    if (!nianfaiGasConfigured()) return;
     const { data: pendingRows } = await supabase
         .from('nianfai_orders').select('order_id')
         .in('form_submission_status', ['pending', 'failed']);
@@ -2510,13 +2535,13 @@ setInterval(async () => {
     }
 }, 5 * 60 * 1000);
 
-// 需求計算：加總 WebPOS 現場單（年菜訂單一律全額付清，只排除發票已作廢的），
-// 套餐依 bundle_composition 展開成單品數量。目前只有 WebPOS 現場單，還沒串接
-// 線上表單（GAS 尚未部署），所以是「部分」需求，不是 Sheet 上完整的線上+現場加總。
-async function computeNianfaiDemand(year) {
-    const { data: nfOrders } = await supabase.from('nianfai_orders').select('order_id').eq('year', year);
-    const orderIds = (nfOrders || []).map(o => o.order_id);
+// WebPOS 現場單需求：只算發票有效（未作廢）的訂單，套餐依 bundle_composition 展開成單品。
+// excludeSeqLabels：已經送進表單的流水號（這些從 Sheet 算，不再從 WebPOS 算，避免重複）
+async function computeWebposNianfaiDemand(year, excludeSeqLabels = new Set()) {
+    const { data: nfOrders } = await supabase.from('nianfai_orders').select('order_id, seq_no').eq('year', year);
     const demand = {};
+    const seqByOrder = new Map((nfOrders || []).map(o => [o.order_id, nianfaiSeqLabel(year, o.seq_no)]));
+    const orderIds = (nfOrders || []).map(o => o.order_id).filter(id => !excludeSeqLabels.has(seqByOrder.get(id)));
     if (orderIds.length === 0) return demand;
 
     const { data: invoices } = await supabase.from('invoices').select('order_id').in('order_id', orderIds).eq('status', '已開立');
@@ -2540,9 +2565,45 @@ async function computeNianfaiDemand(year) {
     return demand;
 }
 
-// 任一已完成（sellout_cap 不是 null）的品項，需求達到或超過上限，就關閉整份表單
-// （WebPOS 認知的狀態；Google 表單本身的關閉要等 GAS 部署好才能真的連動）。
+// 修正單 #01 第 7 節：需求 = Sheet 總訂購量（線上＋已送出的現場單）＋ WebPOS 尚未送出的現場單。
+// GAS 未設定或讀取失敗時，暫時全部用 WebPOS 現場單計算（source = webpos_onsite_only，畫面註明「僅含現場單」）。
+// Sheet 結果快取 60 秒，避免點單頁每次載入都等 GAS。
+const nianfaiDemandCache = new Map(); // year -> { at, sheet }
+async function computeNianfaiDemandDetail(year) {
+    if (nianfaiGasConfigured()) {
+        try {
+            let cached = nianfaiDemandCache.get(year);
+            if (!cached || Date.now() - cached.at > 60 * 1000) {
+                const sheet = await callNianfaiGas('demand', {}, { method: 'GET', timeoutMs: 15000 });
+                cached = { at: Date.now(), sheet };
+                nianfaiDemandCache.set(year, cached);
+                // 表單開關以 Google 表單實際狀態為準（停售由 GAS 關閉表單）
+                await supabase.from('app_settings').upsert({
+                    key: `nianfai_${year}_form_closed`, value: sheet.formAccepting ? 'false' : 'true', updated_at: new Date().toISOString(),
+                });
+            }
+            const sheetDemand = cached.sheet.demandById || {};
+            const sent = new Set(cached.sheet.onsiteSeqs || []);
+            const webpos = await computeWebposNianfaiDemand(year, sent);
+            const demand = { ...sheetDemand };
+            for (const [id, q] of Object.entries(webpos)) demand[id] = (demand[id] || 0) + q;
+            return { demand, source: 'sheet', formAccepting: cached.sheet.formAccepting, updatedAt: cached.sheet.updatedAt };
+        } catch (error) {
+            console.error('[年菜] 讀取 Sheet 需求失敗，暫用 WebPOS 現場單：', error.message);
+            return { demand: await computeWebposNianfaiDemand(year), source: 'webpos_onsite_only', error: error.message };
+        }
+    }
+    return { demand: await computeWebposNianfaiDemand(year), source: 'webpos_onsite_only' };
+}
+async function computeNianfaiDemand(year) {
+    return (await computeNianfaiDemandDetail(year)).demand;
+}
+
+// 任一已完成（sellout_cap 不是 null）的品項，需求達到或超過上限，就關閉整份表單。
+// 有接 GAS 時，Google 表單由 GAS 關閉（每筆送出、製作完成時檢查），這裡同步狀態即可；
+// 沒接 GAS 時只更新 WebPOS 認知的狀態。
 async function checkAndCloseFormIfNeeded(year) {
+    nianfaiDemandCache.delete(year);
     const { data: items } = await supabase.from('menu_items').select('id, nianfai_sellout_cap')
         .eq('nianfai_year', year).not('nianfai_sellout_cap', 'is', null);
     if (!items || items.length === 0) return;
@@ -2554,6 +2615,55 @@ async function checkAndCloseFormIfNeeded(year) {
         });
     }
 }
+
+// 年菜管理頁：GAS 連線狀態
+app.get('/api/nianfai/gas/status', async (req, res) => {
+    if (!nianfaiGasConfigured()) return res.json({ configured: false });
+    try {
+        const r = await callNianfaiGas('ping', {}, { method: 'GET', timeoutMs: 15000 });
+        res.json({ configured: true, ok: true, spreadsheet: r.spreadsheet, year: r.year, items: r.items, formAccepting: r.formAccepting });
+    } catch (error) {
+        res.json({ configured: true, ok: false, error: error.message });
+    }
+});
+
+// 年菜管理頁：品項／價格／套餐組成／停售上限／取貨日 → Sheet「設定」（品項唯一來源是 WebPOS）
+app.post('/api/nianfai/gas/sync-settings', async (req, res) => {
+    const year = parseInt(req.body?.year, 10);
+    if (!year) return res.status(400).json({ error: '缺少年度' });
+    if (!nianfaiGasConfigured()) return res.status(400).json({ error: 'GAS 網址或密鑰尚未設定' });
+    try {
+        const [{ data: items, error }, { data: stockRows }, { data: settings }] = await Promise.all([
+            supabase.from('menu_items').select('*').eq('nianfai_year', year).order('sort_order'),
+            supabase.from('menu_items').select('id, category').ilike('category', '%庫存%'),
+            supabase.from('app_settings').select('key, value').in('key', [`nianfai_${year}_pickup_dates`, `nianfai_${year}_delivery_period`]),
+        ]);
+        if (error) throw error;
+        const catById = new Map((stockRows || []).map(r => [r.id, r.category]));
+        const nameById = new Map((items || []).map(r => [r.id, r.name]));
+        const kv = Object.fromEntries((settings || []).map(r => [r.key, r.value]));
+        let pickupDates = [];
+        try { pickupDates = JSON.parse(kv[`nianfai_${year}_pickup_dates`] || '[]'); } catch { pickupDates = []; }
+        const payload = {
+            year,
+            shippingFee: 160, freeThreshold: 3000, bundleMax: 8, singleMax: 9,
+            pickupDates,
+            deliveryPeriod: kv[`nianfai_${year}_delivery_period`] || '',
+            items: (items || []).map(r => ({
+                id: r.id, name: r.name, price: r.price,
+                isBundle: !!(r.bundle_composition && r.bundle_composition.length),
+                composition: (r.bundle_composition || []).map(c => ({ id: c.itemId, name: nameById.get(c.itemId) || c.itemId, qty: c.qty })),
+                // 平常也賣＝對應冷凍包庫存（表單題目前面加 *）；年節限定對應年菜庫存
+                regular: !!r.nianfai_stock_ref && catById.get(r.nianfai_stock_ref) !== NIANFAI_STOCK_CATEGORY,
+                cap: r.nianfai_sellout_cap,
+            })),
+        };
+        const r = await callNianfaiGas('syncSettings', payload);
+        res.json({ ok: true, items: r.items });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 
 // 修正單 #01 第 5 節：點單改成兩步——「確認訂購」先保留流水號、印顧客聯（這時候
 // 還沒有真正的 orders/invoices）；「結帳」才真的成立訂單/發票，資料待補（姓名電話
@@ -2816,8 +2926,17 @@ app.post('/api/nianfai/items/:id/finish-production', async (req, res) => {
         const cap = stockRow.stock || 0;
         const { error: updErr } = await supabase.from('menu_items').update({ nianfai_sellout_cap: cap }).eq('id', req.params.id);
         if (updErr) throw updErr;
+        // 有接 GAS：同步寫入 Sheet「設定」的停售上限，GAS 立即檢查、達標就關閉 Google 表單
+        let gasWarning = null;
+        if (nianfaiGasConfigured()) {
+            try {
+                await callNianfaiGas('finishProduction', { itemId: item.id, itemName: item.name, cap });
+            } catch (e) {
+                gasWarning = `WebPOS 已設定上限，但同步到 Sheet 失敗：${e.message}（請稍後到年菜管理頁按「同步品項到 Sheet」）`;
+            }
+        }
         await checkAndCloseFormIfNeeded(parseInt(year, 10));
-        res.json({ ok: true, cap });
+        res.json({ ok: true, cap, gasWarning });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -2826,8 +2945,8 @@ app.get('/api/nianfai/demand', async (req, res) => {
     const { year } = req.query;
     if (!year) return res.status(400).json({ error: '缺少年度' });
     try {
-        const demand = await computeNianfaiDemand(parseInt(year, 10));
-        res.json({ demand, source: 'webpos_onsite_only' });
+        const detail = await computeNianfaiDemandDetail(parseInt(year, 10));
+        res.json(detail);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

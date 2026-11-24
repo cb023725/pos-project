@@ -4,7 +4,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import useDialog from '../components/useDialog';
-import { getSettingValue, saveSettingValue, getMenuItems, getInventoryItems, addMenuItem, updateMenuItem, getNianfaiItems, finishNianfaiProduction } from '../db';
+import { getSettingValue, saveSettingValue, getMenuItems, getInventoryItems, addMenuItem, updateMenuItem, getNianfaiItems, finishNianfaiProduction, getNianfaiDemand, getNianfaiGasStatus, syncNianfaiSettingsToSheet } from '../db';
 
 const STATUS_ORDER = ['preparing', 'selling', 'closed', 'archived'];
 const STATUS_LABELS = { preparing: '準備中', selling: '開賣中', closed: '收單後', archived: '已封存（平常營業）' };
@@ -26,6 +26,14 @@ const NianfaiAdminPage = () => {
     const [isInitializing, setIsInitializing] = useState(false);
     const [isToggling, setIsToggling] = useState(false);
     const [finishingId, setFinishingId] = useState(null);
+    const [gas, setGas] = useState(null);            // GAS 連線狀態（null = 檢查中）
+    const [syncing, setSyncing] = useState(false);
+    const [demandInfo, setDemandInfo] = useState(null); // { source, updatedAt, error }
+
+    const loadGas = useCallback(async () => {
+        setGas(null);
+        try { setGas(await getNianfaiGasStatus()); } catch (e) { setGas({ configured: true, ok: false, error: e.message }); }
+    }, []);
 
     const load = useCallback(async () => {
         const year = await getSettingValue('nianfai_active_year', null);
@@ -39,6 +47,7 @@ const NianfaiAdminPage = () => {
             setFormClosed(closed === 'true');
             const nfItems = await getNianfaiItems(activeYearNum).catch(() => []);
             setInventoryItems(nfItems);
+            getNianfaiDemand(activeYearNum).then(d => setDemandInfo({ source: d.source, updatedAt: d.updatedAt, error: d.error })).catch(() => setDemandInfo(null));
         } else {
             setStatus('archived');
             setFormClosed(false);
@@ -48,7 +57,22 @@ const NianfaiAdminPage = () => {
         setItems(activeYearNum ? all.filter(i => i.category === '年菜' && i.nianfaiYear === activeYearNum) : []);
     }, []);
 
-    useEffect(() => { load(); }, [load]);
+    useEffect(() => { load(); loadGas(); }, [load, loadGas]);
+
+    // WebPOS 品項／價格／套餐組成／停售上限／取貨日 → Sheet「設定」；之後在 Sheet「年菜工具 → 同步到表單」更新題目
+    const handleSyncSheet = async () => {
+        if (!await showConfirm(`把 ${activeYear} 年菜品項、價格、取貨日寫入 Sheet「設定」`, { title: '同步品項到 Sheet', icon: 'info', confirmText: '同步' })) return;
+        setSyncing(true);
+        try {
+            const r = await syncNianfaiSettingsToSheet(activeYear);
+            await showAlert(`已同步 ${r.items} 個品項\n請到 Sheet「年菜工具 → 同步到表單」更新題目`, { title: '同步完成', icon: 'success' });
+            loadGas();
+        } catch (e) {
+            await showAlert(e.message, { title: '同步失敗', icon: 'warning' });
+        } finally {
+            setSyncing(false);
+        }
+    };
 
     // 新年度初始化＝真的複製：去年品項複製成新的 menu_items（新 id、新 nianfai_year），
     // 套餐的 bundle_composition 重新指向新品項 id；製作入庫/停售上限/流水號都歸零；
@@ -134,8 +158,9 @@ const NianfaiAdminPage = () => {
         if (!await showConfirm(`停售上限 ${item.nianfaiProductionQty || 0} 份`, { title: `${item.name} 製作完成`, icon: 'warning', note: '設定後不能再調整', confirmText: '製作完成' })) return;
         setFinishingId(item.id);
         try {
-            await finishNianfaiProduction(item.id, activeYear);
+            const r = await finishNianfaiProduction(item.id, activeYear);
             await load();
+            if (r?.gasWarning) await showAlert(r.gasWarning, { title: 'Sheet 同步失敗', icon: 'warning' });
         } catch (e) {
             await showAlert(e.message, { title: '設定失敗', icon: 'warning' });
         } finally {
@@ -217,9 +242,41 @@ const NianfaiAdminPage = () => {
 
             {activeYear && (
                 <div className="bg-white rounded-xl shadow p-6 mt-5">
-                    <h3 className="text-xl font-bold text-gray-700 mb-3">4. 年菜庫存</h3>
+                    <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-xl font-bold text-gray-700">4. Google 表單／Sheet</h3>
+                        <button onClick={loadGas} className="text-sm font-bold text-gray-500 hover:text-gray-700">重新檢查</button>
+                    </div>
+                    {gas === null ? (
+                        <p className="text-gray-400">檢查連線中...</p>
+                    ) : !gas.configured ? (
+                        <p className="text-gray-500">尚未設定 GAS 網址與密鑰（NIANFAI_GAS_URL／NIANFAI_GAS_SECRET）。現場單會停在「待傳送」，設定後自動補送。</p>
+                    ) : gas.ok ? (
+                        <div className="space-y-1 text-gray-700">
+                            <p><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500 mr-2" />已連線：<span className="font-bold">{gas.spreadsheet}</span></p>
+                            <p className="text-sm text-gray-500">
+                                Sheet 年度 {gas.year || '（未同步）'}・設定品項 {gas.items} 項・表單
+                                <span className={`font-bold ml-1 ${gas.formAccepting ? 'text-green-600' : 'text-red-600'}`}>{gas.formAccepting ? '開放中' : '已關閉'}</span>
+                            </p>
+                        </div>
+                    ) : (
+                        <p className="text-red-600 font-bold"><span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500 mr-2" />連線失敗：{gas.error}</p>
+                    )}
+                    {gas?.configured && (
+                        <button onClick={handleSyncSheet} disabled={syncing || !gas.ok}
+                            className="mt-4 px-4 py-2.5 rounded-lg bg-gray-700 text-white font-bold hover:bg-gray-800 disabled:opacity-40">
+                            {syncing ? '同步中...' : '同步品項到 Sheet'}
+                        </button>
+                    )}
+                </div>
+            )}
+
+            {activeYear && (
+                <div className="bg-white rounded-xl shadow p-6 mt-5">
+                    <h3 className="text-xl font-bold text-gray-700 mb-3">5. 年菜庫存</h3>
                     <p className="text-sm text-gray-500 mb-4">
-                        訂購需求目前僅計算 WebPOS 現場單（GAS 還沒部署，不含線上表單），實際需求會比這裡顯示的更多。
+                        {demandInfo?.source === 'sheet'
+                            ? `訂購需求＝Sheet 總訂購量（線上＋已送出的現場單）＋WebPOS 尚未送出的現場單。Sheet 更新時間 ${demandInfo.updatedAt || ''}`
+                            : `訂購需求僅含現場單（${demandInfo?.error ? `讀取 Sheet 失敗：${demandInfo.error}` : '尚未連結 Google Sheet'}），不含線上表單，實際需求會更多。`}
                     </p>
 
                     {seasonalItems.length > 0 && (
