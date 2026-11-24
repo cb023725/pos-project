@@ -2513,7 +2513,13 @@ async function callNianfaiGas(action, payload = {}, { method = 'POST', timeoutMs
     let json = null;
     try { json = JSON.parse(text); } catch { /* GAS 錯誤頁是 HTML */ }
     if (!resp.ok || !json) throw new Error(`GAS 回應異常（HTTP ${resp.status}）`);
-    if (!json.ok) throw new Error(json.error || 'GAS 回報失敗');
+    if (!json.ok) {
+        // 新功能呼叫到舊版 GAS：提示更新（Apps Script 網址只跑部署作業指定的版本，不會自動用最新存檔）
+        if (/未知的 action/.test(json.error || '')) {
+            throw new Error(`${json.error}——Google 端的 GAS 不是最新版，請更新程式並「管理部署作業 → 編輯 → 新版本」重新部署`);
+        }
+        throw new Error(json.error || 'GAS 回報失敗');
+    }
     return json;
 }
 
