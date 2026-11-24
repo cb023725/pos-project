@@ -10,6 +10,7 @@ function nfComputeDemand_() {
   var data = nfReadResponses_();
   var cols = nfMapColumns_(data.headers, settings);
   var demandByName = {};
+  var orderedByName = {}; // 各品項被點的原始份數（套餐不拆，給年菜庫存「套餐」列顯示份數）
   var onsiteSeqs = [];
   var orderCount = 0;
   data.rows.forEach(function (row, i) {
@@ -18,6 +19,7 @@ function nfComputeDemand_() {
     orderCount++;
     if (order.isOnsite && order.seqLabel) onsiteSeqs.push(order.seqLabel);
     order.items.forEach(function (x) {
+      orderedByName[x.item.name] = (orderedByName[x.item.name] || 0) + x.qty;
       if (x.item.isBundle && x.item.composition.length) {
         x.item.composition.forEach(function (c) {
           demandByName[c.item.name] = (demandByName[c.item.name] || 0) + c.qty * x.qty;
@@ -28,10 +30,12 @@ function nfComputeDemand_() {
     });
   });
   var demandById = {};
+  var orderedById = {};
   settings.items.forEach(function (it) {
     if (it.id && demandByName[it.name]) demandById[it.id] = demandByName[it.name];
+    if (it.id && orderedByName[it.name]) orderedById[it.id] = orderedByName[it.name];
   });
-  return { settings: settings, demandByName: demandByName, demandById: demandById, onsiteSeqs: onsiteSeqs, orderCount: orderCount };
+  return { settings: settings, demandByName: demandByName, demandById: demandById, orderedById: orderedById, onsiteSeqs: onsiteSeqs, orderCount: orderCount };
 }
 
 function nfCheckSellout_(reason) {

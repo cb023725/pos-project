@@ -1,14 +1,26 @@
-// src/components/NianfaiGoogleCard.js — 年菜管理頁「Google 表單／Sheet」
+// src/components/NianfaiGoogleCard.js — 年菜管理頁「Google 表單／Sheet」（步驟式）
 // GAS 是一支獨立的「年菜系統」專案（gas/nianfai/），每年由這裡一鍵建立該年度的試算表與表單：
-//   1. 建立 Google 試算表與表單（需先設定取貨、寄出日期與預購截止日）
-//   2. Yw 到表單上 review、修正說明文字與圖片（不要改題目名稱、選項、單點品名）
-//   3. 檢查表單對應 → 通過才能開賣（年菜管理頁的開賣按鈕會擋）
-// 之後品項、價格、日期有變動：同步品項到 Sheet → 同步到表單（先看差異）→ 再檢查一次。
+//   ① 建立試算表與表單 → ② 檢查、修改表單文案 → ③ 檢查表單對應 → ④ 真實測試 → ⑤ 測試完畢，正式上線
+// 正式上線會清空所有測試資料（Google 表單回覆、表單回應、WebPOS 年菜單、流水號歸 27001），每年只能一次。
 import React, { useState, useEffect, useCallback } from 'react';
 import {
     getNianfaiGasStatus, createNianfaiSheet, syncNianfaiSettingsToSheet,
     nianfaiFormSync, checkNianfaiForm, protectNianfaiSheet, rebuildNianfaiTabs,
+    goLiveNianfai, backToTestingNianfai,
 } from '../db';
+
+const Step = ({ n, title, done, active, children }) => (
+    <div className={`flex gap-3 ${active || done ? '' : 'opacity-50'}`}>
+        <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center font-black text-sm
+            ${done ? 'bg-[#4A9A7A] text-white' : active ? 'bg-[#C1032F] text-white' : 'bg-gray-200 text-gray-500'}`}>
+            {done ? '✓' : n}
+        </div>
+        <div className="flex-1 pb-4 border-b border-gray-100 last:border-0">
+            <p className="font-bold text-gray-800">{title}</p>
+            <div className="text-sm text-gray-600 mt-1 space-y-2">{children}</div>
+        </div>
+    </div>
+);
 
 export default function NianfaiGoogleCard({ year, number, datesReady, showAlert, showConfirm, onStatusChange }) {
     const [gas, setGas] = useState(null); // null = 檢查中
@@ -31,16 +43,36 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
 
     const handleCreate = () => run('create', async () => {
         if (!await showConfirm(`在雲端硬碟建立「${year} 年菜訂單」試算表與預購表單`, {
-            title: '建立 Google 試算表與表單', icon: 'info', note: '建立後請到表單上檢查、修改文案與圖片', confirmText: '建立',
+            title: '建立 Google 試算表與表單', icon: 'info', note: '建立後是「測試中」，可以真實送單測試', confirmText: '建立',
         })) return;
         await createNianfaiSheet(year);
-        await showAlert('請打開表單檢查文案、上傳圖片，完成後按「檢查表單對應」', { title: '已建立', icon: 'success' });
+        await showAlert('請進行第 ② 步：打開表單檢查文案、上傳圖片', { title: '已建立', icon: 'success' });
+    });
+
+    const handleCheck = () => run('check', async () => {
+        const r = await checkNianfaiForm(year);
+        if (r.passed) await showAlert('每個品項與欄位都對應正確', { title: '檢查通過', icon: 'success' });
+        else await showAlert('請修正以下問題後再檢查一次', { title: '檢查未通過', icon: 'warning', note: r.problems.join('\n') });
+    });
+
+    const handleGoLive = () => run('golive', async () => {
+        if (!await showConfirm(`${year} 年菜測試完畢，正式上線`, {
+            title: '正式上線', icon: 'danger', confirmText: '清空並上線', danger: true,
+            note: '會清空：Google 表單所有回覆、試算表表單回應與修改紀錄、WebPOS 這個年度的年菜單與發票，流水號從 ' + (year % 100) + '001 重新開始。每個年度只能做一次，無法復原。',
+        })) return;
+        const r = await goLiveNianfai(year);
+        await showAlert(`已清空 ${r.sheetCleared} 筆表單回應、${r.clearedOrders} 張 WebPOS 年菜單\n正式客人從表單回應第 2 列開始`, { title: '已正式上線', icon: 'success' });
+    });
+
+    const handleBackToTesting = () => run('back', async () => {
+        if (!await showConfirm('把年度改回「測試中」（只有測試環境有這個按鈕）', { title: '回到測試', icon: 'warning', confirmText: '回到測試' })) return;
+        await backToTestingNianfai(year);
     });
 
     const handleSyncSettings = () => run('sync', async () => {
         if (!await showConfirm(`把 ${year} 年菜品項、價格、日期寫入「設定」分頁`, { title: '同步品項到 Sheet', icon: 'info', confirmText: '同步' })) return;
         const r = await syncNianfaiSettingsToSheet(year);
-        await showAlert(`已同步 ${r.items} 個品項\n如果品名、價格或取貨日有變動，請再按「同步到表單」`, { title: '同步完成', icon: 'success' });
+        await showAlert(`已同步 ${r.items} 個品項\n品名、價格或取貨日有變動的話，接著按「同步到表單」`, { title: '同步完成', icon: 'success' });
     });
 
     const handleFormSync = () => run('form', async () => {
@@ -56,15 +88,10 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
         await showAlert('已更新表單，請再按「檢查表單對應」', { title: '已套用', icon: 'success' });
     });
 
-    const handleCheck = () => run('check', async () => {
-        const r = await checkNianfaiForm(year);
-        if (r.passed) await showAlert('每個品項與欄位都對應正確，可以開賣', { title: '檢查通過', icon: 'success' });
-        else await showAlert('請修正以下問題後再檢查一次', { title: '檢查未通過', icon: 'warning', note: r.problems.join('\n') });
-    });
-
     const handleRebuild = () => run('rebuild', async () => {
         if (!await showConfirm('依目前品項重建「訂單整理」「供需庫存」「備料表」「修改紀錄」', {
-            title: '重建分頁', icon: 'warning', note: '訂單整理的手動欄（付款、取貨、出貨日、託運單號）會清空，修改紀錄也會清空；表單回應不受影響', confirmText: '重建', danger: true,
+            title: '重建分頁', icon: 'warning', confirmText: '重建', danger: true,
+            note: '訂單整理的手動欄（付款、取貨、出貨日、託運單號）與修改紀錄會清空；表單回應不受影響',
         })) return;
         await rebuildNianfaiTabs(year);
         await showAlert('分頁已重建', { title: '完成', icon: 'success' });
@@ -75,61 +102,117 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
         await showAlert('匯款資訊只有你能改；表單回應與品項表修改前會跳警告', { title: '已重新套用保護範圍', icon: 'success' });
     });
 
-    const btn = 'px-4 py-2.5 rounded-lg font-bold disabled:opacity-40';
+    const btn = 'px-4 py-2 rounded-lg font-bold text-sm disabled:opacity-40';
     const link = 'text-[#4A9A7A] font-bold underline';
     const fc = gas?.formCheck;
+    const created = !!gas?.created;
+    const live = gas?.phase === 'live';
+    const checked = !!fc?.passed;
 
     return (
         <div className="bg-white rounded-xl shadow p-6 mt-5">
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center justify-between mb-1">
                 <h3 className="text-xl font-bold text-gray-700">{number}. Google 表單／Sheet</h3>
-                <button onClick={load} className="text-sm font-bold text-gray-500 hover:text-gray-700">重新檢查</button>
+                <button onClick={load} className="text-sm font-bold text-gray-500 hover:text-gray-700">重新整理</button>
             </div>
+            <p className="text-sm text-gray-500 mb-4">線上預購表單與訂單試算表。照下面的步驟完成，第 ⑤ 步正式上線後才能開賣。</p>
 
             {gas === null ? (
                 <p className="text-gray-400">檢查連線中...</p>
             ) : !gas.configured ? (
                 <p className="text-gray-500">尚未設定 GAS 網址與密鑰（NIANFAI_GAS_URL／NIANFAI_GAS_SECRET）。現場單會停在「待傳送」，設定後自動補送。</p>
             ) : !gas.ok ? (
-                <p className="text-red-600 font-bold"><span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500 mr-2" />連線失敗：{gas.error}</p>
-            ) : !gas.created ? (
-                <div>
-                    <p className="text-gray-700"><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500 mr-2" />年菜系統已連線，{year} 年的試算表與表單還沒建立。</p>
-                    {!datesReady && <p className="text-sm font-bold text-red-600 mt-2">請先在上方設定取貨、寄出日期與預購截止日</p>}
-                    <button onClick={handleCreate} disabled={!!busy || !datesReady} className={`${btn} mt-4 bg-[#4A9A7A] text-white`}>
-                        {busy === 'create' ? '建立中（約 1 分鐘）...' : '建立 Google 試算表與表單'}
-                    </button>
-                </div>
+                <p className="text-red-600 font-bold">年菜系統連線失敗：{gas.error}</p>
             ) : (
-                <div className="space-y-3">
-                    <div className="space-y-1 text-gray-700">
-                        <p><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500 mr-2" />{gas.spreadsheet}{gas.env === 'dev' && <span className="ml-2 text-xs text-orange-600 font-bold">測試環境</span>}</p>
-                        <p className="text-sm">
-                            <a href={gas.spreadsheetUrl} target="_blank" rel="noreferrer" className={link}>開啟試算表</a>
-                            <span className="mx-2 text-gray-300">｜</span>
-                            <a href={gas.formEditUrl} target="_blank" rel="noreferrer" className={link}>編輯表單</a>
-                            <span className="mx-2 text-gray-300">｜</span>
-                            <a href={gas.formUrl} target="_blank" rel="noreferrer" className={link}>表單預覽</a>
-                        </p>
-                        <p className="text-sm text-gray-500">
-                            設定品項 {gas.items} 項・表單
-                            <span className={`font-bold ml-1 ${gas.formAccepting ? 'text-green-600' : 'text-red-600'}`}>{gas.formAccepting ? '開放中' : '已關閉'}</span>
-                        </p>
-                        <p className={`text-sm font-bold ${fc?.passed ? 'text-green-700' : 'text-red-600'}`}>
-                            表單對應：{fc ? (fc.passed ? `已通過（${new Date(fc.at).toLocaleString('zh-TW', { hour12: false })}）` : '未通過，請修正後再檢查') : '尚未檢查，開賣前必須通過'}
-                        </p>
+                <>
+                    {created && (
+                        <div className="flex flex-wrap items-center gap-2 mb-4 text-sm">
+                            <span className={`px-2.5 py-1 rounded-full font-black ${live ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
+                                {live ? `已正式上線（${gas.liveAt || ''}）` : '測試中'}
+                            </span>
+                            <span className={`px-2.5 py-1 rounded-full font-bold ${gas.formAccepting ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                                表單{gas.formAccepting ? '開放中' : '已關閉'}
+                            </span>
+                            {gas.env === 'dev' && <span className="px-2.5 py-1 rounded-full font-bold bg-gray-100 text-gray-500">測試環境</span>}
+                        </div>
+                    )}
+
+                    <div className="space-y-4">
+                        <Step n={1} title="建立試算表與表單" done={created} active={!created}>
+                            {created ? (
+                                <p>已建立「{gas.spreadsheet}」（雲端硬碟「咕咕義年菜{gas.env === 'dev' ? '（測試）' : ''}」資料夾）</p>
+                            ) : (
+                                <>
+                                    <p>依 WebPOS 的品項、價格、日期，照 2026 年的格式建立預購表單與訂單試算表（約 1 分鐘）。</p>
+                                    {!datesReady && <p className="font-bold text-red-600">請先在上方設定取貨、寄出日期與預購截止日</p>}
+                                    <button onClick={handleCreate} disabled={!!busy || !datesReady} className={`${btn} bg-[#4A9A7A] text-white`}>
+                                        {busy === 'create' ? '建立中...' : '建立試算表與表單'}
+                                    </button>
+                                </>
+                            )}
+                        </Step>
+
+                        <Step n={2} title="檢查、修改表單文案與圖片" done={created && checked} active={created}>
+                            <p>
+                                <a href={gas.formEditUrl} target="_blank" rel="noreferrer" className={link}>編輯表單</a>
+                                <span className="mx-2 text-gray-300">｜</span>
+                                <a href={gas.formUrl} target="_blank" rel="noreferrer" className={link}>預覽表單</a>
+                                <span className="mx-2 text-gray-300">｜</span>
+                                <a href={gas.spreadsheetUrl} target="_blank" rel="noreferrer" className={link}>開啟試算表</a>
+                            </p>
+                            <p>可以改：說明文字、段落說明、圖片、主題顏色。<span className="text-red-600 font-bold">不要改：題目名稱、選項、單點品名</span>（改了第 ③ 步會擋下）。</p>
+                        </Step>
+
+                        <Step n={3} title="檢查表單對應" done={checked} active={created}>
+                            <p>確認每個品項、每個欄位在表單與試算表都對得上。改過表單或品項後要再檢查一次。</p>
+                            <p className={`font-bold ${checked ? 'text-green-700' : 'text-red-600'}`}>
+                                {fc ? (checked ? `已通過（${new Date(fc.at).toLocaleString('zh-TW', { hour12: false })}）` : '未通過') : '尚未檢查'}
+                            </p>
+                            <button onClick={handleCheck} disabled={!!busy || !created} className={`${btn} bg-[#4A9A7A] text-white`}>{busy === 'check' ? '檢查中...' : '檢查表單對應'}</button>
+                        </Step>
+
+                        <Step n={4} title="真實測試" done={live} active={created && !live}>
+                            <p>用 WebPOS 年菜點單、補資料送出，也可以直接在表單網頁填幾張，確認：表單回應有新增、確認信有收到、訂單整理／供需庫存／備料表數字正確。</p>
+                        </Step>
+
+                        <Step n={5} title="測試完畢，正式上線" done={live} active={created && checked && !live}>
+                            {live ? (
+                                <>
+                                    <p>已清空測試資料，正式客人從表單回應第 2 列開始，WebPOS 流水號從 {year % 100}001 開始。</p>
+                                    {gas.env === 'dev' && (
+                                        <button onClick={handleBackToTesting} disabled={!!busy} className={`${btn} bg-gray-100 text-gray-600`}>{busy === 'back' ? '處理中...' : '回到測試（只限測試環境）'}</button>
+                                    )}
+                                </>
+                            ) : (
+                                <>
+                                    <p>清空所有測試資料（表單回覆、表單回應、WebPOS 年菜單與發票），流水號歸 {year % 100}001。<span className="font-bold">每年只能一次。</span></p>
+                                    <button onClick={handleGoLive} disabled={!!busy || !created || !checked} className={`${btn} bg-[#C1032F] text-white`}>
+                                        {busy === 'golive' ? '處理中...' : '測試完畢，正式上線'}
+                                    </button>
+                                </>
+                            )}
+                        </Step>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                        <button onClick={handleCheck} disabled={!!busy} className={`${btn} bg-[#4A9A7A] text-white`}>{busy === 'check' ? '檢查中...' : '檢查表單對應'}</button>
-                        <button onClick={handleSyncSettings} disabled={!!busy} className={`${btn} bg-gray-700 text-white`}>{busy === 'sync' ? '同步中...' : '同步品項到 Sheet'}</button>
-                        <button onClick={handleFormSync} disabled={!!busy} className={`${btn} bg-gray-700 text-white`}>{busy === 'form' ? '處理中...' : '同步到表單'}</button>
-                        <button onClick={handleProtect} disabled={!!busy} className={`${btn} bg-gray-100 text-gray-600`}>{busy === 'protect' ? '處理中...' : '重新套用保護範圍'}</button>
-                        <button onClick={handleRebuild} disabled={!!busy} className={`${btn} bg-gray-100 text-gray-600`}>{busy === 'rebuild' ? '重建中...' : '重建分頁'}</button>
-                    </div>
-                    <p className="text-xs text-gray-400">
-                        可以自由修改表單的說明文字、段落說明、圖片與主題；請不要改題目名稱、選項與單點品名（改了「檢查表單對應」會擋下）。
-                    </p>
-                </div>
+
+                    {created && (
+                        <details className="mt-4 bg-gray-50 rounded-lg p-3">
+                            <summary className="font-bold text-gray-700 cursor-pointer">維護工具（品項、價格、日期有變動時）</summary>
+                            <div className="mt-3 space-y-3 text-sm">
+                                {[
+                                    ['sync', '同步品項到 Sheet', '品項、價格、套餐組成、日期、製作入庫改了之後，寫入試算表「設定」。', handleSyncSettings],
+                                    ['form', '同步到表單', '品名、價格、取貨日改了之後，更新表單題目與選項（會先列出差異）。完成後再做第 ③ 步。', handleFormSync],
+                                    ['rebuild', '重建分頁', '新增或刪除品項後，重建訂單整理／供需庫存／備料表的欄位。會清空訂單整理的手動欄，正式上線後請盡量避免。', handleRebuild],
+                                    ['protect', '重新套用保護範圍', '保護範圍被改掉或新增匯款欄位時使用。', handleProtect],
+                                ].map(([key, label, desc, fn]) => (
+                                    <div key={key} className="flex items-start gap-3">
+                                        <button onClick={fn} disabled={!!busy} className={`${btn} bg-white border border-gray-300 text-gray-700 flex-shrink-0 w-40`}>{busy === key ? '處理中...' : label}</button>
+                                        <p className="text-gray-500 pt-1.5">{desc}</p>
+                                    </div>
+                                ))}
+                            </div>
+                        </details>
+                    )}
+                </>
             )}
         </div>
     );

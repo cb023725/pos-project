@@ -2563,7 +2563,8 @@ setInterval(async () => {
 
 // WebPOS 現場單需求：只算發票有效（未作廢）的訂單，套餐依 bundle_composition 展開成單品。
 // excludeSeqLabels：已經送進表單的流水號（這些從 Sheet 算，不再從 WebPOS 算，避免重複）
-async function computeWebposNianfaiDemand(year, excludeSeqLabels = new Set()) {
+// ordered（選填）：各品項被點的原始份數（套餐不拆），給年菜庫存的套餐列顯示份數
+async function computeWebposNianfaiDemand(year, excludeSeqLabels = new Set(), ordered = null) {
     const { data: nfOrders } = await supabase.from('nianfai_orders').select('order_id, seq_no').eq('year', year);
     const demand = {};
     const seqByOrder = new Map((nfOrders || []).map(o => [o.order_id, nianfaiSeqLabel(year, o.seq_no)]));
@@ -2580,6 +2581,7 @@ async function computeWebposNianfaiDemand(year, excludeSeqLabels = new Set()) {
         if (!validOrderIds.has(o.id)) continue; // 發票已作廢，不計入
         for (const it of (o.items || [])) {
             const qty = it.quantity || 1;
+            if (ordered) ordered[it.id] = (ordered[it.id] || 0) + qty;
             const bundle = bundleMap.get(it.id);
             if (bundle && bundle.length > 0) {
                 for (const comp of bundle) demand[comp.itemId] = (demand[comp.itemId] || 0) + comp.qty * qty;
@@ -2610,16 +2612,19 @@ async function computeNianfaiDemandDetail(year) {
             }
             const sheetDemand = cached.sheet.demandById || {};
             const sent = new Set(cached.sheet.onsiteSeqs || []);
-            const webpos = await computeWebposNianfaiDemand(year, sent);
+            const ordered = { ...(cached.sheet.orderedById || {}) };
+            const webpos = await computeWebposNianfaiDemand(year, sent, ordered);
             const demand = { ...sheetDemand };
             for (const [id, q] of Object.entries(webpos)) demand[id] = (demand[id] || 0) + q;
-            return { demand, source: 'sheet', formAccepting: cached.sheet.formAccepting, updatedAt: cached.sheet.updatedAt };
+            return { demand, ordered, source: 'sheet', formAccepting: cached.sheet.formAccepting, updatedAt: cached.sheet.updatedAt };
         } catch (error) {
             console.error('[年菜] 讀取 Sheet 需求失敗，暫用 WebPOS 現場單：', error.message);
-            return { demand: await computeWebposNianfaiDemand(year), source: 'webpos_onsite_only', error: error.message };
+            const ordered = {};
+            return { demand: await computeWebposNianfaiDemand(year, new Set(), ordered), ordered, source: 'webpos_onsite_only', error: error.message };
         }
     }
-    return { demand: await computeWebposNianfaiDemand(year), source: 'webpos_onsite_only' };
+    const ordered = {};
+    return { demand: await computeWebposNianfaiDemand(year, new Set(), ordered), ordered, source: 'webpos_onsite_only' };
 }
 async function computeNianfaiDemand(year) {
     return (await computeNianfaiDemandDetail(year)).demand;
@@ -2703,7 +2708,11 @@ app.get('/api/nianfai/gas/status', async (req, res) => {
         const { data: chk } = await supabase.from('app_settings').select('value').eq('key', `nianfai_${year}_form_check`).maybeSingle();
         let formCheck = null;
         try { formCheck = chk ? JSON.parse(chk.value) : null; } catch { formCheck = null; }
-        res.json({ configured: true, ok: true, env: NIANFAI_GAS_ENV, ...r, formCheck });
+        // 測試中／已正式上線：以 GAS 記錄為準，同步一份到 app_settings
+        if (year && r.created) {
+            await supabase.from('app_settings').upsert({ key: `nianfai_${year}_phase`, value: r.live ? 'live' : 'testing', updated_at: new Date().toISOString() });
+        }
+        res.json({ configured: true, ok: true, env: NIANFAI_GAS_ENV, ...r, phase: r.created ? (r.live ? 'live' : 'testing') : null, formCheck });
     } catch (error) {
         res.json({ configured: true, ok: false, error: error.message });
     }
@@ -2764,6 +2773,63 @@ app.post('/api/nianfai/gas/diagnose', nianfaiGasRoute(async (year) => {
     const r = await callNianfaiGas('diagnose', { year }, { timeoutMs: 60000 });
     return { ok: true, result: r.result };
 }));
+
+// 測試完畢，正式上線：Google 端清空表單回覆與表單回應（正式客人從第 2 列開始），WebPOS 清空該年度
+// 年菜單／發票／保留流水號、流水號歸 1（27001）、清掉測試時的停售上限。每個年度只能做一次。
+app.post('/api/nianfai/gas/go-live', nianfaiGasRoute(async (year) => {
+    const { data: chk } = await supabase.from('app_settings').select('value').eq('key', `nianfai_${year}_form_check`).maybeSingle();
+    let formCheck = null;
+    try { formCheck = chk ? JSON.parse(chk.value) : null; } catch { formCheck = null; }
+    if (!formCheck?.passed) throw new Error('請先通過「檢查表單對應」');
+    const { data: st } = await supabase.from('app_settings').select('value').eq('key', `nianfai_${year}_status`).maybeSingle();
+    const accepting = st?.value === 'selling'; // 正式上線後表單開關跟著開賣狀態
+    const g = await callNianfaiGas('goLive', { year, accepting }, { timeoutMs: 120000 });
+    const cleared = await clearNianfaiYearOrders(year);
+    await supabase.from('menu_items').update({ nianfai_sellout_cap: null }).eq('nianfai_year', year);
+    const now = new Date().toISOString();
+    await supabase.from('app_settings').upsert([
+        { key: `nianfai_${year}_phase`, value: 'live', updated_at: now },
+        { key: `nianfai_${year}_next_seq`, value: '1', updated_at: now },
+        { key: `nianfai_${year}_form_closed`, value: 'false', updated_at: now },
+    ]);
+    nianfaiDemandCache.delete(year);
+    await callNianfaiGas('syncSettings', await buildNianfaiSheetPayload(year)).catch(() => null); // 停售上限清空同步到「設定」
+    return { ok: true, sheetCleared: g.result?.cleared || 0, liveAt: g.result?.liveAt, ...cleared };
+}));
+
+// 只限 dev：回到測試中，方便重複測試正式上線流程
+app.post('/api/nianfai/gas/back-to-testing', nianfaiGasRoute(async (year) => {
+    if (!IS_DEV) throw new Error('只有測試環境可以回到測試');
+    await callNianfaiGas('backToTesting', { year });
+    await supabase.from('app_settings').upsert({ key: `nianfai_${year}_phase`, value: 'testing', updated_at: new Date().toISOString() });
+    return { ok: true };
+}));
+
+// 開賣／收單時開關 Google 表單（只在正式上線後；測試中表單保持開放）
+app.post('/api/nianfai/gas/set-accepting', nianfaiGasRoute(async (year, req) => {
+    const r = await callNianfaiGas('setAccepting', { year, accepting: !!req.body.accepting });
+    nianfaiDemandCache.delete(year);
+    return { ok: true, formAccepting: r.formAccepting };
+}));
+
+// 刪除某年度所有年菜單（訂單／發票／明細）與保留流水號
+async function clearNianfaiYearOrders(year) {
+    const { data: nfRows } = await supabase.from('nianfai_orders').select('order_id').eq('year', year);
+    const orderIds = (nfRows || []).map(r => r.order_id);
+    if (orderIds.length) {
+        const { data: invs } = await supabase.from('invoices').select('id').in('order_id', orderIds);
+        const invIds = (invs || []).map(i => i.id);
+        if (invIds.length) {
+            await supabase.from('adjustments').delete().in('original_invoice_id', invIds);
+            await supabase.from('invoices').delete().in('id', invIds);
+        }
+        await supabase.from('nianfai_orders').delete().in('order_id', orderIds);
+        await supabase.from('orders').delete().in('id', orderIds);
+    }
+    const { data: resv } = await supabase.from('nianfai_seq_reservations').select('id').eq('year', year);
+    if ((resv || []).length) await supabase.from('nianfai_seq_reservations').delete().in('id', resv.map(r => r.id));
+    return { clearedOrders: orderIds.length, clearedReservations: (resv || []).length };
+}
 
 // 重新套用保護範圍
 app.post('/api/nianfai/gas/protect', nianfaiGasRoute(async (year) => {
@@ -3072,7 +3138,7 @@ app.get('/api/nianfai/items', async (req, res) => {
     // 讓年菜 tab 用 MenuCard 呈現時跟一般營業餐點的庫存徽章/售完樣式完全比照
     const invMap = {};
     (allItems || []).forEach(r => { if ((r.category || '').includes('庫存')) invMap[r.id] = r.stock; });
-    const demand = await computeNianfaiDemand(yearNum);
+    const { demand, ordered } = await computeNianfaiDemandDetail(yearNum);
     const byId = new Map((data || []).map(r => [r.id, r]));
     const isSoldOut = (r) => {
         const bundle = r.bundle_composition;
@@ -3103,6 +3169,7 @@ app.get('/api/nianfai/items', async (req, res) => {
             nianfaiProductionQty: isSeasonalStock ? refStock : null,
             nianfaiSelloutCap: r.nianfai_sellout_cap,
             demand: demand[r.id] || 0,
+            ordered: ordered[r.id] || 0, // 原始點購份數（套餐不拆）
             soldOut: isSoldOut(r),
             // 平常也賣的品項：對應冷凍包庫存只警示，不走停售上限機制；年節限定品項才用製作入庫/完成
             isRegularSellingItem: !!stockRef && !isSeasonalStock,

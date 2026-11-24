@@ -44,7 +44,8 @@ function nfCreateYear_(p) {
   nfEnsureStatusColumn_(respSheet);
   nfEnsureEditedColumn_(respSheet);
 
-  var meta = { ssId: ss.getId(), formId: form.getId(), folderId: folder.getId(), ids: ids.ids, gridRows: ids.gridRows, createdAt: nfFormatTimestamp_(new Date()) };
+  // 建立後是「測試中」：表單開放，可以真實送單測試；測試完畢由 WebPOS「正式上線」清空（nfGoLive_）
+  var meta = { ssId: ss.getId(), formId: form.getId(), folderId: folder.getId(), ids: ids.ids, gridRows: ids.gridRows, createdAt: nfFormatTimestamp_(new Date()), live: false };
   NF_CTX.meta = meta;
   nfSaveMeta_(env, year, meta);
 

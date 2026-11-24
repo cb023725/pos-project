@@ -166,6 +166,11 @@ run('clear whole row → no 已修改', () => { const lc = respSheet.getLastColu
 run('onEdit response log', () => { respSheet.getRange(2, 2).setValue('改'); ctx.nfOnEdit({ range: respSheet.getRange(2, 2), source: ctx.NF_CTX.ss, oldValue: '原' }); return ctx.NF_CTX.ss.getSheetByName('修改紀錄').getRange(2, 1, 1, 6).getValues()[0]; });
 run('resetTestData', () => ctx.nfResetTestData_());
 run('submit after reset (same seq, new order)', () => ctx.nfSubmitWebposOrder_({ orderId: 202, seqLabel: '27001', customerName: '重來', customerPhone: '0900', email: 'goodgoodeatrestaurant@gmail.com', deliveryMethod: 'pickup', pickupDate: '2027-01-29', items: [{ name: '花雕雞', qty: 1 }] }));
+run('goLive (第一次)', () => { ctx.nfSubmitWebposOrder_({ orderId: 303, seqLabel: '27002', customerName: 't', customerPhone: '1', email: 'goodgoodeatrestaurant@gmail.com', deliveryMethod: 'pickup', pickupDate: '2027-01-29', items: [{ name: '花雕雞', qty: 1 }] });
+  const r = ctx.nfGoLive_(false); return { ...r, rows: respSheet.getLastRow(), accepting: ctx.NF_CTX.form.isAcceptingResponses(), responses: ctx.NF_CTX.form.getResponses().length }; });
+run('goLive (第二次) → 應該拒絕', () => { try { ctx.nfGoLive_(true); return 'NO ERROR (bad)'; } catch (e) { return 'error: ' + e.message; } });
+run('ping live flag', () => { const p = ctx.nfPing_('dev', 2027); return { live: p.live, liveAt: !!p.liveAt }; });
+run('正式上線後第一筆從第 2 列開始', () => { ctx.NF_CTX.form.setAcceptingResponses(true); ctx.nfSubmitWebposOrder_({ orderId: 404, seqLabel: '27001', customerName: '正式', customerPhone: '1', email: 'goodgoodeatrestaurant@gmail.com', deliveryMethod: 'pickup', pickupDate: '2027-01-29', items: [{ name: '花雕雞', qty: 1 }] }); return respSheet.getRange(2, 1, 1, 1).getValues()[0][0] ? 'row 2 filled' : 'row 2 empty (bad)'; });
 const orders = ctx.NF_CTX.ss.getSheetByName('訂單整理');
 console.log('  訂單整理欄位：', orders.getRange(1, 1, 1, orders.getLastColumn()).getValues()[0].join(' | '));
 console.log('  小計公式：', orders.getRange(2, 1, 1, orders.getLastColumn()).getValues()[0].find(v => String(v).includes('設定')));

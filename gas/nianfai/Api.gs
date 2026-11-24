@@ -14,6 +14,10 @@
  *   rebuildTabs       依目前「設定」重建訂單整理／供需庫存／備料表／修改紀錄（不動表單回應）
  *   diagnose          回傳回應分頁、觸發條件、各分頁前幾列的計算結果（排查用）
  *   resetTestData     只限 dev：清空表單回應、修改紀錄與送單紀錄（WebPOS「一鍵清空測試資料」）
+ *   goLive            測試完畢正式上線：清空表單回覆、表單回應（刪列，正式客人從第 2 列開始）、修改紀錄、
+ *                     送單紀錄並重建分頁；每個年度只能做一次（之後拒絕，避免誤刪正式訂單）
+ *   backToTesting     只限 dev：把年度改回測試中，方便重複測試正式上線流程
+ *   setAccepting      開關表單（WebPOS 開賣／收單時呼叫）
  *   submitOrder       WebPOS 現場單送進表單（WebposSubmit.gs）
  *   finishProduction  寫入停售上限並立即檢查（製作完成）
  *   ping              連線測試
@@ -49,6 +53,17 @@ function doPost(e) {
         return nfJson_({ ok: true, result: nfDiagnose_() });
       case 'resetTestData':
         return nfJson_({ ok: true, result: nfResetTestData_() });
+      case 'goLive':
+        return nfJson_({ ok: true, result: nfGoLive_(body.accepting) });
+      case 'backToTesting':
+        if (NF_CTX.env !== 'dev') throw new Error('只有測試環境可以回到測試');
+        NF_CTX.meta.live = false; delete NF_CTX.meta.liveAt;
+        nfSaveMeta_(NF_CTX.env, NF_CTX.year, NF_CTX.meta);
+        nfForm_().setAcceptingResponses(true);
+        return nfJson_({ ok: true });
+      case 'setAccepting':
+        nfForm_().setAcceptingResponses(!!body.accepting);
+        return nfJson_({ ok: true, formAccepting: nfForm_().isAcceptingResponses() });
       case 'submitOrder':
         return nfJson_(nfSubmitWebposOrder_(body.order));
       case 'finishProduction':
@@ -75,6 +90,7 @@ function doGet(e) {
         year: d.settings.year,
         demandById: d.demandById,
         demandByName: d.demandByName,
+        orderedById: d.orderedById,
         onsiteSeqs: d.onsiteSeqs,
         orderCount: d.orderCount,
         formAccepting: nfForm_().isAcceptingResponses(),
@@ -103,6 +119,8 @@ function nfPing_(env, year) {
     year: settings.year,
     items: settings.items.length,
     formAccepting: nfForm_().isAcceptingResponses(),
+    live: !!NF_CTX.meta.live,
+    liveAt: NF_CTX.meta.liveAt || null,
   };
 }
 
@@ -157,6 +175,21 @@ function nfDiagnose_() {
 /** 只限 dev：WebPOS「一鍵清空測試資料」時一起清空測試試算表，避免流水號重新開始後跟舊回應撞號 */
 function nfResetTestData_() {
   if (NF_CTX.env !== 'dev') throw new Error('只有測試環境可以清空回應');
+  return nfClearAllResponses_();
+}
+
+/** 測試完畢正式上線：清空所有測試回應，之後正式客人從表單回應第 2 列開始；每個年度只能做一次 */
+function nfGoLive_(accepting) {
+  if (NF_CTX.meta.live) throw new Error(NF_CTX.year + ' 年已經正式上線（' + (NF_CTX.meta.liveAt || '') + '），不能再清空');
+  var result = nfClearAllResponses_();
+  NF_CTX.meta.live = true;
+  NF_CTX.meta.liveAt = nfFormatTimestamp_(new Date());
+  nfSaveMeta_(NF_CTX.env, NF_CTX.year, NF_CTX.meta);
+  nfForm_().setAcceptingResponses(!!accepting); // 正式上線後表單開關跟著 WebPOS 開賣狀態
+  return { cleared: result.cleared, liveAt: NF_CTX.meta.liveAt };
+}
+
+function nfClearAllResponses_() {
   var form = nfForm_();
   form.deleteAllResponses();
   var resp = nfSheet_(NF.SHEET_RESPONSES);
@@ -171,6 +204,5 @@ function nfResetTestData_() {
   var prefix = 'SUB_' + NF_CTX.env + ':' + NF_CTX.year + ':';
   var props = nfProps_();
   Object.keys(props.getProperties()).forEach(function (k) { if (k.indexOf(prefix) === 0) props.deleteProperty(k); });
-  if (!form.isAcceptingResponses()) form.setAcceptingResponses(true);
   return { cleared: Math.max(last - 1, 0) };
 }
