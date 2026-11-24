@@ -417,9 +417,9 @@ export async function assignOrderNo(orderId) {
     const result = await api('POST', `/api/orders/${orderId}/assign-no`, {});
     return result?.dailyOrderNo || null;
 }
-export async function completeOrderAndReport({ orderId, newItems, tableNumber, isFullyPaid, sendTime }) {
+export async function completeOrderAndReport({ orderId, newItems, tableNumber, isFullyPaid, sendTime, finishTime }) {
     if (!orderId) return false;
-    await api('POST', `/api/orders/${orderId}/complete`, { newItems, tableNumber, isFullyPaid, sendTime });
+    await api('POST', `/api/orders/${orderId}/complete`, { newItems, tableNumber, isFullyPaid, sendTime, finishTime });
     return true;
 }
 export async function payOrder(orderData) {

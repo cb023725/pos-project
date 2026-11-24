@@ -2318,7 +2318,7 @@ app.patch('/api/orders/:id', async (req, res) => {
 // completeOrderAndReport
 app.post('/api/orders/:id/complete', async (req, res) => {
     const orderId = parseInt(req.params.id);
-    const { newItems, tableNumber, isFullyPaid, sendTime } = req.body;
+    const { newItems, tableNumber, isFullyPaid, sendTime, finishTime } = req.body;
     const now = new Date().toISOString();
     const { data: existing, error: fetchErr } = await supabase.from('orders').select('*').eq('id', orderId).single();
     if (fetchErr || !existing) return res.status(404).json({ error: '找不到訂單' });
@@ -2352,19 +2352,14 @@ app.post('/api/orders/:id/complete', async (req, res) => {
     });
 
     const amountNow = snapshot.reduce((s, it) => s + (it.price||0) * (it.quantity||1), 0);
-    const newPaidAmount = prevPaid + amountNow;
-
-    await supabase.from('orders').update({
-        status: isFullyPaid ? 'paid' : 'served',
-        items: finalItems, total: currentTotal,
-        paid_amount: newPaidAmount,
-        send_time: sendTime || existing.send_time || Date.now(),
-        updated_at: now,
-    }).eq('id', orderId);
+    // 已付金額＝所有有效發票加總（不用 orders.paid_amount 累加：若上次發票已開、訂單卻沒更新成功，
+    // 重新結帳時 amountNow 為 0，用累加會少算）
+    const invoicedBefore = (prevInvs||[]).reduce((s, inv) => s + (inv.amount || inv.total || 0), 0);
+    const newPaidAmount = Math.max(prevPaid, invoicedBefore + amountNow);
 
     if (amountNow > 0) {
         // 建立發票（部分結帳也會建立，每次結帳一張）
-        await supabase.from('invoices').insert({
+        const { error: invErr } = await supabase.from('invoices').insert({
             invoice_number: `INV-${Date.now()}`,
             payment_time: now,
             order_id: orderId, daily_order_no: existing.daily_order_no,
@@ -2373,6 +2368,8 @@ app.post('/api/orders/:id/complete', async (req, res) => {
             total: amountNow, amount: amountNow,
             items_snapshot: snapshot, status: '已開立', void_time: null,
         });
+        // 發票沒開成功就不要把訂單標成已付款：訂單維持未付款，重新結帳即可（不會重複開立，見上方 alreadyCounted）
+        if (invErr) return res.status(500).json({ error: `建立發票失敗：${invErr.message}` });
         // 扣庫存 + 寫紀錄
         for (const it of snapshot) {
             const { data: mi } = await supabase.from('menu_items').select('stock,consumes').eq('id', it.id).single();
@@ -2390,6 +2387,18 @@ app.post('/api/orders/:id/complete', async (req, res) => {
             }
         }
     }
+    // 先開發票／扣庫存，最後才把訂單標成已付款：任何一步中斷，訂單都還是「未付款」，
+    // 重新結帳時 alreadyCounted 會扣掉已開立的數量，不會重複開發票也不會漏開
+    const { error: ordErr } = await supabase.from('orders').update({
+        status: isFullyPaid ? 'paid' : 'served',
+        items: finalItems, total: currentTotal,
+        paid_amount: newPaidAmount,
+        send_time: sendTime || existing.send_time || Date.now(),
+        ...(finishTime !== undefined ? { finish_time: finishTime } : {}),
+        updated_at: now,
+    }).eq('id', orderId);
+    if (ordErr) return res.status(500).json({ error: `更新訂單失敗：${ordErr.message}` });
+
     if (tableNumber && tableNumber !== '外帶') {
         await supabase.from('tables').upsert({ table_number: tableNumber, status: isFullyPaid ? 'paid' : 'served', order_id: orderId, updated_at: now });
     }
