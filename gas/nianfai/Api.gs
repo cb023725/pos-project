@@ -128,8 +128,26 @@ function nfDiagnose_() {
     return sh.getRange(fromRow, 1, nRows, lc).getDisplayValues();
   };
   var resp = ss.getSheetByName(NF.SHEET_RESPONSES);
-  out.responses = resp ? dump(NF.SHEET_RESPONSES, 1, Math.min(Math.max(resp.getLastRow(), 1), 6), 40) : null;
-  out.orders = dump(NF.SHEET_ORDERS, 1, 6, 40);
+  var tail = function (name, headerRows, n, nCols) { // 標題列＋最後 n 列
+    var sh = ss.getSheetByName(name);
+    if (!sh) return null;
+    var lr = sh.getLastRow();
+    var lc = Math.min(sh.getLastColumn() || 1, nCols);
+    var head = sh.getRange(1, 1, headerRows, lc).getDisplayValues();
+    var from = Math.max(headerRows + 1, lr - n + 1);
+    var rows = lr >= from ? sh.getRange(from, 1, lr - from + 1, lc).getDisplayValues().map(function (r, i) { return [String(from + i)].concat(r); }) : [];
+    return { head: head, rows: rows };
+  };
+  out.responses = resp ? tail(NF.SHEET_RESPONSES, 1, 5, 40) : null;
+  out.orders = (function () { // 訂單整理：只取有資料的最後 5 列（公式欄會延伸到第 1002 列，用時間戳記判斷）
+    var sh = ss.getSheetByName(NF.SHEET_ORDERS);
+    if (!sh) return null;
+    var lc = Math.min(sh.getLastColumn(), 40);
+    var all = sh.getRange(1, 1, Math.min(sh.getLastRow(), NF_DATA_ROWS + 2), lc).getDisplayValues();
+    var tsCol = all[NF_ORDERS_HEADER_ROW - 1].indexOf('時間戳記');
+    var filled = all.map(function (r, i) { return [String(i + 1)].concat(r); }).filter(function (r, i) { return i >= NF_ORDERS_FIRST_ROW - 1 && tsCol >= 0 && r[tsCol + 1]; });
+    return { head: all.slice(0, NF_ORDERS_HEADER_ROW), rows: filled.slice(-5) };
+  })();
   out.ordersFormulas = ss.getSheetByName(NF.SHEET_ORDERS) ? ss.getSheetByName(NF.SHEET_ORDERS).getRange(3, 1, 1, 12).getFormulas()[0] : null;
   out.stock = dump(NF.SHEET_STOCK, 1, 16, 15);
   out.prep = dump(NF.SHEET_PREP, 1, 15, 12);
@@ -143,18 +161,13 @@ function nfResetTestData_() {
   form.deleteAllResponses();
   var resp = nfSheet_(NF.SHEET_RESPONSES);
   var last = resp.getLastRow();
-  if (last > 1) {
-    var rng = resp.getRange(2, 1, last - 1, resp.getMaxColumns());
-    rng.clearContent(); rng.setBackground(null); rng.clearNote();
-  }
+  // 測試環境直接刪列（正式環境取消訂單仍是清除內容、不刪列）：Google 表單會記住下一筆寫在哪一列，
+  // 只清內容的話新回應會接在舊的最後一列後面；刪列後再重建分頁，公式範圍也一起重設
+  if (last > 1) resp.deleteRows(2, last - 1);
   var log = nfSpreadsheet_().getSheetByName(NF.SHEET_LOG);
   if (log && log.getLastRow() > 1) log.getRange(2, 1, log.getLastRow() - 1, 6).clearContent();
-  var orders = nfSpreadsheet_().getSheetByName(NF.SHEET_ORDERS);
-  if (orders) { // 訂單整理的手動欄（付款、取貨、出貨日、託運單號）
-    var hdr = orders.getRange(NF_ORDERS_HEADER_ROW, 1, 1, orders.getLastColumn()).getValues()[0];
-    ['付款', '取貨'].forEach(function (h) { var i = hdr.indexOf(h); if (i >= 0) orders.getRange(NF_ORDERS_FIRST_ROW, i + 1, NF_DATA_ROWS, 1).uncheck(); });
-    ['出貨日', '託運單號'].forEach(function (h) { var i = hdr.indexOf(h); if (i >= 0) orders.getRange(NF_ORDERS_FIRST_ROW, i + 1, NF_DATA_ROWS, 1).clearContent(); });
-  }
+  nfBuildTabs_(nfReadSettings_()); // 訂單整理（含手動欄）、供需庫存、備料表重新建立
+  nfApplyProtections_();
   var prefix = 'SUB_' + NF_CTX.env + ':' + NF_CTX.year + ':';
   var props = nfProps_();
   Object.keys(props.getProperties()).forEach(function (k) { if (k.indexOf(prefix) === 0) props.deleteProperty(k); });
