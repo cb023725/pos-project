@@ -4,6 +4,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import useDialog from '../components/useDialog';
+import NianfaiDatesCard from '../components/NianfaiDatesCard';
 import { getSettingValue, saveSettingValue, getMenuItems, getInventoryItems, addMenuItem, updateMenuItem, getNianfaiItems, finishNianfaiProduction, getNianfaiDemand, getNianfaiGasStatus, syncNianfaiSettingsToSheet } from '../db';
 
 const STATUS_ORDER = ['preparing', 'selling', 'closed', 'archived'];
@@ -29,6 +30,7 @@ const NianfaiAdminPage = () => {
     const [gas, setGas] = useState(null);            // GAS 連線狀態（null = 檢查中）
     const [syncing, setSyncing] = useState(false);
     const [demandInfo, setDemandInfo] = useState(null); // { source, updatedAt, error }
+    const [datesReady, setDatesReady] = useState(false); // 取貨與寄出日期設定好了才能開賣
 
     const loadGas = useCallback(async () => {
         setGas(null);
@@ -115,7 +117,7 @@ const NianfaiAdminPage = () => {
             await saveSettingValue('nianfai_active_year', String(newYear));
             await saveSettingValue(`nianfai_${newYear}_status`, 'preparing');
             await saveSettingValue(`nianfai_${newYear}_next_seq`, '1');
-            await showAlert(`已複製 ${lastYearItems.length} 個品項\n請到菜單管理確認後再開賣`, { title: `${newYear} 年菜已建立`, icon: 'success' });
+            await showAlert(`已複製 ${lastYearItems.length} 個品項\n請設定取貨與寄出日期、到菜單管理確認品項後再開賣`, { title: `${newYear} 年菜已建立`, icon: 'success' });
             await load();
         } catch (e) {
             await showAlert(e.message, { title: '建立失敗', icon: 'warning' });
@@ -210,8 +212,12 @@ const NianfaiAdminPage = () => {
                 </div>
             </div>
 
+            {activeYear && status !== 'archived' && (
+                <NianfaiDatesCard year={activeYear} number={2} onStatusChange={setDatesReady} showAlert={showAlert} />
+            )}
+
             <div className="bg-white rounded-xl shadow p-6 mb-5">
-                <h3 className="text-xl font-bold text-gray-700 mb-3">2. 修正品項</h3>
+                <h3 className="text-xl font-bold text-gray-700 mb-3">3. 修正品項</h3>
                 <p className="text-sm text-gray-500 mb-3">品項的名稱、價格、套餐組成都在菜單管理頁編輯（品項編輯視窗會多一個「🧧 年菜」區塊）。</p>
                 <Link to="/menu" className="inline-block px-5 py-2.5 rounded-lg bg-gray-700 text-white font-bold hover:bg-gray-800">
                     前往菜單管理頁
@@ -219,13 +225,13 @@ const NianfaiAdminPage = () => {
             </div>
 
             <div className="bg-white rounded-xl shadow p-6">
-                <h3 className="text-xl font-bold text-gray-700 mb-3">3. 開賣 / 收單狀態</h3>
+                <h3 className="text-xl font-bold text-gray-700 mb-3">4. 開賣 / 收單狀態</h3>
                 <p className="text-sm text-gray-500 mb-3">
                     準備中→開賣中→收單後→已封存，只隱藏畫面不刪資料；封存以外桌位頁都會出現年菜卡片（佇列/點單頁），收單後只有 Yw 能從後台加單。
                 </p>
                 <div className="flex items-center gap-3">
                     {status !== 'archived' && (
-                        <button onClick={handleAdvanceStatus} disabled={!activeYear || isToggling}
+                        <button onClick={handleAdvanceStatus} disabled={!activeYear || isToggling || (status === 'preparing' && !datesReady)}
                             className="px-5 py-2.5 rounded-lg font-bold text-white bg-[#D47856] hover:bg-[#C46848] disabled:opacity-50">
                             {isToggling ? '處理中...' : NEXT_ACTION_LABELS[status]}
                         </button>
@@ -237,13 +243,14 @@ const NianfaiAdminPage = () => {
                         </button>
                     )}
                     {status === 'archived' && <p className="text-gray-400">已封存，明年初始化新年度後才會再出現。</p>}
+                    {status === 'preparing' && !datesReady && <p className="text-sm font-bold text-red-600">請先在上方設定取貨與寄出日期</p>}
                 </div>
             </div>
 
             {activeYear && (
                 <div className="bg-white rounded-xl shadow p-6 mt-5">
                     <div className="flex items-center justify-between mb-3">
-                        <h3 className="text-xl font-bold text-gray-700">4. Google 表單／Sheet</h3>
+                        <h3 className="text-xl font-bold text-gray-700">5. Google 表單／Sheet</h3>
                         <button onClick={loadGas} className="text-sm font-bold text-gray-500 hover:text-gray-700">重新檢查</button>
                     </div>
                     {gas === null ? (
@@ -272,7 +279,7 @@ const NianfaiAdminPage = () => {
 
             {activeYear && (
                 <div className="bg-white rounded-xl shadow p-6 mt-5">
-                    <h3 className="text-xl font-bold text-gray-700 mb-3">5. 年菜庫存</h3>
+                    <h3 className="text-xl font-bold text-gray-700 mb-3">6. 年菜庫存</h3>
                     <p className="text-sm text-gray-500 mb-4">
                         {demandInfo?.source === 'sheet'
                             ? `訂購需求＝Sheet 總訂購量（線上＋已送出的現場單）＋WebPOS 尚未送出的現場單。Sheet 更新時間 ${demandInfo.updatedAt || ''}`

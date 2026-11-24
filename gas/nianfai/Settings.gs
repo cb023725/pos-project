@@ -104,6 +104,8 @@ function nfWriteSettingsFromWebpos_(p) {
     '單點上限': p.singleMax,
     '取貨日': (p.pickupDates || []).join(','),
     '寄出期間': p.deliveryPeriod,
+    '最後取貨日說明': p.lastPickupText,
+    '最後取貨結束時間': p.lastPickupEnd,
   };
   var last = Math.max(sh.getLastRow(), 1);
   var keys = sh.getRange(1, 1, last, 1).getValues().map(function (r) { return String(r[0]).trim(); });

@@ -701,6 +701,13 @@ async function printPDF(filePath, pageH, copies = 1) {
 
 // ----------------------------------------------------
 // 年菜取貨日加星期：'2027-01-29' → '2027-01-29（五）'（日期字串直接解析，不受時區影響）
+// '2027-02-04' → '2027/2/4 (四)'（確認信、表單選項的寫法）
+function fmtSlashDateWithWeekday(dateStr) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr || '');
+    if (!m) return dateStr || '';
+    const wd = '日一二三四五六'[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()];
+    return `${+m[1]}/${+m[2]}/${+m[3]} (${wd})`;
+}
 function fmtPickupDateWithWeekday(dateStr) {
     if (!dateStr) return '';
     const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr);
@@ -2636,7 +2643,7 @@ app.post('/api/nianfai/gas/sync-settings', async (req, res) => {
         const [{ data: items, error }, { data: stockRows }, { data: settings }] = await Promise.all([
             supabase.from('menu_items').select('*').eq('nianfai_year', year).order('sort_order'),
             supabase.from('menu_items').select('id, category').ilike('category', '%庫存%'),
-            supabase.from('app_settings').select('key, value').in('key', [`nianfai_${year}_pickup_dates`, `nianfai_${year}_delivery_period`]),
+            supabase.from('app_settings').select('key, value').in('key', [`nianfai_${year}_pickup_dates`, `nianfai_${year}_delivery_period`, `nianfai_${year}_last_pickup_end`]),
         ]);
         if (error) throw error;
         const catById = new Map((stockRows || []).map(r => [r.id, r.category]));
@@ -2649,6 +2656,9 @@ app.post('/api/nianfai/gas/sync-settings', async (req, res) => {
             shippingFee: 160, freeThreshold: 3000, bundleMax: 8, singleMax: 9,
             pickupDates,
             deliveryPeriod: kv[`nianfai_${year}_delivery_period`] || '',
+            // 最後取貨日（除夕前一天）與結束時間，確認信用
+            lastPickupText: pickupDates.length ? fmtSlashDateWithWeekday(pickupDates[pickupDates.length - 1]) : '',
+            lastPickupEnd: kv[`nianfai_${year}_last_pickup_end`] || '16:00',
             items: (items || []).map(r => ({
                 id: r.id, name: r.name, price: r.price,
                 isBundle: !!(r.bundle_composition && r.bundle_composition.length),
