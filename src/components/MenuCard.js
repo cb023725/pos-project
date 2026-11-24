@@ -13,7 +13,8 @@ const toDisplaySrc = (url) => (/^https?:\/\//.test(url) ? `/api/image-proxy?url=
 // 預設 false，一般點餐頁維持原本「停售就完全點不動」的行為不變。
 // hideStock：不顯示右上角庫存數量（年菜點單頁用，年菜不扣庫存，數量只會造成誤解）。
 // fillHeight：卡片撐滿格子高度（搭配 grid auto-rows-fr，所有卡片取最高那張的高度、大小一致）。
-const MenuCard = React.memo(({ item, onAddItem, onLongPress, allowOverride = false, hideStock = false, fillHeight = false }) => {
+// priceClassName：金額顏色（年菜點單頁用紅色），預設藍色不變。
+const MenuCard = React.memo(({ item, onAddItem, onLongPress, allowOverride = false, hideStock = false, fillHeight = false, priceClassName = 'text-blue-600' }) => {
     const hasInventoryLink = !!(item.consumes?.length); // 有庫存連動才顯示售完/庫存數
     const isSoldOut  = !!item.soldOut;
     const isDepleted = hasInventoryLink && !!item.depleted; // 只有連動品項才有售完狀態
@@ -121,7 +122,7 @@ const MenuCard = React.memo(({ item, onAddItem, onLongPress, allowOverride = fal
                     </p>
                 </div>
                 <div className="flex justify-between items-center">
-                    <span className="text-xl font-extrabold text-blue-600">NT$ {formatCurrency(item.price)}</span>
+                    <span className={`text-xl font-extrabold ${priceClassName}`}>NT$ {formatCurrency(item.price)}</span>
                 </div>
             </div>
         </button>

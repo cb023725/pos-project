@@ -11,7 +11,7 @@ import {
 import MenuCard from '../components/MenuCard';
 import useDialog from '../components/useDialog';
 import useNianfaiSeason from '../hooks/useNianfaiSeason';
-import { formatPickupDate } from '../utils/nianfaiDate';
+import { formatPickupDate, formatNianfaiSeq, nianfaiDisplayName } from '../utils/nianfai';
 
 const BUNDLE_MAX = 8;
 const SINGLE_MAX = 9;
@@ -22,20 +22,13 @@ const FREE_SHIPPING_THRESHOLD = 3000;
 const sortForCards = (list) => list.slice().sort((a, b) =>
     (!!b.bundleComposition - !!a.bundleComposition) || ((a.sortOrder ?? 99) - (b.sortOrder ?? 99)));
 
-// 套餐只顯示品名本體（「富貴套餐：五菜一湯 (六人份)」→「富貴套餐」），
-// 只影響畫面顯示，資料庫品名與收據不變（品名是對應表單欄位的依據，不能改）
-const cardName = (item) => item.bundleComposition ? item.name.split(/[：:]/)[0].trim() : item.name;
+// 套餐只顯示「富貴套餐」，卡片與購物車前面加紅包 emoji 提醒（只在畫面上，收據不加）
+const cardName = (item) => item.bundleComposition ? `🧧 ${nianfaiDisplayName(item)}` : item.name;
 
-// 購物車裡的套餐：「套餐」兩字用紅色提醒
-const CartItemName = ({ item }) => {
-    const name = cardName(item);
-    if (!item.bundleComposition) return name;
-    if (!name.includes('套餐')) return <>{name}<span className="text-red-600">（套餐）</span></>;
-    const parts = name.split('套餐');
-    return parts.map((p, i) => (
-        <React.Fragment key={i}>{p}{i < parts.length - 1 && <span className="text-red-600">套餐</span>}</React.Fragment>
-    ));
-};
+// 購物車品名：套餐整句紅字
+const CartItemName = ({ item }) => item.bundleComposition
+    ? <span className="text-red-600">{cardName(item)}</span>
+    : item.name;
 
 // 購物車＋取貨方式＋取貨日的快照，跟最後一次「確認訂購」比對（防呆，見第 5 節）
 const makeSnapshot = (qtyMap, deliveryMethod, pickupDate) => JSON.stringify({
@@ -101,7 +94,7 @@ const NianfaiOrderPage = () => {
             seqCounter.current = r.items.length;
             setAddSeq(seqMap);
             const pd = r.deliveryMethod === 'pickup' ? (r.pickupDate || '') : '';
-            const label = `${r.year}-${String(r.seqNo).padStart(3, '0')}`;
+            const label = formatNianfaiSeq(r.year, r.seqNo);
             setQty(qtyMap); setDeliveryMethod(r.deliveryMethod); setPickupDate(pd);
             setReservationId(r.id); setSeqLabel(label);
             setConfirmedSnapshot(makeSnapshot(qtyMap, r.deliveryMethod, pd));
@@ -153,7 +146,7 @@ const NianfaiOrderPage = () => {
         }
         const current = qty[item.id] || 0;
         if (item.soldOut && current === 0 && value > current) {
-            const ok = await showConfirm(`「${cardName(item)}」已停售，確定要加入嗎？`, { title: '已停售品項', confirmText: '仍要加入', danger: true });
+            const ok = await showConfirm(`「${nianfaiDisplayName(item)}」已停售`, { title: '仍要加入嗎？', icon: 'warning', confirmText: '仍要加入', danger: true });
             if (!ok) return;
         }
         setCapNotice('');
@@ -171,18 +164,19 @@ const NianfaiOrderPage = () => {
     };
 
     // 套餐在收據上要展開組成明細（修正單第 5 節：品項「套餐列出組成」）
-    const buildPrintItems = useCallback(() => cartItems.map(it => {
+    // 收據照菜單順序（套餐在最上面），不跟購物車「最新在上」的畫面順序
+    const buildPrintItems = useCallback(() => items.filter(it => (qty[it.id] || 0) > 0).map(it => ({ ...it, quantity: qty[it.id] })).map(it => {
         if (!it.bundleComposition) return { name: it.name, price: it.price, quantity: it.quantity };
         const bundleComponents = it.bundleComposition.map(c => {
             const sub = items.find(i => i.id === c.itemId);
             return { name: sub?.name || c.itemId, qty: c.qty };
         });
         return { name: it.name, price: it.price, quantity: it.quantity, bundleComponents };
-    }), [cartItems, items]);
+    }), [items, qty]);
 
     // 一鍵清空購物車：只清品項，不動已保留的流水號（要放棄整張單用「取消本單」）
     const handleClearCart = async () => {
-        const ok = await showConfirm('確定要清空購物車嗎？', { title: '清空購物車', confirmText: '清空', danger: true });
+        const ok = await showConfirm('購物車內的品項會全部移除', { title: '清空購物車', icon: 'danger', confirmText: '清空', danger: true });
         if (!ok) return;
         setQty({}); setAddSeq({}); setCapNotice('');
     };
@@ -202,8 +196,8 @@ const NianfaiOrderPage = () => {
 
     const handleCancelOrder = async () => {
         const ok = await showConfirm(
-            reservationId ? `確定要取消這筆訂購嗎？\n已保留的流水號 ${seqLabel} 會記為放棄。` : '確定要清空這筆訂購嗎？',
-            { title: '取消本單', confirmText: '取消本單', cancelText: '繼續點單', danger: true });
+            reservationId ? `流水號 ${seqLabel} 將記為放棄` : '這筆訂購會清空',
+            { title: '取消本單', icon: 'danger', confirmText: '取消本單', cancelText: '繼續點單', danger: true });
         if (!ok) return;
         await abandonReservation();
         resetOrder();
@@ -214,8 +208,8 @@ const NianfaiOrderPage = () => {
     const handleGoBack = async () => {
         if (reservationId) {
             const ok = await showConfirm(
-                `流水號 ${seqLabel} 已確認訂購、尚未結帳。\n返回後這筆訂購會取消，流水號記為放棄。`,
-                { title: '尚未結帳', confirmText: '放棄並返回', cancelText: '繼續點單', danger: true });
+                `流水號 ${seqLabel} 已確認、尚未結帳`,
+                { title: '尚未結帳', icon: 'warning', note: '返回後此單取消，流水號記為放棄', confirmText: '放棄並返回', cancelText: '繼續點單', danger: true });
             if (!ok) return;
             await abandonReservation();
         }
@@ -234,7 +228,7 @@ const NianfaiOrderPage = () => {
                 items: cartItems.map(it => ({ id: it.id, name: it.name, price: it.price, quantity: it.quantity })),
             };
             const result = await confirmNianfaiReservation(payload);
-            const label = `${year}-${String(result.seqNo).padStart(3, '0')}`;
+            const label = formatNianfaiSeq(year, result.seqNo);
             setReservationId(result.reservationId);
             setSeqLabel(label);
             setConfirmedSnapshot(currentSnapshot);
@@ -257,7 +251,7 @@ const NianfaiOrderPage = () => {
 
     const doCheckout = async (override) => {
         const result = await checkoutNianfaiReservation(reservationId, { override });
-        const label = `${year}-${String(result.seqNo).padStart(3, '0')}`;
+        const label = formatNianfaiSeq(year, result.seqNo);
         fetch('/print', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -266,7 +260,7 @@ const NianfaiOrderPage = () => {
             }),
         }).catch(e => console.warn('年菜存根聯列印失敗：', e));
         resetOrder();
-        await showAlert(`流水號 ${label}\n\n請讓客人在存根聯上填寫姓名、電話等資料，稍後在年菜訂單佇列補登。`, { title: '結帳完成' });
+        await showAlert(`流水號 ${label}\n請客人在存根聯填寫資料，稍後補登`, { title: '結帳完成', icon: 'success', confirmText: '前往年菜訂單' });
         navigate('/nianfai-queue');
     };
 
@@ -278,7 +272,7 @@ const NianfaiOrderPage = () => {
             await doCheckout(false);
         } catch (e) {
             if (e.code === 'FORM_CLOSED') {
-                const ok = await showConfirm(`${e.message || '年菜表單已關閉'}\n\n確定要繼續結帳嗎？`, { title: '表單已關閉', confirmText: '繼續結帳', danger: true });
+                const ok = await showConfirm('年菜表單已關閉（已達停售上限）', { title: '仍要結帳嗎？', icon: 'warning', confirmText: '繼續結帳', danger: true });
                 if (ok) {
                     try { await doCheckout(true); } catch (e2) { setError(`結帳失敗：${e2.message}`); }
                 }
@@ -299,10 +293,10 @@ const NianfaiOrderPage = () => {
         );
     }
 
-    // 版面比照內用／外帶點單頁：整頁固定高度，左側工作區（30%）只有購物車清單捲動，
+    // 版面比照內用／外帶點單頁：整頁固定高度（跟著 Layout 的 100dvh 容器，iPad Safari 扣掉工具列也不會超出），左側工作區（30%）只有購物車清單捲動，
     // 標題列、取貨方式、金額與按鈕固定不動；右側品項區（70%）自己捲動
     return (
-        <div className="flex w-full overflow-hidden font-sans" style={{ height: 'calc(var(--vh, 1vh) * 100)' }}>
+        <div className="flex w-full h-full overflow-hidden font-sans">
             <div className="flex flex-grow p-2 bg-gray-50 h-full">
 
                 {/* 左側工作區 */}
@@ -312,21 +306,17 @@ const NianfaiOrderPage = () => {
                         <button onClick={handleGoBack} className="text-white hover:bg-white/10 p-0.5 rounded-full transition-colors" title="返回年菜訂單">
                             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
                         </button>
-                        <h2 className="text-xl font-black">{year} 年菜</h2>
+                        <h2 className="text-xl font-black">{year} 年菜訂單</h2>
                         {seqLabel && <span className="ml-auto text-sm font-black bg-white/20 rounded-lg px-2 py-0.5">{seqLabel}</span>}
                     </div>
 
-                    {/* 購物車標題 */}
+                    {/* 購物車標題：只放購物車 icon；右側清空在前、數量在後 */}
                     <div className="flex-shrink-0 px-3 pt-2 pb-1 flex items-center justify-between border-b border-gray-100">
-                        <h3 className="font-bold text-gray-700 flex items-center gap-1.5">
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                                <circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" />
-                                <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
-                            </svg>
-                            購物車
-                        </h3>
+                        <svg className="w-6 h-6 text-gray-700" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24" aria-label="購物車">
+                            <circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" />
+                            <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
+                        </svg>
                         <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-gray-400">共 {cartItems.reduce((n, it) => n + it.quantity, 0)} 份</span>
                             {cartItems.length > 0 && (
                                 <button onClick={handleClearCart}
                                     className="flex items-center gap-1 text-xs font-bold text-red-500 bg-red-50 hover:bg-red-100 px-2 py-1 rounded-lg">
@@ -334,6 +324,7 @@ const NianfaiOrderPage = () => {
                                     清空
                                 </button>
                             )}
+                            <span className="text-xs font-bold text-gray-400">共 {cartItems.reduce((n, it) => n + it.quantity, 0)} 份</span>
                         </div>
                     </div>
 
@@ -374,11 +365,11 @@ const NianfaiOrderPage = () => {
                     {/* 取貨方式（固定在購物車下方） */}
                     <div className="flex-shrink-0 px-3 py-2 border-t border-gray-200">
                         <div className="flex items-center gap-2 mb-2">
-                            <h3 className="font-bold text-gray-700 text-sm flex-shrink-0">取貨方式</h3>
+                            <h3 className="font-bold text-gray-700 text-sm flex-shrink-0 whitespace-nowrap">取貨方式</h3>
                             <button onClick={() => { setDeliveryMethod('pickup'); setPickupDate(''); }}
-                                className={`flex-1 py-2 rounded-xl font-bold transition-colors ${deliveryMethod === 'pickup' ? 'bg-[#4A9A7A] text-white' : 'bg-gray-100 text-gray-600'}`}>自取</button>
+                                className={`flex-1 min-w-0 py-2 rounded-xl font-bold whitespace-nowrap transition-colors ${deliveryMethod === 'pickup' ? 'bg-[#4A9A7A] text-white' : 'bg-gray-100 text-gray-600'}`}>自取</button>
                             <button onClick={() => { setDeliveryMethod('delivery'); setPickupDate(''); }}
-                                className={`flex-1 py-2 rounded-xl font-bold transition-colors ${deliveryMethod === 'delivery' ? 'bg-[#4A9A7A] text-white' : 'bg-gray-100 text-gray-600'}`}>宅配</button>
+                                className={`flex-1 min-w-0 py-2 rounded-xl font-bold whitespace-nowrap transition-colors ${deliveryMethod === 'delivery' ? 'bg-[#4A9A7A] text-white' : 'bg-gray-100 text-gray-600'}`}>宅配</button>
                         </div>
                         {deliveryMethod === 'pickup' ? (
                             <select value={pickupDate} onChange={e => setPickupDate(e.target.value)}
@@ -453,7 +444,7 @@ const NianfaiOrderPage = () => {
                                             <span className="absolute top-1 right-1 z-20 bg-[#C1032F] text-white text-[10px] font-black px-1.5 py-0.5 rounded pointer-events-none">套餐</span>
                                         )}
                                         {/* 卡片上不顯示已點數量（數量看左側購物車） */}
-                                        <MenuCard item={isBundle ? { ...item, name: cardName(item) } : item} onAddItem={() => setItemQty(item, q + 1, { bump: true })} onLongPress={() => setItemQty(item, q - 1)} allowOverride hideStock fillHeight />
+                                        <MenuCard item={isBundle ? { ...item, name: cardName(item) } : item} onAddItem={() => setItemQty(item, q + 1, { bump: true })} onLongPress={() => setItemQty(item, q - 1)} allowOverride hideStock fillHeight priceClassName="text-red-600" />
                                     </div>
                                 );
                             })}

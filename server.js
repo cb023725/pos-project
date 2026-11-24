@@ -2414,7 +2414,9 @@ app.post('/api/orders/:id/complete', async (req, res) => {
 // 按「送出」才會走到這裡。NIANFAI_GAS_URL 還沒設定好之前一律停在 pending（待傳），
 // 不視為錯誤；之後補上網址、或前次失敗，都靠下面的定時器重試。
 const NIANFAI_DEFAULT_EMAIL = 'goodgoodeatrestaurant@gmail.com'; // 客人沒填 email 時用店家信箱
-const NIANFAI_STOCK_CATEGORY = '年菜庫存'; // 年節限定品項的製作入庫量，在庫存管理頁維護
+const NIANFAI_STOCK_CATEGORY = '年菜庫存';
+// 年菜流水號顯示：年份末兩碼＋3 位流水號，例如 2027 年第 1 號 → 27001（2028 從 28001 開始）
+const nianfaiSeqLabel = (year, seqNo) => `${Number(year) % 100}${String(seqNo).padStart(3, '0')}`; // 年節限定品項的製作入庫量，在庫存管理頁維護
 
 // 第 6 節必填欄位：缺一不能送出。回傳缺少的欄位名稱（空陣列 = 完整）
 function nianfaiMissingFields(nf) {
@@ -2449,7 +2451,7 @@ async function submitToNianfaiForm(orderId) {
                 customerName: nf.customer_name, customerPhone: nf.customer_phone,
                 email: (nf.customer_email && nf.customer_email.trim()) || NIANFAI_DEFAULT_EMAIL,
                 // 匯款末五碼欄位填「現結＋流水號」，Sheet 用它搜尋對應的現場單
-                remittanceLast5: `現結${String(nf.seq_no).padStart(3, '0')}`,
+                remittanceLast5: `現結${nianfaiSeqLabel(nf.year, nf.seq_no)}`,
                 deliveryMethod: nf.delivery_method, pickupDate: nf.pickup_date,
                 recipientName: nf.recipient_name, recipientPhone: nf.recipient_phone,
                 recipientAddress: nf.recipient_address,
@@ -2623,7 +2625,7 @@ app.post('/api/nianfai/reservations/:id/checkout', async (req, res) => {
         if (nfErr) throw nfErr;
 
         const { data: invoice, error: invErr } = await supabase.from('invoices').insert({
-            invoice_number: `NF-${year}-${String(seqNo).padStart(3, '0')}`,
+            invoice_number: `NF-${nianfaiSeqLabel(year, seqNo)}`,
             payment_time: now, order_id: order.id,
             order_type: '外帶', table_name: '外帶', customer_count: 0,
             total, amount: total, items_snapshot: items, status: '已開立',
@@ -2764,7 +2766,7 @@ app.get('/api/nianfai/close-check', async (req, res) => {
         const rows = await fetchValidNianfaiOrders({ since: req.query.since || null, statuses: ['incomplete'] });
         const blocking = rows.map(nianfaiQueueEntry)
             .sort((a, b) => a.year - b.year || a.seqNo - b.seqNo)
-            .map(r => ({ orderId: r.orderId, label: `${r.year}-${String(r.seqNo).padStart(3, '0')}` }));
+            .map(r => ({ orderId: r.orderId, label: nianfaiSeqLabel(r.year, r.seqNo) }));
         res.json({ blocking });
     } catch (error) {
         res.status(500).json({ error: error.message });

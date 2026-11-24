@@ -10,9 +10,9 @@ const STATUS_ORDER = ['preparing', 'selling', 'closed', 'archived'];
 const STATUS_LABELS = { preparing: '準備中', selling: '開賣中', closed: '收單後', archived: '已封存（平常營業）' };
 const NEXT_ACTION_LABELS = { preparing: '開賣（顯示年菜 tab）', selling: '收單（隱藏年菜 tab）', closed: '封存（年度結束，恢復平常營業）' };
 const NEXT_CONFIRM = {
-    preparing: (y) => `確定要開賣 ${y} 年菜嗎？\n\n開賣後 WebPOS 點餐頁會出現「年菜」tab。`,
-    selling:   (y) => `確定要收單嗎？\n\n收單後 WebPOS 點餐頁的「年菜」tab 會立即隱藏，之後只有 Yw 能從後台加單。`,
-    closed:    (y) => `確定要封存 ${y} 年菜嗎？\n\n封存後所有年菜畫面會隱藏、恢復平常營業樣子。資料完全保留，不會刪除。`,
+    preparing: (y) => ({ title: `開賣 ${y} 年菜`, message: '開始接受年菜訂單', confirmText: '開賣' }),
+    selling:   (y) => ({ title: `${y} 年菜收單`, message: '收單後只有 Yw 能加單', confirmText: '收單' }),
+    closed:    (y) => ({ title: `封存 ${y} 年菜`, message: '所有年菜畫面會隱藏\n資料完整保留', confirmText: '封存' }),
 };
 
 const NianfaiAdminPage = () => {
@@ -55,8 +55,8 @@ const NianfaiAdminPage = () => {
     // 去年的品項與訂單完全不動，只是不再是「目前年度」。
     const handleInitNewYear = async () => {
         const newYear = parseInt(newYearInput, 10);
-        if (!newYear) { await showAlert('請輸入有效的年度'); return; }
-        if (!await showConfirm(`確定要初始化 ${newYear} 年菜嗎？\n\n會把${activeYear ? `${activeYear} 年菜的 ${items.length} 個品項` : '（目前沒有上一年度可複製）'}複製成 ${newYear} 的新品項（新年度資料互相獨立），狀態設為準備中。`)) return;
+        if (!newYear) { await showAlert('請輸入有效的年度', { title: '年度錯誤', icon: 'warning' }); return; }
+        if (!await showConfirm(activeYear ? `複製 ${activeYear} 年菜 ${items.length} 個品項` : '目前沒有上一年度可複製', { title: `建立 ${newYear} 年菜`, icon: 'info', note: '去年資料不會變動', confirmText: '建立' })) return;
         setIsInitializing(true);
         try {
             const lastYearItems = items; // 已經是「年菜」分類＋目前年度的品項
@@ -91,10 +91,10 @@ const NianfaiAdminPage = () => {
             await saveSettingValue('nianfai_active_year', String(newYear));
             await saveSettingValue(`nianfai_${newYear}_status`, 'preparing');
             await saveSettingValue(`nianfai_${newYear}_next_seq`, '1');
-            await showAlert(`已複製 ${lastYearItems.length} 筆品項到 ${newYear}（新品項，${activeYear || '上一年度'}的資料完全不變），請到菜單管理頁確認/修正後再開賣。`);
+            await showAlert(`已複製 ${lastYearItems.length} 個品項\n請到菜單管理確認後再開賣`, { title: `${newYear} 年菜已建立`, icon: 'success' });
             await load();
         } catch (e) {
-            await showAlert(`初始化失敗：${e.message}`);
+            await showAlert(e.message, { title: '建立失敗', icon: 'warning' });
         } finally {
             setIsInitializing(false);
         }
@@ -104,13 +104,13 @@ const NianfaiAdminPage = () => {
     const handleAdvanceStatus = async () => {
         if (!activeYear || status === 'archived') return;
         const next = STATUS_ORDER[STATUS_ORDER.indexOf(status) + 1];
-        if (!await showConfirm(NEXT_CONFIRM[status](activeYear))) return;
+        if (!await showConfirm(NEXT_CONFIRM[status](activeYear).message, { ...NEXT_CONFIRM[status](activeYear), icon: 'info' })) return;
         setIsToggling(true);
         try {
             await saveSettingValue(`nianfai_${activeYear}_status`, next);
             setStatus(next);
         } catch (e) {
-            await showAlert(`設定失敗：${e.message}`);
+            await showAlert(e.message, { title: '設定失敗', icon: 'warning' });
         } finally {
             setIsToggling(false);
         }
@@ -118,26 +118,26 @@ const NianfaiAdminPage = () => {
     const handleRevertStatus = async () => {
         if (!activeYear || status === 'preparing') return;
         const prev = STATUS_ORDER[STATUS_ORDER.indexOf(status) - 1];
-        if (!await showConfirm(`確定要把狀態退回「${STATUS_LABELS[prev]}」嗎？（修正誤按用）`)) return;
+        if (!await showConfirm(`退回「${STATUS_LABELS[prev]}」`, { title: '返回上一步', icon: 'warning', confirmText: '退回' })) return;
         setIsToggling(true);
         try {
             await saveSettingValue(`nianfai_${activeYear}_status`, prev);
             setStatus(prev);
         } catch (e) {
-            await showAlert(`設定失敗：${e.message}`);
+            await showAlert(e.message, { title: '設定失敗', icon: 'warning' });
         } finally {
             setIsToggling(false);
         }
     };
 
     const handleFinishProduction = async (item) => {
-        if (!await showConfirm(`確定「${item.name}」製作完成嗎？\n\n目前年菜庫存 ${item.nianfaiProductionQty || 0} 份會變成停售上限，之後不能再調整。`)) return;
+        if (!await showConfirm(`停售上限 ${item.nianfaiProductionQty || 0} 份`, { title: `${item.name} 製作完成`, icon: 'warning', note: '設定後不能再調整', confirmText: '製作完成' })) return;
         setFinishingId(item.id);
         try {
             await finishNianfaiProduction(item.id, activeYear);
             await load();
         } catch (e) {
-            await showAlert(`設定失敗：${e.message}`);
+            await showAlert(e.message, { title: '設定失敗', icon: 'warning' });
         } finally {
             setFinishingId(null);
         }

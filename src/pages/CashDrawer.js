@@ -747,7 +747,7 @@ const CashDrawerPage = () => {
         // 按下當下再查一次，避免畫面停留期間又有新的年菜單結帳
         const latestBlocking = await refreshNianfaiBlocking();
         if (latestBlocking && latestBlocking.length > 0) {
-            await showAlert(`還有年菜訂單資料待補，不能關帳：\n${latestBlocking.map(b => b.label).join('、')}\n\n請到桌位頁「年菜」補齊資料並送出。`, { title: '不能關帳' });
+            await showAlert('請先到桌位頁「年菜」補齊資料', { title: '年菜資料待補', icon: 'warning', note: latestBlocking.map(b => b.label).join('、') });
             return;
         }
         if (!window.confirm(

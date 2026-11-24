@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { getNianfaiQueue, saveNianfaiOrderDetails, submitNianfaiOrder, getSettingValue, getNianfaiReservations, abandonNianfaiReservation } from '../db';
 import useNianfaiSeason from '../hooks/useNianfaiSeason';
 import useDialog from '../components/useDialog';
-import { formatPickupDate } from '../utils/nianfaiDate';
+import { formatPickupDate, formatNianfaiSeq, nianfaiDisplayName } from '../utils/nianfai';
 
 const STATUS_META = {
     incomplete: { label: '資料待補', cls: 'bg-orange-100 text-orange-600' },
@@ -15,9 +15,9 @@ const STATUS_META = {
     sent:       { label: '已送出',   cls: 'bg-green-100 text-green-700' },
 };
 
-const seqLabel = (o) => `${o.year}-${String(o.seqNo).padStart(3, '0')}`;
+const seqLabel = (o) => formatNianfaiSeq(o.year, o.seqNo);
 const fmtTime = (iso) => new Date(iso).toLocaleString('zh-TW', {
-    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
 });
 const fmtMoney = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
 const deliveryText = (o) => o.deliveryMethod === 'delivery' ? '宅配' : `自取 ${formatPickupDate(o.pickupDate) || '（未選日期）'}`;
@@ -27,7 +27,7 @@ const ItemList = ({ items, showPrice = false, className = '' }) => (
     <ul className={`space-y-0.5 ${className}`}>
         {items.map((it, i) => (
             <li key={`${it.id}-${i}`} className="flex justify-between gap-3">
-                <span className="min-w-0 break-words">{it.name} <span className="font-black">× {it.quantity}</span></span>
+                <span className="min-w-0 break-words">{nianfaiDisplayName(it)} <span className="font-black">× {it.quantity}</span></span>
                 {showPrice && <span className="flex-shrink-0 text-gray-500">{fmtMoney((it.price || 0) * (it.quantity || 1))}</span>}
             </li>
         ))}
@@ -108,9 +108,9 @@ const DetailsModal = ({ order, pickupDates, onClose, onDone, showAlert }) => {
         try {
             const r = await submitNianfaiOrder(order.orderId, payload());
             if (r.status === 'failed') {
-                await showAlert(`資料已儲存，但送出表單失敗：${r.error}\n系統會每 5 分鐘自動重試。`, { title: '送出失敗' });
+                await showAlert('資料已儲存，系統每 5 分鐘自動重試', { title: '表單送出失敗', icon: 'warning', note: r.error });
             } else if (r.status === 'pending') {
-                await showAlert('資料已儲存。表單送出網址尚未設定，訂單會保持「待傳送」，設定後自動送出。', { title: '已儲存' });
+                await showAlert('表單網址尚未設定，設定後自動送出', { title: '資料已儲存', icon: 'info' });
             }
             onDone(payload());
         } catch (e) {
@@ -239,7 +239,7 @@ const NianfaiQueuePage = () => {
                             <path d="M15 19l-7-7 7-7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                         </svg>
                     </button>
-                    <h1 className="text-xl font-black">🧧 年菜訂單 {year || ''}</h1>
+                    <h1 className="text-xl font-black">🧧 {year || ''} 年菜訂單</h1>
                 </div>
                 <div className="flex items-center gap-2">
                     <button onClick={load} className="p-2 rounded-lg hover:bg-white/20 transition-colors" title="重新整理">
@@ -288,9 +288,9 @@ const NianfaiQueuePage = () => {
                                             <span className="text-lg font-black text-gray-800">{fmtMoney(r.total)}</span>
                                             <div className="flex gap-1.5">
                                                 <button onClick={async () => {
-                                                    const ok = await showConfirm(`確定要放棄 ${seqLabel(r)} 嗎？\n流水號會記為放棄（跳號，但有紀錄可查）。`, { title: '放棄保留', confirmText: '放棄', danger: true });
+                                                    const ok = await showConfirm(`流水號 ${seqLabel(r)} 將記為放棄`, { title: '放棄此單', icon: 'danger', confirmText: '放棄', danger: true });
                                                     if (!ok) return;
-                                                    try { await abandonNianfaiReservation(r.id); } catch (e) { await showAlert(`放棄失敗：${e.message}`); }
+                                                    try { await abandonNianfaiReservation(r.id); } catch (e) { await showAlert(e.message, { title: '放棄失敗', icon: 'warning' }); }
                                                     load();
                                                 }} className="px-3 py-1.5 rounded-lg bg-gray-100 text-gray-600 text-sm font-bold hover:bg-gray-200">放棄</button>
                                                 <button onClick={() => navigate('/nianfai-order', { state: { resumeReservationId: r.id } })}
