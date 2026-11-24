@@ -3,10 +3,10 @@
 // 兩步流程：「確認訂購」保留流水號、印顧客聯（不含訂購人資料）；
 // 「結帳」才真的成立訂單/發票，資料待補，結帳完回到年菜佇列頁補登。
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import {
     getNianfaiItems, getSettingValue,
-    confirmNianfaiReservation, abandonNianfaiReservation, checkoutNianfaiReservation,
+    confirmNianfaiReservation, abandonNianfaiReservation, checkoutNianfaiReservation, getNianfaiReservation,
 } from '../db';
 import MenuCard from '../components/MenuCard';
 import useDialog from '../components/useDialog';
@@ -26,8 +26,22 @@ const sortForCards = (list) => list.slice().sort((a, b) =>
 // 只影響畫面顯示，資料庫品名與收據不變（品名是對應表單欄位的依據，不能改）
 const cardName = (item) => item.bundleComposition ? item.name.split(/[：:]/)[0].trim() : item.name;
 
+// 購物車＋取貨方式＋取貨日的快照，跟最後一次「確認訂購」比對（防呆，見第 5 節）
+const makeSnapshot = (qtyMap, deliveryMethod, pickupDate) => JSON.stringify({
+    items: Object.entries(qtyMap).filter(([, q]) => q > 0).map(([id, q]) => ({ id, qty: q })).sort((a, b) => a.id.localeCompare(b.id)),
+    deliveryMethod, pickupDate: pickupDate || '',
+});
+
+// 已確認訂購、尚未結帳的保留單號記在本機：不管用什麼方式離開（重新整理、切到其他頁面），
+// 回到點單頁都會還原，流水號不會卡在「保留中」找不回來
+const ACTIVE_RESERVATION_KEY = 'nianfai_active_reservation';
+const rememberReservation = (id) => { try { localStorage.setItem(ACTIVE_RESERVATION_KEY, String(id)); } catch { /* 本機儲存不可用就略過 */ } };
+const forgetReservation = () => { try { localStorage.removeItem(ACTIVE_RESERVATION_KEY); } catch { /* 略過 */ } };
+const storedReservation = () => { try { return localStorage.getItem(ACTIVE_RESERVATION_KEY); } catch { return null; } };
+
 const NianfaiOrderPage = () => {
     const navigate = useNavigate();
+    const location = useLocation();
     const { dialog, showAlert, showConfirm } = useDialog();
     const { year, status } = useNianfaiSeason();
     const [items, setItems] = useState([]);
@@ -44,6 +58,7 @@ const NianfaiOrderPage = () => {
     const [confirmedSnapshot, setConfirmedSnapshot] = useState(null);
     const [confirming, setConfirming] = useState(false);
     const [checkingOut, setCheckingOut] = useState(false);
+    const [resumeNotice, setResumeNotice] = useState('');
 
     useEffect(() => {
         if (!year) return;
@@ -52,6 +67,31 @@ const NianfaiOrderPage = () => {
             try { setPickupDates(JSON.parse(v) || []); } catch { setPickupDates([]); }
         });
         getSettingValue(`nianfai_${year}_delivery_period`, '').then(setDeliveryPeriod);
+    }, [year]);
+
+    // 還原保留中的單：佇列頁按「繼續點單」帶進來的，或本機記住的上一張未結帳單
+    useEffect(() => {
+        if (!year) return;
+        const fromQueue = location.state?.resumeReservationId;
+        const resumeId = fromQueue || storedReservation();
+        if (!resumeId) return;
+        let cancelled = false;
+        getNianfaiReservation(resumeId).then(r => {
+            if (cancelled) return;
+            if (r.status !== 'reserved' || r.year !== year) { forgetReservation(); return; }
+            const qtyMap = {};
+            r.items.forEach(it => { qtyMap[it.id] = it.quantity; });
+            const pd = r.deliveryMethod === 'pickup' ? (r.pickupDate || '') : '';
+            const label = `${r.year}-${String(r.seqNo).padStart(3, '0')}`;
+            setQty(qtyMap); setDeliveryMethod(r.deliveryMethod); setPickupDate(pd);
+            setReservationId(r.id); setSeqLabel(label);
+            setConfirmedSnapshot(makeSnapshot(qtyMap, r.deliveryMethod, pd));
+            rememberReservation(r.id);
+            setResumeNotice(`已還原尚未結帳的訂單 ${label}，可以直接結帳、修改後重新確認，或取消本單。`);
+        }).catch(() => forgetReservation());
+        if (fromQueue) navigate(location.pathname, { replace: true, state: null });
+        return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [year]);
 
     const cartItems = useMemo(() =>
@@ -64,10 +104,7 @@ const NianfaiOrderPage = () => {
 
     // 目前購物車+取貨方式+取貨日的快照，跟最後一次「確認訂購」的快照比對，
     // 不一致就代表客人在結帳前又改了內容，要求重新確認訂購（防呆，見第 5 節）
-    const currentSnapshot = useMemo(() => JSON.stringify({
-        items: cartItems.map(it => ({ id: it.id, qty: it.quantity })).sort((a, b) => a.id.localeCompare(b.id)),
-        deliveryMethod, pickupDate,
-    }), [cartItems, deliveryMethod, pickupDate]);
+    const currentSnapshot = useMemo(() => makeSnapshot(qty, deliveryMethod, pickupDate), [qty, deliveryMethod, pickupDate]);
     const isDirty = !reservationId || currentSnapshot !== confirmedSnapshot;
 
     // 數量調整（卡片點擊、已選購的 −／＋ 共用）：超過上限擋下，減到 0 就從已選購移除
@@ -103,10 +140,12 @@ const NianfaiOrderPage = () => {
     const resetOrder = () => {
         setQty({}); setDeliveryMethod('pickup'); setPickupDate('');
         setReservationId(null); setSeqLabel(''); setConfirmedSnapshot(null);
-        setError(''); setCapNotice('');
+        setError(''); setCapNotice(''); setResumeNotice('');
+        forgetReservation();
     };
 
     const abandonReservation = async () => {
+        forgetReservation();
         if (!reservationId) return;
         try { await abandonNianfaiReservation(reservationId); } catch (e) { /* 放棄失敗不擋使用者離開 */ }
     };
@@ -149,6 +188,7 @@ const NianfaiOrderPage = () => {
             setReservationId(result.reservationId);
             setSeqLabel(label);
             setConfirmedSnapshot(currentSnapshot);
+            rememberReservation(result.reservationId);
 
             fetch('/print', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -280,6 +320,7 @@ const NianfaiOrderPage = () => {
                             : `流水號 ${seqLabel} 已確認，可以結帳`}
                     </div>
                 )}
+                {resumeNotice && <p className="rounded-xl p-3 text-sm font-bold bg-blue-50 text-blue-700">{resumeNotice}</p>}
                 {error && <p className="text-red-500 font-bold text-sm">{error}</p>}
 
                 <div className="space-y-2">

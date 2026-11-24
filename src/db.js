@@ -334,6 +334,12 @@ export async function getNianfaiItems(year) {
 export async function confirmNianfaiReservation(payload) {
     return api('POST', '/api/nianfai/reservations', payload);
 }
+export async function getNianfaiReservations(year) {
+    return api('GET', `/api/nianfai/reservations?year=${year}&status=reserved`);
+}
+export async function getNianfaiReservation(reservationId) {
+    return api('GET', `/api/nianfai/reservations/${reservationId}`);
+}
 export async function abandonNianfaiReservation(reservationId) {
     return api('POST', `/api/nianfai/reservations/${reservationId}/abandon`);
 }

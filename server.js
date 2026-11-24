@@ -2548,6 +2548,29 @@ app.post('/api/nianfai/reservations', async (req, res) => {
     }
 });
 
+// 保留中（已確認訂購、尚未結帳）的單：佇列頁列出來可「繼續點單」或「放棄」，
+// 點單頁也用來還原（重新整理、從其他頁面回來時不會讓流水號卡在保留中找不回來）
+function reservationToCamel(r) {
+    return {
+        id: r.id, year: r.year, seqNo: r.seq_no, status: r.status,
+        items: r.items_snapshot || [], deliveryMethod: r.delivery_method, pickupDate: r.pickup_date,
+        total: r.total, confirmedAt: r.confirmed_at,
+    };
+}
+app.get('/api/nianfai/reservations', async (req, res) => {
+    const year = parseInt(req.query.year, 10);
+    if (!year) return res.status(400).json({ error: '缺少年度' });
+    const { data, error } = await supabase.from('nianfai_seq_reservations')
+        .select('*').eq('year', year).eq('status', req.query.status || 'reserved').order('confirmed_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json((data || []).map(reservationToCamel));
+});
+app.get('/api/nianfai/reservations/:id', async (req, res) => {
+    const { data, error } = await supabase.from('nianfai_seq_reservations').select('*').eq('id', req.params.id).single();
+    if (error || !data) return res.status(404).json({ error: '找不到保留紀錄' });
+    res.json(reservationToCamel(data));
+});
+
 // 放棄：客人最後沒買（離開頁面按取消），流水號記為放棄、會跳號但有紀錄可查
 app.post('/api/nianfai/reservations/:id/abandon', async (req, res) => {
     const { error } = await supabase.from('nianfai_seq_reservations')

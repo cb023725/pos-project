@@ -3,7 +3,7 @@
 // 歷史區（已送出，預設收合）。點待補單開補資料表單，資料完整才能送出表單。
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getNianfaiQueue, saveNianfaiOrderDetails, submitNianfaiOrder, getSettingValue } from '../db';
+import { getNianfaiQueue, saveNianfaiOrderDetails, submitNianfaiOrder, getSettingValue, getNianfaiReservations, abandonNianfaiReservation } from '../db';
 import useNianfaiSeason from '../hooks/useNianfaiSeason';
 import useDialog from '../components/useDialog';
 import { formatPickupDate } from '../utils/nianfaiDate';
@@ -194,7 +194,8 @@ const DetailsModal = ({ order, pickupDates, onClose, onDone, showAlert }) => {
 
 const NianfaiQueuePage = () => {
     const navigate = useNavigate();
-    const { dialog, showAlert } = useDialog();
+    const { dialog, showAlert, showConfirm } = useDialog();
+    const [reservations, setReservations] = useState([]); // 已確認訂購、尚未結帳（保留中）
     const { year, showOrderQueue, loading: seasonLoading } = useNianfaiSeason();
     const [queue, setQueue] = useState({ pending: [], history: [] });
     const [isLoading, setIsLoading] = useState(true);
@@ -206,7 +207,9 @@ const NianfaiQueuePage = () => {
     const load = useCallback(async () => {
         if (!year) return;
         try {
-            setQueue(await getNianfaiQueue(year));
+            const [q, resv] = await Promise.all([getNianfaiQueue(year), getNianfaiReservations(year)]);
+            setQueue(q);
+            setReservations(resv);
             setLoadError('');
         } catch (e) {
             setLoadError(`讀取失敗：${e.message}`);
@@ -267,6 +270,37 @@ const NianfaiQueuePage = () => {
                     </div>
                 ) : (
                     <>
+                        {reservations.length > 0 && (
+                            <>
+                                <div className="px-4 py-2 text-sm font-black text-blue-700 bg-blue-50 border-b border-blue-100">
+                                    保留中・已確認訂購、尚未結帳（{reservations.length}）
+                                </div>
+                                {reservations.map(r => (
+                                    <div key={r.id} className="grid grid-cols-12 gap-2 px-4 py-3 items-start border-b border-gray-200 bg-white">
+                                        <div className="col-span-2 flex flex-col">
+                                            <span className="text-xl font-black text-gray-800 leading-none">{seqLabel(r)}</span>
+                                            <span className="mt-1 self-start text-[11px] font-black px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">保留中</span>
+                                        </div>
+                                        <div className="col-span-2 text-sm font-bold text-gray-600">確認 {fmtTime(r.confirmedAt)}</div>
+                                        <div className="col-span-3 text-sm text-gray-700 min-w-0"><ItemList items={r.items} /></div>
+                                        <div className="col-span-2 text-sm font-bold text-gray-600">{deliveryText(r)}</div>
+                                        <div className="col-span-3 flex flex-col items-end gap-1.5">
+                                            <span className="text-lg font-black text-gray-800">{fmtMoney(r.total)}</span>
+                                            <div className="flex gap-1.5">
+                                                <button onClick={async () => {
+                                                    const ok = await showConfirm(`確定要放棄 ${seqLabel(r)} 嗎？\n流水號會記為放棄（跳號，但有紀錄可查）。`, { title: '放棄保留', confirmText: '放棄', danger: true });
+                                                    if (!ok) return;
+                                                    try { await abandonNianfaiReservation(r.id); } catch (e) { await showAlert(`放棄失敗：${e.message}`); }
+                                                    load();
+                                                }} className="px-3 py-1.5 rounded-lg bg-gray-100 text-gray-600 text-sm font-bold hover:bg-gray-200">放棄</button>
+                                                <button onClick={() => navigate('/nianfai-order', { state: { resumeReservationId: r.id } })}
+                                                    className="px-3 py-1.5 rounded-lg bg-[#C1032F] text-white text-sm font-bold hover:brightness-95">繼續點單</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </>
+                        )}
                         <div className="px-4 py-2 text-sm font-black text-gray-600 bg-orange-50 border-b border-orange-100">
                             待補區（{queue.pending.length}）
                         </div>
