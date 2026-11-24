@@ -249,131 +249,150 @@ const NianfaiOrderPage = () => {
         );
     }
 
+    // 版面比照內用／外帶點單頁：整頁固定高度，左側工作區（30%）只有購物車清單捲動，
+    // 標題列、取貨方式、金額與按鈕固定不動；右側品項區（70%）自己捲動
     return (
-        <div className="p-4 min-h-screen bg-gray-50 flex gap-4">
-            {/* 左側工作區 */}
-            <div className="w-[360px] flex-shrink-0 flex flex-col gap-3">
-                {/* 標題列：左上角返回（比照一般點單頁） */}
-                <div className="bg-[#C1032F] text-white rounded-xl px-2 py-2 flex items-center gap-2 shadow">
-                    <button onClick={handleGoBack} className="p-1.5 rounded-full hover:bg-white/15 transition-colors" title="返回年菜訂單">
-                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                    </button>
-                    <h2 className="text-xl font-black">{year} 年菜</h2>
-                    {seqLabel && <span className="ml-auto text-sm font-black bg-white/20 rounded-lg px-2 py-0.5">{seqLabel}</span>}
-                </div>
+        <div className="flex w-full overflow-hidden font-sans" style={{ height: 'calc(var(--vh, 1vh) * 100)' }}>
+            <div className="flex flex-grow p-2 bg-gray-50 h-full">
 
-                <div className="bg-white rounded-xl shadow p-4">
-                    <h3 className="font-bold text-gray-700 mb-2 flex items-center gap-1.5">
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                            <circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" />
-                            <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
-                        </svg>
-                        購物車
-                    </h3>
-                    {cartItems.length === 0 ? (
-                        <p className="text-gray-300 text-sm text-center py-4">尚未選擇品項</p>
-                    ) : (
-                        <div className="divide-y divide-gray-100 max-h-[42vh] overflow-y-auto">
-                            {cartItems.map(it => (
-                                <div key={it.id} className="flex items-center justify-between py-2 gap-2">
-                                    <span className="font-bold text-lg text-gray-800 leading-tight min-w-0 break-words">{cardName(it)}</span>
-                                    {/* 數量控制：比照一般點單頁，− 減到 0 就刪除 */}
-                                    <div className="flex flex-col items-end flex-shrink-0">
-                                        <div className="flex items-center gap-1.5">
-                                            <button onClick={() => setItemQty(it, it.quantity - 1)}
-                                                className="w-7 h-7 bg-black/5 text-gray-700 rounded-full hover:bg-gray-300 flex items-center justify-center text-base font-bold shadow-sm">-</button>
-                                            <span className="text-xl font-black text-gray-800 w-6 text-center">{it.quantity}</span>
-                                            <button onClick={() => setItemQty(it, it.quantity + 1)}
-                                                className="w-7 h-7 bg-black/5 text-gray-700 rounded-full hover:bg-gray-300 flex items-center justify-center text-base font-bold shadow-sm">+</button>
+                {/* 左側工作區 */}
+                <div className="w-[30%] flex flex-col bg-white rounded-xl overflow-hidden mr-2 h-full">
+                    {/* 標題列：左上角返回（比照一般點單頁） */}
+                    <div className="flex-shrink-0 p-1.5 bg-[#C1032F] text-white flex items-center gap-1">
+                        <button onClick={handleGoBack} className="text-white hover:bg-white/10 p-0.5 rounded-full transition-colors" title="返回年菜訂單">
+                            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                        </button>
+                        <h2 className="text-xl font-black">{year} 年菜</h2>
+                        {seqLabel && <span className="ml-auto text-sm font-black bg-white/20 rounded-lg px-2 py-0.5">{seqLabel}</span>}
+                    </div>
+
+                    {/* 購物車標題 */}
+                    <div className="flex-shrink-0 px-3 pt-2 pb-1 flex items-center justify-between border-b border-gray-100">
+                        <h3 className="font-bold text-gray-700 flex items-center gap-1.5">
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                                <circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" />
+                                <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
+                            </svg>
+                            購物車
+                        </h3>
+                        <span className="text-xs font-bold text-gray-400">共 {cartItems.reduce((n, it) => n + it.quantity, 0)} 份</span>
+                    </div>
+
+                    {/* 購物車清單（唯一會捲動的區塊） */}
+                    <div className="flex-grow min-h-0 overflow-y-auto px-3">
+                        {cartItems.length === 0 ? (
+                            <p className="text-gray-300 text-sm text-center py-8">尚未選擇品項</p>
+                        ) : (
+                            <div className="divide-y divide-gray-100">
+                                {cartItems.map(it => (
+                                    <div key={it.id} className="flex items-center justify-between py-2 gap-2">
+                                        <span className="font-bold text-lg text-gray-800 leading-tight min-w-0 break-words">{cardName(it)}</span>
+                                        {/* 數量控制：比照一般點單頁，− 減到 0 就刪除 */}
+                                        <div className="flex flex-col items-end flex-shrink-0">
+                                            <div className="flex items-center gap-1.5">
+                                                <button onClick={() => setItemQty(it, it.quantity - 1)}
+                                                    className="w-7 h-7 bg-black/5 text-gray-700 rounded-full hover:bg-gray-300 flex items-center justify-center text-base font-bold shadow-sm">-</button>
+                                                <span className="text-xl font-black text-gray-800 w-6 text-center">{it.quantity}</span>
+                                                <button onClick={() => setItemQty(it, it.quantity + 1)}
+                                                    className="w-7 h-7 bg-black/5 text-gray-700 rounded-full hover:bg-gray-300 flex items-center justify-center text-base font-bold shadow-sm">+</button>
+                                            </div>
+                                            <span className="text-xs font-black text-gray-700 pr-1">${(it.price * it.quantity).toLocaleString('en-US')}</span>
                                         </div>
-                                        <span className="text-xs font-black text-gray-700 pr-1">${(it.price * it.quantity).toLocaleString('en-US')}</span>
                                     </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                    {capNotice && <p className="text-orange-500 font-bold text-xs mt-2">{capNotice}</p>}
-                    <div className="border-t border-gray-100 mt-3 pt-3 space-y-1 text-sm">
-                        <div className="flex justify-between text-gray-500"><span>小計</span><span>${subtotal.toLocaleString('en-US')}</span></div>
-                        {shippingFee > 0 && <div className="flex justify-between text-gray-500"><span>運費</span><span>${shippingFee}</span></div>}
-                        <div className="flex justify-between text-lg font-black text-gray-800 pt-1"><span>總額</span><span>${total.toLocaleString('en-US')}</span></div>
-                    </div>
-                </div>
-
-                <div className="bg-white rounded-xl shadow p-4">
-                    <h3 className="font-bold text-gray-700 mb-2">取貨方式</h3>
-                    <div className="flex gap-2 mb-3">
-                        <button onClick={() => { setDeliveryMethod('pickup'); setPickupDate(''); }}
-                            className={`flex-1 py-2.5 rounded-xl font-bold transition-colors ${deliveryMethod === 'pickup' ? 'bg-[#4A9A7A] text-white' : 'bg-gray-100 text-gray-600'}`}>自取</button>
-                        <button onClick={() => { setDeliveryMethod('delivery'); setPickupDate(''); }}
-                            className={`flex-1 py-2.5 rounded-xl font-bold transition-colors ${deliveryMethod === 'delivery' ? 'bg-[#4A9A7A] text-white' : 'bg-gray-100 text-gray-600'}`}>宅配</button>
-                    </div>
-                    {deliveryMethod === 'pickup' ? (
-                        <select value={pickupDate} onChange={e => setPickupDate(e.target.value)}
-                            className="w-full border border-gray-300 rounded-lg p-2.5 text-base">
-                            <option value="">請選擇取貨日</option>
-                            {pickupDates.map(d => <option key={d} value={d}>{formatPickupDate(d)}</option>)}
-                        </select>
-                    ) : (
-                        <p className="text-sm text-gray-500">寄出期間：{deliveryPeriod || '（尚未設定，請到年菜管理頁設定）'}</p>
-                    )}
-                </div>
-
-                {seqLabel && (
-                    <div className={`rounded-xl p-3 text-sm font-bold ${isDirty ? 'bg-orange-50 text-orange-600' : 'bg-green-50 text-green-700'}`}>
-                        {isDirty
-                            ? `流水號 ${seqLabel} 已保留，但內容已變更——請重新按「確認訂購」`
-                            : `流水號 ${seqLabel} 已確認，可以結帳`}
-                    </div>
-                )}
-                {resumeNotice && <p className="rounded-xl p-3 text-sm font-bold bg-blue-50 text-blue-700">{resumeNotice}</p>}
-                {error && <p className="text-red-500 font-bold text-sm">{error}</p>}
-
-                <div className="space-y-2">
-                    <div className="flex gap-2">
-                        <button onClick={handleConfirmOrder} disabled={confirming || cartItems.length === 0}
-                            className="flex-1 py-3 rounded-xl bg-gray-700 text-white font-black disabled:opacity-50">
-                            {confirming ? '處理中...' : reservationId ? '重新確認並重印' : '確認訂購（印顧客聯）'}
-                        </button>
-                        <button onClick={handleCheckout} disabled={checkingOut || isDirty}
-                            className="flex-1 py-3 rounded-xl bg-[#D47856] text-white font-black disabled:opacity-50">
-                            {checkingOut ? '處理中...' : '結帳（印存根聯）'}
-                        </button>
-                    </div>
-                    {(cartItems.length > 0 || reservationId) && (
-                        <button onClick={handleCancelOrder} className="w-full py-2 rounded-xl bg-white border border-gray-200 text-gray-400 font-bold text-sm hover:bg-gray-50">
-                            取消本單
-                        </button>
-                    )}
-                </div>
-            </div>
-
-            {/* 右側品項卡片 */}
-            <div className="flex-grow">
-                <div className="grid grid-cols-4 gap-3">
-                    {items.map(item => {
-                        const q = qty[item.id] || 0;
-                        const isBundle = !!item.bundleComposition;
-                        return (
-                            <div key={item.id} className="relative">
-                                {q > 0 && (
-                                    <span className="absolute -top-2 -right-2 z-30 min-w-[26px] h-[26px] px-1.5 rounded-full bg-[#D47856] text-white text-sm font-black flex items-center justify-center shadow-lg">
-                                        {q}
-                                    </span>
-                                )}
-                                {/* 年菜三角標籤 */}
-                                <span className="absolute top-0 left-0 z-20 w-0 h-0 border-t-[28px] border-r-[28px] border-t-[#C1032F] border-r-transparent rounded-tl-xl pointer-events-none" />
-                                <span className="absolute top-1 left-1 z-20 text-white text-[11px] font-black pointer-events-none">年</span>
-                                {isBundle && (
-                                    <span className="absolute top-1 right-1 z-20 bg-[#C1032F] text-white text-[10px] font-black px-1.5 py-0.5 rounded pointer-events-none">套餐</span>
-                                )}
-                                <div>
-                                    <MenuCard item={isBundle ? { ...item, name: cardName(item) } : item} onAddItem={() => setItemQty(item, q + 1)} onLongPress={() => setItemQty(item, q - 1)} allowOverride hideStock />
-                                </div>
+                                ))}
                             </div>
-                        );
-                    })}
-                    {items.length === 0 && <p className="col-span-full text-gray-400 text-center py-10">目前沒有年菜品項，請先到菜單管理設定</p>}
+                        )}
+                        {capNotice && <p className="text-orange-500 font-bold text-xs py-2">{capNotice}</p>}
+                    </div>
+
+                    {/* 取貨方式（固定在購物車下方） */}
+                    <div className="flex-shrink-0 px-3 py-2 border-t border-gray-200">
+                        <h3 className="font-bold text-gray-700 text-sm mb-1.5">取貨方式</h3>
+                        <div className="flex gap-2 mb-2">
+                            <button onClick={() => { setDeliveryMethod('pickup'); setPickupDate(''); }}
+                                className={`flex-1 py-2 rounded-xl font-bold transition-colors ${deliveryMethod === 'pickup' ? 'bg-[#4A9A7A] text-white' : 'bg-gray-100 text-gray-600'}`}>自取</button>
+                            <button onClick={() => { setDeliveryMethod('delivery'); setPickupDate(''); }}
+                                className={`flex-1 py-2 rounded-xl font-bold transition-colors ${deliveryMethod === 'delivery' ? 'bg-[#4A9A7A] text-white' : 'bg-gray-100 text-gray-600'}`}>宅配</button>
+                        </div>
+                        {deliveryMethod === 'pickup' ? (
+                            <select value={pickupDate} onChange={e => setPickupDate(e.target.value)}
+                                className="w-full border border-gray-300 rounded-lg p-2 text-base">
+                                <option value="">請選擇取貨日</option>
+                                {pickupDates.map(d => <option key={d} value={d}>{formatPickupDate(d)}</option>)}
+                            </select>
+                        ) : (
+                            <p className="text-sm text-gray-500">寄出期間：{deliveryPeriod || '（尚未設定，請到年菜管理頁設定）'}</p>
+                        )}
+                    </div>
+
+                    {/* 底部：狀態提示、金額、按鈕（固定） */}
+                    <div className="flex-shrink-0 p-3 bg-gray-50 border-t space-y-2">
+                        {seqLabel && (
+                            <p className={`rounded-lg px-2.5 py-1.5 text-xs font-bold ${isDirty ? 'bg-orange-50 text-orange-600' : 'bg-green-50 text-green-700'}`}>
+                                {isDirty
+                                    ? `流水號 ${seqLabel} 已保留，但內容已變更——請重新按「確認訂購」`
+                                    : `流水號 ${seqLabel} 已確認，可以結帳`}
+                            </p>
+                        )}
+                        {resumeNotice && <p className="rounded-lg px-2.5 py-1.5 text-xs font-bold bg-blue-50 text-blue-700">{resumeNotice}</p>}
+                        {error && <p className="text-red-500 font-bold text-xs">{error}</p>}
+
+                        <div className="border p-2 rounded-lg bg-white shadow-inner text-sm">
+                            {shippingFee > 0 && (
+                                <>
+                                    <div className="flex justify-between text-gray-500"><span>小計</span><span>${subtotal.toLocaleString('en-US')}</span></div>
+                                    <div className="flex justify-between text-gray-500"><span>運費</span><span>${shippingFee}</span></div>
+                                </>
+                            )}
+                            <div className="flex justify-between items-center">
+                                <span className="font-bold text-gray-800">總金額</span>
+                                <span className="font-black text-2xl text-red-600">NT$ {total.toLocaleString('en-US')}</span>
+                            </div>
+                        </div>
+
+                        <div className="flex gap-2">
+                            <button onClick={handleConfirmOrder} disabled={confirming || cartItems.length === 0}
+                                className="flex-1 py-2 rounded-xl bg-gray-700 text-white disabled:opacity-50 flex flex-col items-center leading-tight">
+                                <span className="font-black text-base">{confirming ? '處理中...' : reservationId ? '重新確認' : '確認訂購'}</span>
+                                <span className="text-[11px] font-bold opacity-80">{reservationId ? '重印顧客聯' : '印顧客聯'}</span>
+                            </button>
+                            <button onClick={handleCheckout} disabled={checkingOut || isDirty}
+                                className="flex-1 py-2 rounded-xl bg-[#D47856] text-white disabled:opacity-50 flex flex-col items-center leading-tight">
+                                <span className="font-black text-base">{checkingOut ? '處理中...' : '結帳'}</span>
+                                <span className="text-[11px] font-bold opacity-80">印存根聯</span>
+                            </button>
+                        </div>
+                        {(cartItems.length > 0 || reservationId) && (
+                            <button onClick={handleCancelOrder} className="w-full py-1.5 rounded-xl bg-white border border-gray-200 text-gray-400 font-bold text-sm hover:bg-gray-50">
+                                取消本單
+                            </button>
+                        )}
+                    </div>
+                </div>
+
+                {/* 右側品項卡片（比照一般點單頁：自己捲動、5 欄） */}
+                <div className="w-[70%] flex flex-col bg-white rounded-xl py-2 px-1 h-full">
+                    <div className="flex-grow overflow-y-auto">
+                        <div className="grid grid-cols-5 gap-1 w-full py-2">
+                            {items.map(item => {
+                                const q = qty[item.id] || 0;
+                                const isBundle = !!item.bundleComposition;
+                                return (
+                                    <div key={item.id} className="relative">
+                                        {/* 年菜三角標籤 */}
+                                        <span className="absolute top-0 left-0 z-20 w-0 h-0 border-t-[28px] border-r-[28px] border-t-[#C1032F] border-r-transparent rounded-tl-xl pointer-events-none" />
+                                        <span className="absolute top-1 left-1 z-20 text-white text-[11px] font-black pointer-events-none">年</span>
+                                        {isBundle && (
+                                            <span className="absolute top-1 right-1 z-20 bg-[#C1032F] text-white text-[10px] font-black px-1.5 py-0.5 rounded pointer-events-none">套餐</span>
+                                        )}
+                                        {/* 卡片上不顯示已點數量（數量看左側購物車） */}
+                                        <MenuCard item={isBundle ? { ...item, name: cardName(item) } : item} onAddItem={() => setItemQty(item, q + 1)} onLongPress={() => setItemQty(item, q - 1)} allowOverride hideStock />
+                                    </div>
+                                );
+                            })}
+                            {items.length === 0 && <p className="col-span-full text-gray-400 text-center py-10">目前沒有年菜品項，請先到菜單管理設定</p>}
+                        </div>
+                    </div>
                 </div>
             </div>
             {dialog}
