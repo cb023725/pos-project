@@ -26,12 +26,11 @@
 | `Confirm.gs` | 表單提交時寄確認信＋停售檢查 |
 | `Sellout.gs` | 需求計算（套餐拆成單品）、達上限自動關閉表單並寄信通知 |
 | `Protect.gs` | 保護範圍、修改紀錄、匯款資訊異動通知 |
-| `ConfirmPickup.html`、`ConfirmDelivery.html` | 確認信範本（2026 年視覺與文案） |
-| `PreShip.html`、`Shipped.html`、`PickupReminder.html` | 寄出前確認、出貨通知、取貨提醒範本（2026 年文案，日期／祝賀語／時段改讀「設定」） |
+| `ConfirmPickup.html`、`ConfirmDelivery.html`、`PreShip.html`、`Shipped.html`、`PickupReminder.html` | 確認信、寄出前確認、出貨通知、取貨提醒範本：由 `gas/tools/build_email_templates.py` 產生，統一 2026 年出貨通知樣式、沿用 2026 年文案 |
 | `appsscript.json` | 時區、網頁應用程式設定 |
 
 測試工具（不用貼到 Apps Script）：`gas/tools/gas_mock_test.js`（模擬 Google 服務跑主要流程）、
-`gas_mock_server.js`（本機假 GAS 伺服器）、`convert_confirm_templates.py`（從 2026 範本轉出確認信）。
+`gas_mock_server.js`（本機假 GAS 伺服器）、`build_email_templates.py`（產生 5 封信的 HTML 範本，統一 2026 年出貨通知樣式）。
 
 ## 第一次設定（只做一次；測試與正式各建一個專案）
 
