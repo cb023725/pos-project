@@ -4,6 +4,7 @@
  *   設定 WebPOS 密鑰：寫入指令碼屬性 WEBPOS_SECRET（要跟 WebPOS .env 的 NIANFAI_GAS_SECRET 一樣）
  *   同步到表單：依「設定」更新套餐題目、單點表格、取貨日選項，先列出差異再套用
  *   檢查停售：手動跑一次停售檢查
+ *   重新套用保護範圍：重建匯款資訊鎖定、表單回應／品項表修改警告（Protect.gs）
  * 之後再加：取消訂單、寄出前確認、出貨通知、補寄取貨提醒（handoff 第 7 節）
  */
 function onOpen() {
@@ -13,18 +14,24 @@ function onOpen() {
     .addSeparator()
     .addItem('同步到表單', 'nfMenuSyncForm')
     .addItem('檢查停售', 'nfMenuCheckSellout')
+    .addItem('重新套用保護範圍', 'nfMenuProtect')
     .addToUi();
 }
 
 function nfMenuInit() {
   var ss = nfSpreadsheet_();
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'nfOnFormSubmit') ScriptApp.deleteTrigger(t);
+    var fn = t.getHandlerFunction();
+    if (fn === 'nfOnFormSubmit' || fn === 'nfOnEdit') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('nfOnFormSubmit').forSpreadsheet(ss).onFormSubmit().create();
+  ScriptApp.newTrigger('nfOnEdit').forSpreadsheet(ss).onEdit().create();
   nfEnsureSettingsSheet_();
   nfEnsureStatusColumn_(nfSheet_(NF.SHEET_RESPONSES));
-  SpreadsheetApp.getUi().alert('初始化完成\n\n・已安裝「提交表單時」觸發條件\n・已建立「設定」分頁與「寄信狀態」欄\n\n下一步：設定 WebPOS 密鑰，然後部署網頁應用程式。');
+  var prot = nfApplyProtections_();
+  SpreadsheetApp.getUi().alert('初始化完成\n\n・已安裝「提交表單時」「編輯時」觸發條件\n・已建立「設定」分頁與「寄信狀態」欄\n' +
+    '・保護範圍：匯款資訊 ' + prot.bankRows + ' 列只有你能改（被修改會寄信通知）；表單回應、品項表修改前會跳警告\n\n' +
+    '下一步：設定 WebPOS 密鑰，然後部署網頁應用程式。');
 }
 
 function nfMenuSetSecret() {
@@ -35,6 +42,11 @@ function nfMenuSetSecret() {
   if (v.length < 16) { ui.alert('密鑰至少 16 個字元'); return; }
   PropertiesService.getScriptProperties().setProperty('WEBPOS_SECRET', v);
   ui.alert('已儲存');
+}
+
+function nfMenuProtect() {
+  var prot = nfApplyProtections_();
+  SpreadsheetApp.getUi().alert('已重新套用保護範圍\n\n・匯款資訊 ' + prot.bankRows + ' 列：只有你能改\n・表單回應、設定品項表：修改前跳警告');
 }
 
 function nfMenuCheckSellout() {
