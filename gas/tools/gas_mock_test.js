@@ -171,6 +171,11 @@ run('goLive (第一次)', () => { ctx.nfSubmitWebposOrder_({ orderId: 303, seqLa
 run('goLive (第二次) → 應該拒絕', () => { try { ctx.nfGoLive_(true); return 'NO ERROR (bad)'; } catch (e) { return 'error: ' + e.message; } });
 run('ping live flag', () => { const p = ctx.nfPing_('dev', 2027); return { live: p.live, liveAt: !!p.liveAt }; });
 run('正式上線後第一筆從第 2 列開始', () => { ctx.NF_CTX.form.setAcceptingResponses(true); ctx.nfSubmitWebposOrder_({ orderId: 404, seqLabel: '27001', customerName: '正式', customerPhone: '1', email: 'goodgoodeatrestaurant@gmail.com', deliveryMethod: 'pickup', pickupDate: '2027-01-29', items: [{ name: '花雕雞', qty: 1 }] }); return respSheet.getRange(2, 1, 1, 1).getValues()[0][0] ? 'row 2 filled' : 'row 2 empty (bad)'; });
+run('訂單整理：改公式欄會還原、手動欄保留', () => { const o = ctx.NF_CTX.ss.getSheetByName('訂單整理'); const f = o.getRange(3, 3).getValue();
+  o.getRange(3, 3).setValue('亂改'); o.getRange(5, 7).setValue('亂改'); o.getRange(4, 1).setValue(true);
+  ctx.nfOnEdit({ range: o.getRange(3, 3), source: ctx.NF_CTX.ss }); ctx.nfOnEdit({ range: o.getRange(5, 7), source: ctx.NF_CTX.ss }); ctx.nfOnEdit({ range: o.getRange(4, 1), source: ctx.NF_CTX.ss });
+  return { C3restored: o.getRange(3, 3).getValue() === f, G5cleared: o.getRange(5, 7).getValue() === '', A4kept: o.getRange(4, 1).getValue() === true, indirect: String(f).includes('INDIRECT') }; });
+run('備料表欄位順序', () => ctx.NF_CTX.ss.getSheetByName('備料表').getRange(1, 1, 1, 4).getValues()[0].join(' | '));
 const orders = ctx.NF_CTX.ss.getSheetByName('訂單整理');
 console.log('  訂單整理欄位：', orders.getRange(1, 1, 1, orders.getLastColumn()).getValues()[0].join(' | '));
 console.log('  小計公式：', orders.getRange(2, 1, 1, orders.getLastColumn()).getValues()[0].find(v => String(v).includes('設定')));
