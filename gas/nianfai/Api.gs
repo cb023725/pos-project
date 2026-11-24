@@ -11,7 +11,11 @@
  *   applyFormSync     同步到表單：套用
  *   checkForm         檢查表單對應（開賣前必須通過）
  *   protect           重新套用保護範圍
- *   rebuildTabs       依目前「設定」重建訂單整理／供需庫存／備料表／修改紀錄（不動表單回應）
+ *   rebuildTabs       依目前「設定」重建宅配／自取（保留手動欄）、查詢、統計、備料表（不動表單回應）
+ *   syncOrders        重新整理宅配／自取（平常表單送出、修改表單回應時會自動做）
+ *   mailPreview       寄信預覽：{ type: preShip｜shipped｜pickupReminder, date }→ 可寄名單、跳過原因、剩餘額度
+ *   mailSend          寄信：{ type, ids, date }（ids 為預覽確認過的訂單編號）
+ *   setReminder       取貨提醒自動寄送開關 { on }
  *   diagnose          回傳回應分頁、觸發條件、各分頁前幾列的計算結果（排查用）
  *   resetTestData     只限 dev：清空表單回應、修改紀錄與送單紀錄（WebPOS「一鍵清空測試資料」）
  *   goLive            測試完畢正式上線：清空表單回覆、表單回應（刪列，正式客人從第 2 列開始）、修改紀錄、
@@ -49,6 +53,16 @@ function doPost(e) {
         var built = nfBuildTabs_(nfReadSettings_());
         nfApplyProtections_();
         return nfJson_({ ok: true, result: built });
+      case 'syncOrders':
+        return nfJson_({ ok: true, result: nfSyncOrderSheets_() });
+      case 'mailPreview':
+        return nfJson_({ ok: true, result: nfMailPreview_(body.type, body.date) });
+      case 'mailSend':
+        return nfJson_({ ok: true, result: nfMailSend_(body.type, body.ids, body.date) });
+      case 'setReminder':
+        nfSetKv_('取貨提醒開關', body.on ? '開' : '關');
+        nfEnsureDailyTrigger_();
+        return nfJson_({ ok: true, reminderOn: !!body.on });
       case 'diagnose':
         return nfJson_({ ok: true, result: nfDiagnose_() });
       case 'resetTestData':
@@ -121,6 +135,9 @@ function nfPing_(env, year) {
     formAccepting: nfForm_().isAcceptingResponses(),
     live: !!NF_CTX.meta.live,
     liveAt: NF_CTX.meta.liveAt || null,
+    reminderOn: String(settings.kv['取貨提醒開關'] || '').trim() === '開',
+    mailQuota: nfMailQuota_(),
+    hasOrderSheets: !!nfSpreadsheet_().getSheetByName(NF.SHEET_DELIVERY),
   };
 }
 
@@ -157,18 +174,11 @@ function nfDiagnose_() {
     return { head: head, rows: rows };
   };
   out.responses = resp ? tail(NF.SHEET_RESPONSES, 1, 5, 40) : null;
-  out.orders = (function () { // 訂單整理：只取有資料的最後 5 列（公式欄會延伸到第 1002 列，用時間戳記判斷）
-    var sh = ss.getSheetByName(NF.SHEET_ORDERS);
-    if (!sh) return null;
-    var lc = Math.min(sh.getLastColumn(), 40);
-    var all = sh.getRange(1, 1, Math.min(sh.getLastRow(), NF_DATA_ROWS + 2), lc).getDisplayValues();
-    var tsCol = all[NF_ORDERS_HEADER_ROW - 1].indexOf('時間戳記');
-    var filled = all.map(function (r, i) { return [String(i + 1)].concat(r); }).filter(function (r, i) { return i >= NF_ORDERS_FIRST_ROW - 1 && tsCol >= 0 && r[tsCol + 1]; });
-    return { head: all.slice(0, NF_ORDERS_HEADER_ROW), rows: filled.slice(-5) };
-  })();
-  out.ordersFormulas = ss.getSheetByName(NF.SHEET_ORDERS) ? ss.getSheetByName(NF.SHEET_ORDERS).getRange(3, 1, 1, 12).getFormulas()[0] : null;
-  out.stock = dump(NF.SHEET_STOCK, 1, 16, 15);
-  out.prep = dump(NF.SHEET_PREP, 1, 15, 12);
+  out.delivery = tail(NF.SHEET_DELIVERY, 1, 8, 40);
+  out.pickup = tail(NF.SHEET_PICKUP, 1, 8, 40);
+  out.stats = dump(NF.SHEET_STATS, 1, 22, 10);
+  out.prep = dump(NF.SHEET_PREP, 1, 16, 12);
+  out.lookup = dump(NF.SHEET_LOOKUP, 1, 8, 12);
   return out;
 }
 
@@ -197,9 +207,8 @@ function nfClearAllResponses_() {
   // 測試環境直接刪列（正式環境取消訂單仍是清除內容、不刪列）：Google 表單會記住下一筆寫在哪一列，
   // 只清內容的話新回應會接在舊的最後一列後面；刪列後再重建分頁，公式範圍也一起重設
   if (last > 1) resp.deleteRows(2, last - 1);
-  var log = nfSpreadsheet_().getSheetByName(NF.SHEET_LOG);
-  if (log && log.getLastRow() > 1) log.getRange(2, 1, log.getLastRow() - 1, 6).clearContent();
-  nfBuildTabs_(nfReadSettings_()); // 訂單整理（含手動欄）、供需庫存、備料表重新建立
+  nfClearMailStates_();
+  nfBuildTabs_(nfReadSettings_(), { reset: true }); // 宅配／自取（含手動欄、取消列）、修改紀錄清空重建
   nfApplyProtections_();
   var prefix = 'SUB_' + NF_CTX.env + ':' + NF_CTX.year + ':';
   var props = nfProps_();

@@ -5,9 +5,10 @@
  *   「表單回應」整個分頁               修改前跳警告（Yw 仍要手動改數量、取消訂單，不能完全鎖死，
  *                                      但不會在不知情的情況下手滑改到）
  *   「設定」品項表（D～K 欄）           修改前跳警告（品項應由 WebPOS 同步）
- *   「訂單整理」整個分頁                修改前跳警告，只開放手動欄（付款、取貨、出貨日、託運單號）的資料列；
- *                                      公式欄被改到會由編輯觸發自動還原（擁有者無法被 Google 鎖住，所以補這一層），
+ *   「宅配」「自取」整個分頁            修改前跳警告，只開放手動欄（付款、出貨日、託運單號、已取貨）的資料列；
+ *                                      其他欄被改到會由編輯觸發自動還原（擁有者無法被 Google 鎖住，所以補這一層），
  *                                      訂單內容只能從「表單回應」改，並留下修改紀錄
+ *   「查詢」只開放 B1；「統計」「備料表」整頁   修改前跳警告
  *
  * 表單送出、GAS 自己寫入（寄信狀態、WebPOS 同步）不受保護範圍影響。
  * 建立年度時執行，之後可從 WebPOS 年菜管理頁「重新套用保護範圍」；只移除／重建說明以「年菜：」
@@ -40,15 +41,22 @@ function nfApplyProtections_() {
     .setDescription(NF_PROTECT_PREFIX + '設定品項表（請由 WebPOS 同步）')
     .setWarningOnly(true);
 
-  // 訂單整理：整個分頁跳警告，手動欄的資料列除外
-  var orders = nfSpreadsheet_().getSheetByName(NF.SHEET_ORDERS);
-  if (orders) {
-    var L = nfOrdersLayoutForCurrent_();
-    var p0 = orders.protect().setDescription(NF_PROTECT_PREFIX + '訂單整理（公式欄請到表單回應修改）').setWarningOnly(true);
+  // 宅配、自取：整個分頁跳警告，手動欄的資料列除外
+  var settings = nfReadSettings_();
+  ['delivery', 'pickup'].forEach(function (kind) {
+    var sh = ss.getSheetByName(nfOrderSheetName_(kind));
+    if (!sh) return;
+    var p0 = sh.protect().setDescription(NF_PROTECT_PREFIX + nfOrderSheetName_(kind) + '（訂單內容請到表單回應修改）').setWarningOnly(true);
     var open = [];
-    L.colDefs.forEach(function (c, i) { if (c.manual) open.push(orders.getRange(L.first, i + 1, NF_DATA_ROWS, 1)); });
+    nfOrderCols_(kind, settings).forEach(function (d, i) { if (d.manual) open.push(sh.getRange(2, i + 1, NF_DATA_ROWS, 1)); });
     p0.setUnprotectedRanges(open);
-  }
+  });
+  var lookup = ss.getSheetByName(NF.SHEET_LOOKUP);
+  if (lookup) lookup.protect().setDescription(NF_PROTECT_PREFIX + '查詢（只開放 B1 輸入）').setWarningOnly(true).setUnprotectedRanges([lookup.getRange('B1')]);
+  [NF.SHEET_STATS, NF.SHEET_PREP].forEach(function (n) {
+    var sh = ss.getSheetByName(n);
+    if (sh) sh.protect().setDescription(NF_PROTECT_PREFIX + n + '（公式）').setWarningOnly(true);
+  });
 
   // 匯款資訊：只有擁有者能改
   var me = Session.getEffectiveUser();
@@ -76,8 +84,12 @@ function nfOnEdit(e) {
   nfUseSpreadsheet_(e.source || e.range.getSheet().getParent());
   var name = e.range.getSheet().getName();
   if (name === NF.SHEET_SETTINGS) nfNotifyBankEdit_(e);
-  else if (name === NF.SHEET_RESPONSES) nfLogResponseEdit_(e);
-  else if (name === NF.SHEET_ORDERS) nfRevertOrdersEdit_(e);
+  else if (name === NF.SHEET_RESPONSES) {
+    nfLogResponseEdit_(e);
+    nfSyncOrderSheets_(); // 修改／取消訂單 → 更新宅配、自取
+  }
+  else if (name === NF.SHEET_DELIVERY) nfOrderSheetEdit_(e, 'delivery');
+  else if (name === NF.SHEET_PICKUP) nfOrderSheetEdit_(e, 'pickup');
 }
 
 /** 「設定」的匯款資訊被修改就寄信通知 */

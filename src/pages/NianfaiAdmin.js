@@ -6,6 +6,7 @@ import { Link } from 'react-router-dom';
 import useDialog from '../components/useDialog';
 import NianfaiDatesCard from '../components/NianfaiDatesCard';
 import NianfaiGoogleCard from '../components/NianfaiGoogleCard';
+import NianfaiMailCard from '../components/NianfaiMailCard';
 import { getSettingValue, saveSettingValue, getMenuItems, getInventoryItems, addMenuItem, updateMenuItem, getNianfaiItems, finishNianfaiProduction, getNianfaiDemand, setNianfaiFormAccepting } from '../db';
 
 const STATUS_ORDER = ['preparing', 'selling', 'closed', 'archived'];
@@ -28,6 +29,7 @@ const NianfaiAdminPage = () => {
     const [isInitializing, setIsInitializing] = useState(false);
     const [isToggling, setIsToggling] = useState(false);
     const [finishingId, setFinishingId] = useState(null);
+    const [gasReload, setGasReload] = useState(0);   // 寄信區改了取貨提醒開關 → 重新讀 GAS 狀態
     const [gas, setGas] = useState(null);            // GAS 狀態（由 NianfaiGoogleCard 回報），用來決定能不能開賣
     const [demandInfo, setDemandInfo] = useState(null); // { source, updatedAt, error }
     const [datesReady, setDatesReady] = useState(false); // 取貨與寄出日期設定好了才能開賣
@@ -240,7 +242,7 @@ const NianfaiAdminPage = () => {
 
             {activeYear && status !== 'archived' && (
                 <NianfaiGoogleCard year={activeYear} number={5} datesReady={datesReady}
-                    showAlert={showAlert} showConfirm={showConfirm} onStatusChange={setGas} />
+                    showAlert={showAlert} showConfirm={showConfirm} onStatusChange={setGas} reloadKey={gasReload} />
             )}
 
             {activeYear && (
@@ -316,6 +318,11 @@ const NianfaiAdminPage = () => {
 
                     {inventoryItems.length === 0 && <p className="text-gray-400 text-center py-6">目前沒有年菜品項</p>}
                 </div>
+            )}
+
+            {activeYear && status !== 'archived' && gas?.ok && gas?.created && (
+                <NianfaiMailCard year={activeYear} number={7} gas={gas} showAlert={showAlert} showConfirm={showConfirm}
+                    onChanged={() => setGasReload(k => k + 1)} />
             )}
             {dialog}
         </div>

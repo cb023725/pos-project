@@ -33,6 +33,12 @@ function nfOnFormSubmit(e) {
   }
 
   try {
+    nfSyncOrderSheets_(); // 新訂單寫進宅配／自取
+  } catch (errSync) {
+    console.error('宅配／自取同步失敗：' + errSync);
+  }
+
+  try {
     nfCheckSellout_((order.isOnsite ? '現場單 ' + order.seqLabel : '線上單') + ' ' + order.timestampText);
   } catch (err2) {
     console.error('停售檢查失敗：' + err2);

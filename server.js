@@ -2655,7 +2655,7 @@ async function checkAndCloseFormIfNeeded(year) {
 
 // 「設定」分頁用的資料：品項／價格／套餐組成／停售上限、取貨與寄出日期（品項唯一來源是 WebPOS）
 async function buildNianfaiSheetPayload(year) {
-    const keys = ['pickup_dates', 'delivery_period', 'last_pickup_end', 'order_deadline', 'pickup_hours'].map(k => `nianfai_${year}_${k}`);
+    const keys = ['pickup_dates', 'ship_dates', 'delivery_period', 'last_pickup_end', 'order_deadline', 'pickup_hours'].map(k => `nianfai_${year}_${k}`);
     const [{ data: items, error }, { data: stockRows }, { data: settings }] = await Promise.all([
         supabase.from('menu_items').select('*').eq('nianfai_year', year).order('sort_order'),
         supabase.from('menu_items').select('id, category, stock').ilike('category', '%庫存%'),
@@ -2668,6 +2668,16 @@ async function buildNianfaiSheetPayload(year) {
     const kv = Object.fromEntries((settings || []).map(r => [r.key.replace(`nianfai_${year}_`, ''), r.value]));
     let pickupDates = [];
     try { pickupDates = JSON.parse(kv.pickup_dates || '[]'); } catch { pickupDates = []; }
+    // 寄出日（起訖 → 每一天），「宅配」出貨日下拉選單用
+    const shipDates = [];
+    try {
+        const { start, end } = JSON.parse(kv.ship_dates || '{}');
+        if (start && end) {
+            for (let d = new Date(`${start}T00:00:00Z`); d <= new Date(`${end}T00:00:00Z`) && shipDates.length < 31; d.setUTCDate(d.getUTCDate() + 1)) {
+                shipDates.push(d.toISOString().slice(0, 10));
+            }
+        }
+    } catch { /* 沒設定 */ }
     return {
         year,
         shippingFee: 160, freeThreshold: 3000, bundleMax: 8, singleMax: 8,
@@ -2675,6 +2685,7 @@ async function buildNianfaiSheetPayload(year) {
         orderDeadline: kv.order_deadline || '',
         pickupHours: kv.pickup_hours || '12:00 ~ 20:00',
         deliveryPeriod: kv.delivery_period || '',
+        shipDates,
         // 最後取貨日（除夕前一天）與結束時間，表單須知與確認信用
         lastPickupText: pickupDates.length ? fmtSlashDateWithWeekday(pickupDates[pickupDates.length - 1]) : '',
         lastPickupEnd: kv.last_pickup_end || '16:00',
@@ -2771,6 +2782,30 @@ app.post('/api/nianfai/gas/check-form', nianfaiGasRoute(async (year) => {
 app.post('/api/nianfai/gas/rebuild-tabs', nianfaiGasRoute(async (year) => {
     await callNianfaiGas('syncSettings', await buildNianfaiSheetPayload(year));
     const r = await callNianfaiGas('rebuildTabs', { year }, { timeoutMs: 120000 });
+    return { ok: true, result: r.result };
+}));
+
+// 寄信（寄出前確認、出貨通知、取貨提醒）：先預覽名單，確認後才寄
+const NIANFAI_MAIL_TYPES = ['preShip', 'shipped', 'pickupReminder'];
+app.post('/api/nianfai/gas/mail-preview', nianfaiGasRoute(async (year, req) => {
+    const { type, date } = req.body || {};
+    if (!NIANFAI_MAIL_TYPES.includes(type)) throw new Error('未知的信件類型');
+    const r = await callNianfaiGas('mailPreview', { year, type, date: date || null }, { timeoutMs: 120000 });
+    return { ok: true, result: r.result };
+}));
+app.post('/api/nianfai/gas/mail-send', nianfaiGasRoute(async (year, req) => {
+    const { type, date, ids } = req.body || {};
+    if (!NIANFAI_MAIL_TYPES.includes(type)) throw new Error('未知的信件類型');
+    if (!Array.isArray(ids) || !ids.length) throw new Error('沒有要寄的訂單');
+    const r = await callNianfaiGas('mailSend', { year, type, date: date || null, ids }, { timeoutMs: 300000 });
+    return { ok: true, result: r.result };
+}));
+app.post('/api/nianfai/gas/set-reminder', nianfaiGasRoute(async (year, req) => {
+    const r = await callNianfaiGas('setReminder', { year, on: !!req.body?.on });
+    return { ok: true, reminderOn: r.reminderOn };
+}));
+app.post('/api/nianfai/gas/sync-orders', nianfaiGasRoute(async (year) => {
+    const r = await callNianfaiGas('syncOrders', { year }, { timeoutMs: 120000 });
     return { ok: true, result: r.result };
 }));
 

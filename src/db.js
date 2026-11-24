@@ -361,6 +361,15 @@ export async function checkNianfaiForm(year) {
 export async function rebuildNianfaiTabs(year) {
     return api('POST', '/api/nianfai/gas/rebuild-tabs', { year });
 }
+export async function previewNianfaiMail(year, type, date) {
+    return api('POST', '/api/nianfai/gas/mail-preview', { year, type, date });
+}
+export async function sendNianfaiMail(year, type, ids, date) {
+    return api('POST', '/api/nianfai/gas/mail-send', { year, type, ids, date });
+}
+export async function setNianfaiReminder(year, on) {
+    return api('POST', '/api/nianfai/gas/set-reminder', { year, on });
+}
 export async function goLiveNianfai(year) {
     return api('POST', '/api/nianfai/gas/go-live', { year });
 }

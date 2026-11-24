@@ -14,8 +14,10 @@
 var NF = {
   SHEET_RESPONSES: '表單回應',
   SHEET_SETTINGS: '設定',
-  SHEET_ORDERS: '訂單整理',
-  SHEET_STOCK: '供需庫存',
+  SHEET_DELIVERY: '宅配',          // GAS 寫入（OrderSheets.gs）
+  SHEET_PICKUP: '自取',
+  SHEET_LOOKUP: '查詢',
+  SHEET_STATS: '統計',
   SHEET_PREP: '備料表',
   SHEET_LOG: '修改紀錄',
   STORE_EMAIL: 'goodgoodeatrestaurant@gmail.com',

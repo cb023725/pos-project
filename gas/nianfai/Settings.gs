@@ -21,6 +21,7 @@ var NF_SETTINGS_DEFAULTS = [
   ['取貨日', ''],               // YYYY-MM-DD，逗號分隔（WebPOS 同步）
   ['每日取貨時間', '12:00 ~ 20:00'],
   ['寄出期間', ''],             // 例：2027/1/25 (一) ~ 1/27 (三)
+  ['寄出日', ''],               // YYYY-MM-DD，逗號分隔（WebPOS 同步）→「宅配」出貨日下拉選單
   ['最後取貨日說明', ''],        // 例：2027/2/4 (四)
   ['最後取貨結束時間', '16:00'],
   ['祝賀語', '羊年行大運'],
@@ -30,7 +31,8 @@ var NF_SETTINGS_DEFAULTS = [
   ['LINE', 'https://lin.ee/ntYrjY9'],
   ['套餐圖片ID', ''],           // 雲端硬碟圖片檔案 ID，建立表單時插在套餐題目前（空白就不放）
   ['單點圖片ID', ''],           // 插在單點表格前
-  ['取貨提醒開關', '關'],
+  ['取貨提醒開關', '關'],        // 開：每天 08:00 自動寄給明天取貨的客人（WebPOS 年菜管理頁切換）
+  ['加熱說明小卡ID', ''],        // 雲端硬碟圖片檔案 ID，出貨通知與取貨提醒的附件（空白就不附）
   ['匯款戶名', ''],             // 確認信「匯款資訊」，由 Yw 自己填（不放在程式裡）
   ['匯款銀行', ''],
   ['匯款分行', ''],
@@ -119,6 +121,7 @@ function nfWriteSettingsFromWebpos_(p) {
     '預購截止日': p.orderDeadline,
     '每日取貨時間': p.pickupHours,
     '寄出期間': p.deliveryPeriod,
+    '寄出日': p.shipDates ? p.shipDates.join(',') : undefined,
     '最後取貨日說明': p.lastPickupText,
     '最後取貨結束時間': p.lastPickupEnd,
   };
@@ -163,4 +166,13 @@ function nfSetSelloutCap_(itemId, itemName, cap) {
     }
   }
   throw new Error('「設定」找不到品項：' + (itemName || itemId));
+}
+
+/** 寫入「設定」A:B 的單一項目（沒有就新增在最後一個項目之後） */
+function nfSetKv_(key, value) {
+  nfEnsureKv_([key]);
+  var rows = {};
+  var sh = nfSheet_(NF.SHEET_SETTINGS);
+  sh.getRange(1, 1, Math.max(sh.getLastRow(), 1), 1).getValues().forEach(function (r, i) { if (r[0]) rows[String(r[0]).trim()] = i + 1; });
+  sh.getRange(rows[key], 2).setValue(value);
 }

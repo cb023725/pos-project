@@ -22,7 +22,7 @@ const Step = ({ n, title, done, active, children }) => (
     </div>
 );
 
-export default function NianfaiGoogleCard({ year, number, datesReady, showAlert, showConfirm, onStatusChange }) {
+export default function NianfaiGoogleCard({ year, number, datesReady, showAlert, showConfirm, onStatusChange, reloadKey }) {
     const [gas, setGas] = useState(null); // null = 檢查中
     const [busy, setBusy] = useState('');
 
@@ -34,7 +34,7 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
         onStatusChange?.(g);
     }, [year, onStatusChange]);
 
-    useEffect(() => { if (year) load(); }, [year, load]);
+    useEffect(() => { if (year) load(); }, [year, load, reloadKey]);
 
     const run = async (key, fn) => {
         setBusy(key);
@@ -89,9 +89,9 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
     });
 
     const handleRebuild = () => run('rebuild', async () => {
-        if (!await showConfirm('依目前品項重建「訂單整理」「供需庫存」「備料表」「修改紀錄」', {
-            title: '重建分頁', icon: 'warning', confirmText: '重建', danger: true,
-            note: '訂單整理的手動欄（付款、取貨、出貨日、託運單號）與修改紀錄會清空；表單回應不受影響',
+        if (!await showConfirm('依目前品項重建「宅配」「自取」「查詢」「統計」「備料表」', {
+            title: '重建分頁', icon: 'warning', confirmText: '重建',
+            note: '付款、出貨日、託運單號、已取貨、寄信狀態會保留；表單回應與修改紀錄不受影響',
         })) return;
         await rebuildNianfaiTabs(year);
         await showAlert('分頁已重建', { title: '完成', icon: 'success' });
@@ -172,7 +172,7 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
                         </Step>
 
                         <Step n={4} title="真實測試" done={live} active={created && !live}>
-                            <p>用 WebPOS 年菜點單、補資料送出，也可以直接在表單網頁填幾張，確認：表單回應有新增、確認信有收到、訂單整理／供需庫存／備料表數字正確。</p>
+                            <p>用 WebPOS 年菜點單、補資料送出，也可以直接在表單網頁填幾張，確認：表單回應有新增、確認信有收到、宅配／自取有出現、統計／備料表數字正確。</p>
                         </Step>
 
                         <Step n={5} title="測試完畢，正式上線" done={live} active={created && checked && !live}>
@@ -201,7 +201,7 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
                                 {[
                                     ['sync', '同步品項到 Sheet', '品項、價格、套餐組成、日期、製作入庫改了之後，寫入試算表「設定」。', handleSyncSettings],
                                     ['form', '同步到表單', '品名、價格、取貨日改了之後，更新表單題目與選項（會先列出差異）。完成後再做第 ③ 步。', handleFormSync],
-                                    ['rebuild', '重建分頁', '新增或刪除品項後，重建訂單整理／供需庫存／備料表的欄位。會清空訂單整理的手動欄，正式上線後請盡量避免。', handleRebuild],
+                                    ['rebuild', '重建分頁', '新增或刪除品項、改了寄出日後，重建宅配／自取／查詢／統計／備料表。手動欄與寄信狀態會保留。', handleRebuild],
                                     ['protect', '重新套用保護範圍', '保護範圍被改掉或新增匯款欄位時使用。', handleProtect],
                                 ].map(([key, label, desc, fn]) => (
                                     <div key={key} className="flex items-start gap-3">
