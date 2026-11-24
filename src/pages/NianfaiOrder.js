@@ -25,10 +25,8 @@ const sortForCards = (list) => list.slice().sort((a, b) =>
 // 套餐只顯示「富貴套餐」，卡片與購物車前面加紅包 emoji 提醒（只在畫面上，收據不加）
 const cardName = (item) => item.bundleComposition ? `🧧 ${nianfaiDisplayName(item)}` : item.name;
 
-// 購物車品名：套餐整句紅字
-const CartItemName = ({ item }) => item.bundleComposition
-    ? <span className="text-red-600">{cardName(item)}</span>
-    : item.name;
+// 購物車品名（套餐帶紅包 emoji）
+const CartItemName = ({ item }) => cardName(item);
 
 // 購物車＋取貨方式＋取貨日的快照，跟最後一次「確認訂購」比對（防呆，見第 5 節）
 const makeSnapshot = (qtyMap, deliveryMethod, pickupDate) => JSON.stringify({
@@ -395,10 +393,14 @@ const NianfaiOrderPage = () => {
                         {error && <p className="text-red-500 font-bold text-xs">{error}</p>}
 
                         <div className="border p-2 rounded-lg bg-white shadow-inner text-sm">
-                            {shippingFee > 0 && (
+                            {/* 宅配一律顯示運費列：未滿 3,000 加 160，滿額顯示免運；切換取貨方式即時重算 */}
+                            {deliveryMethod === 'delivery' && subtotal > 0 && (
                                 <>
                                     <div className="flex justify-between text-gray-500"><span>小計</span><span>${subtotal.toLocaleString('en-US')}</span></div>
-                                    <div className="flex justify-between text-gray-500"><span>運費</span><span>${shippingFee}</span></div>
+                                    <div className="flex justify-between text-gray-500">
+                                        <span>運費{shippingFee > 0 && <span className="text-xs">（未滿 ${FREE_SHIPPING_THRESHOLD.toLocaleString('en-US')}）</span>}</span>
+                                        <span>{shippingFee > 0 ? `$${shippingFee}` : '免運'}</span>
+                                    </div>
                                 </>
                             )}
                             <div className="flex justify-between items-center">
@@ -444,7 +446,7 @@ const NianfaiOrderPage = () => {
                                             <span className="absolute top-1 right-1 z-20 bg-[#C1032F] text-white text-[10px] font-black px-1.5 py-0.5 rounded pointer-events-none">套餐</span>
                                         )}
                                         {/* 卡片上不顯示已點數量（數量看左側購物車） */}
-                                        <MenuCard item={isBundle ? { ...item, name: cardName(item) } : item} onAddItem={() => setItemQty(item, q + 1, { bump: true })} onLongPress={() => setItemQty(item, q - 1)} allowOverride hideStock fillHeight priceClassName="text-red-600" />
+                                        <MenuCard item={isBundle ? { ...item, name: cardName(item) } : item} onAddItem={() => setItemQty(item, q + 1, { bump: true })} onLongPress={() => setItemQty(item, q - 1)} allowOverride hideStock fillHeight priceClassName="text-amber-700" />
                                     </div>
                                 );
                             })}

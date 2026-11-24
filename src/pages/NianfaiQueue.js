@@ -59,12 +59,12 @@ const OrderRow = ({ order, onClick }) => {
                 <span className={`mt-1 self-start text-[11px] font-black px-1.5 py-0.5 rounded ${meta.cls}`}>{meta.label}</span>
             </div>
             <div className="col-span-2 text-sm font-bold text-gray-600">{fmtTime(order.checkoutTime)}</div>
-            <div className="col-span-4 text-sm text-gray-700 min-w-0">
+            <div className="col-span-3 text-sm text-gray-700 min-w-0">
                 <ItemList items={order.items} />
                 {order.customerName && <p className="text-xs text-gray-400 mt-1">{order.customerName} {order.customerPhone}</p>}
                 {order.status === 'failed' && order.error && <p className="text-xs text-red-500">{order.error}</p>}
             </div>
-            <div className="col-span-2 text-sm font-bold text-gray-600">{deliveryText(order)}</div>
+            <div className="col-span-3 text-sm font-bold text-gray-600 whitespace-nowrap">{deliveryText(order)}</div>
             <div className="col-span-2 text-right pr-2 text-lg font-black text-gray-800">{fmtMoney(order.total)}</div>
         </div>
     );
@@ -257,8 +257,8 @@ const NianfaiQueuePage = () => {
             <div className="flex-shrink-0 bg-gray-100 px-4 py-1.5 grid grid-cols-12 gap-2 text-[11px] font-black text-gray-500 tracking-wide border-b border-gray-300">
                 <div className="col-span-2">流水號</div>
                 <div className="col-span-2">結帳時間</div>
-                <div className="col-span-4">品項</div>
-                <div className="col-span-2">取貨方式</div>
+                <div className="col-span-3">品項</div>
+                <div className="col-span-3">取貨方式</div>
                 <div className="col-span-2 text-right pr-2">金額</div>
             </div>
 
@@ -283,8 +283,8 @@ const NianfaiQueuePage = () => {
                                         </div>
                                         <div className="col-span-2 text-sm font-bold text-gray-600">確認 {fmtTime(r.confirmedAt)}</div>
                                         <div className="col-span-3 text-sm text-gray-700 min-w-0"><ItemList items={r.items} /></div>
-                                        <div className="col-span-2 text-sm font-bold text-gray-600">{deliveryText(r)}</div>
-                                        <div className="col-span-3 flex flex-col items-end gap-1.5">
+                                        <div className="col-span-3 text-sm font-bold text-gray-600 whitespace-nowrap">{deliveryText(r)}</div>
+                                        <div className="col-span-2 flex flex-col items-end gap-1.5">
                                             <span className="text-lg font-black text-gray-800">{fmtMoney(r.total)}</span>
                                             <div className="flex gap-1.5">
                                                 <button onClick={async () => {
