@@ -107,7 +107,7 @@ const NianfaiOrderPage = () => {
     const currentSnapshot = useMemo(() => makeSnapshot(qty, deliveryMethod, pickupDate), [qty, deliveryMethod, pickupDate]);
     const isDirty = !reservationId || currentSnapshot !== confirmedSnapshot;
 
-    // 數量調整（卡片點擊、已選購的 −／＋ 共用）：超過上限擋下，減到 0 就從已選購移除
+    // 數量調整（卡片點擊、購物車的 −／＋ 共用）：超過上限擋下，減到 0 就從購物車移除
     const setItemQty = async (item, value) => {
         const max = item.bundleComposition ? BUNDLE_MAX : SINGLE_MAX;
         if (value > max) {
@@ -258,31 +258,18 @@ const NianfaiOrderPage = () => {
                     <button onClick={handleGoBack} className="p-1.5 rounded-full hover:bg-white/15 transition-colors" title="返回年菜訂單">
                         <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
                     </button>
-                    <h2 className="text-xl font-black">🧧 年菜點單 {year}</h2>
+                    <h2 className="text-xl font-black">{year} 年菜</h2>
                     {seqLabel && <span className="ml-auto text-sm font-black bg-white/20 rounded-lg px-2 py-0.5">{seqLabel}</span>}
                 </div>
 
                 <div className="bg-white rounded-xl shadow p-4">
-                    <h3 className="font-bold text-gray-700 mb-2">取貨方式</h3>
-                    <div className="flex gap-2 mb-3">
-                        <button onClick={() => { setDeliveryMethod('pickup'); setPickupDate(''); }}
-                            className={`flex-1 py-2.5 rounded-xl font-bold transition-colors ${deliveryMethod === 'pickup' ? 'bg-[#4A9A7A] text-white' : 'bg-gray-100 text-gray-600'}`}>自取</button>
-                        <button onClick={() => { setDeliveryMethod('delivery'); setPickupDate(''); }}
-                            className={`flex-1 py-2.5 rounded-xl font-bold transition-colors ${deliveryMethod === 'delivery' ? 'bg-[#4A9A7A] text-white' : 'bg-gray-100 text-gray-600'}`}>宅配</button>
-                    </div>
-                    {deliveryMethod === 'pickup' ? (
-                        <select value={pickupDate} onChange={e => setPickupDate(e.target.value)}
-                            className="w-full border border-gray-300 rounded-lg p-2.5 text-base">
-                            <option value="">請選擇取貨日</option>
-                            {pickupDates.map(d => <option key={d} value={d}>{formatPickupDate(d)}</option>)}
-                        </select>
-                    ) : (
-                        <p className="text-sm text-gray-500">寄出期間：{deliveryPeriod || '（尚未設定，請到年菜管理頁設定）'}</p>
-                    )}
-                </div>
-
-                <div className="bg-white rounded-xl shadow p-4">
-                    <h3 className="font-bold text-gray-700 mb-2">已選購</h3>
+                    <h3 className="font-bold text-gray-700 mb-2 flex items-center gap-1.5">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                            <circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" />
+                            <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
+                        </svg>
+                        購物車
+                    </h3>
                     {cartItems.length === 0 ? (
                         <p className="text-gray-300 text-sm text-center py-4">尚未選擇品項</p>
                     ) : (
@@ -311,6 +298,25 @@ const NianfaiOrderPage = () => {
                         {shippingFee > 0 && <div className="flex justify-between text-gray-500"><span>運費</span><span>${shippingFee}</span></div>}
                         <div className="flex justify-between text-lg font-black text-gray-800 pt-1"><span>總額</span><span>${total.toLocaleString('en-US')}</span></div>
                     </div>
+                </div>
+
+                <div className="bg-white rounded-xl shadow p-4">
+                    <h3 className="font-bold text-gray-700 mb-2">取貨方式</h3>
+                    <div className="flex gap-2 mb-3">
+                        <button onClick={() => { setDeliveryMethod('pickup'); setPickupDate(''); }}
+                            className={`flex-1 py-2.5 rounded-xl font-bold transition-colors ${deliveryMethod === 'pickup' ? 'bg-[#4A9A7A] text-white' : 'bg-gray-100 text-gray-600'}`}>自取</button>
+                        <button onClick={() => { setDeliveryMethod('delivery'); setPickupDate(''); }}
+                            className={`flex-1 py-2.5 rounded-xl font-bold transition-colors ${deliveryMethod === 'delivery' ? 'bg-[#4A9A7A] text-white' : 'bg-gray-100 text-gray-600'}`}>宅配</button>
+                    </div>
+                    {deliveryMethod === 'pickup' ? (
+                        <select value={pickupDate} onChange={e => setPickupDate(e.target.value)}
+                            className="w-full border border-gray-300 rounded-lg p-2.5 text-base">
+                            <option value="">請選擇取貨日</option>
+                            {pickupDates.map(d => <option key={d} value={d}>{formatPickupDate(d)}</option>)}
+                        </select>
+                    ) : (
+                        <p className="text-sm text-gray-500">寄出期間：{deliveryPeriod || '（尚未設定，請到年菜管理頁設定）'}</p>
+                    )}
                 </div>
 
                 {seqLabel && (
@@ -361,7 +367,7 @@ const NianfaiOrderPage = () => {
                                 {isBundle && (
                                     <span className="absolute top-1 right-1 z-20 bg-[#C1032F] text-white text-[10px] font-black px-1.5 py-0.5 rounded pointer-events-none">套餐</span>
                                 )}
-                                <div className={isBundle ? 'ring-4 ring-[#C1032F] rounded-xl' : ''}>
+                                <div>
                                     <MenuCard item={isBundle ? { ...item, name: cardName(item) } : item} onAddItem={() => setItemQty(item, q + 1)} onLongPress={() => setItemQty(item, q - 1)} allowOverride hideStock />
                                 </div>
                             </div>
