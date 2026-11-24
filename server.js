@@ -1830,6 +1830,8 @@ app.post('/api/tables/:tableNumber/reset', async (req, res) => {
 });
 // Dev 專用：一鍵清空桌位管理測試頁——刪除所有進行中（未結帳歸檔）的訂單與對應發票，
 // 桌位全部重設為空桌，庫存連動品項統一設回 10 份。已歸檔的歷史訂單/發票/報表資料不動。
+// 年菜測試資料全部清掉（不論狀態，含已作廢）：年菜訂單／發票、流水號保留紀錄，
+// 流水號計數器歸 1（下一張從 27001 開始）、表單關閉狀態重設。
 // IS_DEV 擋在最前面，就算有人直接打這支 API 也不會在 prod 生效。
 app.post('/api/dev/reset-test-data', async (req, res) => {
     if (!IS_DEV) return res.status(403).json({ error: '僅限 dev 環境使用' });
@@ -1848,7 +1850,35 @@ app.post('/api/dev/reset-test-data', async (req, res) => {
         }
         await supabase.from('tables').update({ status: 'idle', order_id: null, updated_at: new Date().toISOString() }).not('table_number', 'is', null);
         await supabase.from('menu_items').update({ stock: 10 }).ilike('category', '%庫存%');
-        res.json({ ok: true, clearedOrders: orderIds.length });
+
+        // 年菜：所有年菜訂單（含作廢、已歸檔）與發票；nianfai_orders 會跟著 orders 一起刪（on delete cascade）
+        const { data: nfOrders, error: nfErr } = await supabase.from('orders').select('id').eq('is_nianfai', true);
+        if (nfErr) throw nfErr;
+        const nfOrderIds = (nfOrders || []).map(o => o.id);
+        if (nfOrderIds.length > 0) {
+            const { data: nfInvs } = await supabase.from('invoices').select('id').in('order_id', nfOrderIds);
+            const nfInvIds = (nfInvs || []).map(i => i.id);
+            if (nfInvIds.length > 0) {
+                await supabase.from('adjustments').delete().in('original_invoice_id', nfInvIds);
+                await supabase.from('invoices').delete().in('id', nfInvIds);
+            }
+            await supabase.from('nianfai_orders').delete().in('order_id', nfOrderIds);
+            await supabase.from('orders').delete().in('id', nfOrderIds);
+        }
+        const { data: resvRows } = await supabase.from('nianfai_seq_reservations').select('id');
+        if ((resvRows || []).length > 0) {
+            await supabase.from('nianfai_seq_reservations').delete().in('id', resvRows.map(r => r.id));
+        }
+        // 所有年度的流水號計數器歸 1、表單關閉狀態重設
+        const { data: nfSettings } = await supabase.from('app_settings').select('key')
+            .or('key.like.nianfai_%_next_seq,key.like.nianfai_%_form_closed');
+        const nowIso = new Date().toISOString();
+        for (const { key } of (nfSettings || [])) {
+            const value = key.endsWith('_next_seq') ? '1' : 'false';
+            await supabase.from('app_settings').upsert({ key, value, updated_at: nowIso });
+        }
+
+        res.json({ ok: true, clearedOrders: orderIds.length, clearedNianfaiOrders: nfOrderIds.length, clearedReservations: (resvRows || []).length });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

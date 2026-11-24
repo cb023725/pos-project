@@ -397,7 +397,7 @@ const TableManagementPage = () => {
     }, []);
 
     const handleDevResetTestData = async () => {
-        if (!window.confirm('確定要清空測試資料嗎？\n\n會刪除所有進行中（尚未結帳歸檔）的訂單與發票，桌位全部重設為空桌，庫存連動品項統一設回 10 份。\n已歸檔的歷史訂單/發票/報表資料不受影響。')) return;
+        if (!window.confirm('確定要清空測試資料嗎？\n\n會刪除所有進行中（尚未結帳歸檔）的訂單與發票，桌位全部重設為空桌，庫存連動品項統一設回 10 份。\n年菜測試資料全部清除（訂單、發票、保留流水號），流水號重新從 001 起算。\n已歸檔的一般歷史訂單/發票/報表資料不受影響。')) return;
         setIsResettingTestData(true);
         try {
             await resetDevTestData();
