@@ -2,7 +2,7 @@
 // 取代舊的 NianfaiModal 彈窗。版面比照一般點單頁：左側工作區、右側品項卡片。
 // 兩步流程：「確認訂購」保留流水號、印顧客聯（不含訂購人資料）；
 // 「結帳」才真的成立訂單/發票，資料待補，結帳完回到年菜佇列頁補登。
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import {
     getNianfaiItems, getSettingValue,
@@ -26,6 +26,17 @@ const sortForCards = (list) => list.slice().sort((a, b) =>
 // 只影響畫面顯示，資料庫品名與收據不變（品名是對應表單欄位的依據，不能改）
 const cardName = (item) => item.bundleComposition ? item.name.split(/[：:]/)[0].trim() : item.name;
 
+// 購物車裡的套餐：「套餐」兩字用紅色提醒
+const CartItemName = ({ item }) => {
+    const name = cardName(item);
+    if (!item.bundleComposition) return name;
+    if (!name.includes('套餐')) return <>{name}<span className="text-red-600">（套餐）</span></>;
+    const parts = name.split('套餐');
+    return parts.map((p, i) => (
+        <React.Fragment key={i}>{p}{i < parts.length - 1 && <span className="text-red-600">套餐</span>}</React.Fragment>
+    ));
+};
+
 // 購物車＋取貨方式＋取貨日的快照，跟最後一次「確認訂購」比對（防呆，見第 5 節）
 const makeSnapshot = (qtyMap, deliveryMethod, pickupDate) => JSON.stringify({
     items: Object.entries(qtyMap).filter(([, q]) => q > 0).map(([id, q]) => ({ id, qty: q })).sort((a, b) => a.id.localeCompare(b.id)),
@@ -46,6 +57,11 @@ const NianfaiOrderPage = () => {
     const { year, status } = useNianfaiSeason();
     const [items, setItems] = useState([]);
     const [qty, setQty] = useState({});
+    // 點餐順序：從卡片點進來時記一個遞增序號，購物車照序號由新到舊排列（最新點的在最上面）
+    const [addSeq, setAddSeq] = useState({});
+    const seqCounter = useRef(0);
+    const cartListRef = useRef(null);
+    const [hiddenBelow, setHiddenBelow] = useState(0); // 購物車捲軸下方還藏著幾項
     const [deliveryMethod, setDeliveryMethod] = useState('pickup');
     const [pickupDate, setPickupDate] = useState('');
     const [pickupDates, setPickupDates] = useState([]);
@@ -80,7 +96,10 @@ const NianfaiOrderPage = () => {
             if (cancelled) return;
             if (r.status !== 'reserved' || r.year !== year) { forgetReservation(); return; }
             const qtyMap = {};
-            r.items.forEach(it => { qtyMap[it.id] = it.quantity; });
+            const seqMap = {};
+            r.items.forEach((it, i) => { qtyMap[it.id] = it.quantity; seqMap[it.id] = r.items.length - i; });
+            seqCounter.current = r.items.length;
+            setAddSeq(seqMap);
             const pd = r.deliveryMethod === 'pickup' ? (r.pickupDate || '') : '';
             const label = `${r.year}-${String(r.seqNo).padStart(3, '0')}`;
             setQty(qtyMap); setDeliveryMethod(r.deliveryMethod); setPickupDate(pd);
@@ -95,8 +114,26 @@ const NianfaiOrderPage = () => {
     }, [year]);
 
     const cartItems = useMemo(() =>
-        items.filter(it => (qty[it.id] || 0) > 0).map(it => ({ ...it, quantity: qty[it.id] })),
-    [items, qty]);
+        items.filter(it => (qty[it.id] || 0) > 0)
+            .map(it => ({ ...it, quantity: qty[it.id] }))
+            .sort((a, b) => (addSeq[b.id] || 0) - (addSeq[a.id] || 0)),
+    [items, qty, addSeq]);
+
+    // 購物車捲軸下方還有幾項沒露出來：底部顯示漸層＋「還有 N 項」，避免藏在捲軸下被忽略
+    const updateHiddenBelow = useCallback(() => {
+        const el = cartListRef.current;
+        if (!el) return;
+        const bottom = el.getBoundingClientRect().bottom;
+        const rows = el.querySelectorAll('[data-cart-row]');
+        let n = 0;
+        rows.forEach(row => { if (row.getBoundingClientRect().bottom > bottom + 2) n += 1; });
+        setHiddenBelow(n);
+    }, []);
+    useEffect(() => { updateHiddenBelow(); }, [cartItems, updateHiddenBelow]);
+    useEffect(() => {
+        window.addEventListener('resize', updateHiddenBelow);
+        return () => window.removeEventListener('resize', updateHiddenBelow);
+    }, [updateHiddenBelow]);
 
     const subtotal = cartItems.reduce((s, it) => s + (it.price || 0) * it.quantity, 0);
     const shippingFee = deliveryMethod === 'delivery' && subtotal > 0 && subtotal < FREE_SHIPPING_THRESHOLD ? SHIPPING_FEE : 0;
@@ -108,7 +145,7 @@ const NianfaiOrderPage = () => {
     const isDirty = !reservationId || currentSnapshot !== confirmedSnapshot;
 
     // 數量調整（卡片點擊、購物車的 −／＋ 共用）：超過上限擋下，減到 0 就從購物車移除
-    const setItemQty = async (item, value) => {
+    const setItemQty = async (item, value, { bump = false } = {}) => {
         const max = item.bundleComposition ? BUNDLE_MAX : SINGLE_MAX;
         if (value > max) {
             setCapNotice(`「${cardName(item)}」已達上限 ${max} 份，超過請先在表單送出後，到「表單回應」直接修改數量（不拆單）`);
@@ -120,6 +157,12 @@ const NianfaiOrderPage = () => {
             if (!ok) return;
         }
         setCapNotice('');
+        if (bump && value > current) {
+            seqCounter.current += 1;
+            const seq = seqCounter.current;
+            setAddSeq(prev => ({ ...prev, [item.id]: seq }));
+            cartListRef.current?.scrollTo({ top: 0, behavior: 'smooth' }); // 新點的在最上面，捲回頂端讓它看得到
+        }
         setQty(prev => {
             const next = { ...prev };
             if (value <= 0) delete next[item.id]; else next[item.id] = value;
@@ -137,8 +180,15 @@ const NianfaiOrderPage = () => {
         return { name: it.name, price: it.price, quantity: it.quantity, bundleComponents };
     }), [cartItems, items]);
 
+    // 一鍵清空購物車：只清品項，不動已保留的流水號（要放棄整張單用「取消本單」）
+    const handleClearCart = async () => {
+        const ok = await showConfirm('確定要清空購物車嗎？', { title: '清空購物車', confirmText: '清空', danger: true });
+        if (!ok) return;
+        setQty({}); setAddSeq({}); setCapNotice('');
+    };
+
     const resetOrder = () => {
-        setQty({}); setDeliveryMethod('pickup'); setPickupDate('');
+        setQty({}); setAddSeq({}); setDeliveryMethod('pickup'); setPickupDate('');
         setReservationId(null); setSeqLabel(''); setConfirmedSnapshot(null);
         setError(''); setCapNotice(''); setResumeNotice('');
         forgetReservation();
@@ -275,18 +325,28 @@ const NianfaiOrderPage = () => {
                             </svg>
                             購物車
                         </h3>
-                        <span className="text-xs font-bold text-gray-400">共 {cartItems.reduce((n, it) => n + it.quantity, 0)} 份</span>
+                        <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-gray-400">共 {cartItems.reduce((n, it) => n + it.quantity, 0)} 份</span>
+                            {cartItems.length > 0 && (
+                                <button onClick={handleClearCart}
+                                    className="flex items-center gap-1 text-xs font-bold text-red-500 bg-red-50 hover:bg-red-100 px-2 py-1 rounded-lg">
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></svg>
+                                    清空
+                                </button>
+                            )}
+                        </div>
                     </div>
 
-                    {/* 購物車清單（唯一會捲動的區塊） */}
-                    <div className="flex-grow min-h-0 overflow-y-auto px-3">
+                    {/* 購物車清單（唯一會捲動的區塊）；下方還有品項時顯示漸層與提示 */}
+                    <div className="flex-grow min-h-0 relative">
+                    <div ref={cartListRef} onScroll={updateHiddenBelow} className="h-full overflow-y-auto px-3 pb-6">
                         {cartItems.length === 0 ? (
                             <p className="text-gray-300 text-sm text-center py-8">尚未選擇品項</p>
                         ) : (
                             <div className="divide-y divide-gray-100">
                                 {cartItems.map(it => (
-                                    <div key={it.id} className="flex items-center justify-between py-2 gap-2">
-                                        <span className="font-bold text-lg text-gray-800 leading-tight min-w-0 break-words">{cardName(it)}</span>
+                                    <div key={it.id} data-cart-row className="flex items-center justify-between py-2 gap-2">
+                                        <span className="font-bold text-lg text-gray-800 leading-tight min-w-0 break-words"><CartItemName item={it} /></span>
                                         {/* 數量控制：比照一般點單頁，− 減到 0 就刪除 */}
                                         <div className="flex flex-col items-end flex-shrink-0">
                                             <div className="flex items-center gap-1.5">
@@ -304,11 +364,17 @@ const NianfaiOrderPage = () => {
                         )}
                         {capNotice && <p className="text-orange-500 font-bold text-xs py-2">{capNotice}</p>}
                     </div>
+                    {hiddenBelow > 0 && (
+                        <div className="absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-white via-white/80 to-transparent pointer-events-none flex items-end justify-center pb-1">
+                            <span className="text-xs font-black text-white bg-gray-500/90 rounded-full px-3 py-0.5 shadow">▼ 下方還有 {hiddenBelow} 項</span>
+                        </div>
+                    )}
+                    </div>
 
                     {/* 取貨方式（固定在購物車下方） */}
                     <div className="flex-shrink-0 px-3 py-2 border-t border-gray-200">
-                        <h3 className="font-bold text-gray-700 text-sm mb-1.5">取貨方式</h3>
-                        <div className="flex gap-2 mb-2">
+                        <div className="flex items-center gap-2 mb-2">
+                            <h3 className="font-bold text-gray-700 text-sm flex-shrink-0">取貨方式</h3>
                             <button onClick={() => { setDeliveryMethod('pickup'); setPickupDate(''); }}
                                 className={`flex-1 py-2 rounded-xl font-bold transition-colors ${deliveryMethod === 'pickup' ? 'bg-[#4A9A7A] text-white' : 'bg-gray-100 text-gray-600'}`}>自取</button>
                             <button onClick={() => { setDeliveryMethod('delivery'); setPickupDate(''); }}
@@ -370,15 +436,16 @@ const NianfaiOrderPage = () => {
                     </div>
                 </div>
 
-                {/* 右側品項卡片（比照一般點單頁：自己捲動、5 欄） */}
+                {/* 右側品項卡片（比照一般點單頁：自己捲動；年菜品項少，一列四張比較大） */}
                 <div className="w-[70%] flex flex-col bg-white rounded-xl py-2 px-1 h-full">
                     <div className="flex-grow overflow-y-auto">
-                        <div className="grid grid-cols-5 gap-1 w-full py-2">
+                        {/* 一列四張；auto-rows-fr＋fillHeight：所有卡片取最高那張的高度，大小一致 */}
+                        <div className="grid grid-cols-4 auto-rows-fr gap-2 w-full p-1">
                             {items.map(item => {
                                 const q = qty[item.id] || 0;
                                 const isBundle = !!item.bundleComposition;
                                 return (
-                                    <div key={item.id} className="relative">
+                                    <div key={item.id} className="relative h-full">
                                         {/* 年菜三角標籤 */}
                                         <span className="absolute top-0 left-0 z-20 w-0 h-0 border-t-[28px] border-r-[28px] border-t-[#C1032F] border-r-transparent rounded-tl-xl pointer-events-none" />
                                         <span className="absolute top-1 left-1 z-20 text-white text-[11px] font-black pointer-events-none">年</span>
@@ -386,7 +453,7 @@ const NianfaiOrderPage = () => {
                                             <span className="absolute top-1 right-1 z-20 bg-[#C1032F] text-white text-[10px] font-black px-1.5 py-0.5 rounded pointer-events-none">套餐</span>
                                         )}
                                         {/* 卡片上不顯示已點數量（數量看左側購物車） */}
-                                        <MenuCard item={isBundle ? { ...item, name: cardName(item) } : item} onAddItem={() => setItemQty(item, q + 1)} onLongPress={() => setItemQty(item, q - 1)} allowOverride hideStock />
+                                        <MenuCard item={isBundle ? { ...item, name: cardName(item) } : item} onAddItem={() => setItemQty(item, q + 1, { bump: true })} onLongPress={() => setItemQty(item, q - 1)} allowOverride hideStock fillHeight />
                                     </div>
                                 );
                             })}

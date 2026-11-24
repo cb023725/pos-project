@@ -12,7 +12,8 @@ const toDisplaySrc = (url) => (/^https?:\/\//.test(url) ? `/api/image-proxy?url=
 // 要不要跳確認視窗後放行（例如年菜訂購允許「確認後仍要加入已停售品項」）。
 // 預設 false，一般點餐頁維持原本「停售就完全點不動」的行為不變。
 // hideStock：不顯示右上角庫存數量（年菜點單頁用，年菜不扣庫存，數量只會造成誤解）。
-const MenuCard = React.memo(({ item, onAddItem, onLongPress, allowOverride = false, hideStock = false }) => {
+// fillHeight：卡片撐滿格子高度（搭配 grid auto-rows-fr，所有卡片取最高那張的高度、大小一致）。
+const MenuCard = React.memo(({ item, onAddItem, onLongPress, allowOverride = false, hideStock = false, fillHeight = false }) => {
     const hasInventoryLink = !!(item.consumes?.length); // 有庫存連動才顯示售完/庫存數
     const isSoldOut  = !!item.soldOut;
     const isDepleted = hasInventoryLink && !!item.depleted; // 只有連動品項才有售完狀態
@@ -51,7 +52,7 @@ const MenuCard = React.memo(({ item, onAddItem, onLongPress, allowOverride = fal
             onTouchEnd={cancelPress}
             onContextMenu={e => e.preventDefault()}
             className={`
-                w-full bg-white rounded-xl shadow-lg transition-all text-left flex flex-col overflow-hidden relative select-none
+                w-full ${fillHeight ? 'h-full' : ''} bg-white rounded-xl shadow-lg transition-all text-left flex flex-col overflow-hidden relative select-none
                 ${isDisabled
                     ? 'opacity-60 cursor-not-allowed ring-4 ring-inset ring-red-300'
                     : isDepleted
@@ -105,7 +106,7 @@ const MenuCard = React.memo(({ item, onAddItem, onLongPress, allowOverride = fal
             </div>
 
             {/* 底部資訊 */}
-            <div className="py-1 px-0.5 flex flex-col h-25 justify-center">
+            <div className={`py-1 px-0.5 flex flex-col ${fillHeight ? 'flex-grow justify-between' : 'h-25 justify-center'}`}>
                 <div className="relative w-full mb-1">
                     {item.category === '主餐' && item.sortOrder && (
                         <div className="absolute left-0 top-0.5 flex items-center justify-center w-5 h-5 bg-black rounded-md z-10">
