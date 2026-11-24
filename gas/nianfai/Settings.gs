@@ -4,10 +4,11 @@
  * 版面：
  *   A:B  項目｜值        （年度、運費、免運門檻、數量上限、取貨日、寄出期間… 部分由 WebPOS 寫入，
  *                          祝賀語、最後取貨日說明等由 Yw 自己填，WebPOS 同步時不覆蓋沒傳的項目）
- *   D:J  品項表          品項ID｜品名｜單價｜類型｜套餐組成｜平常也賣｜停售上限
+ *   D:K  品項表          品項ID｜品名｜單價｜類型｜套餐組成｜平常也賣｜停售上限｜製作入庫
+ *        製作入庫：WebPOS 對應庫存的目前數量（年節限定＝年菜庫存、平常也賣＝冷凍包庫存），供需庫存「製作」欄用
  *        套餐組成格式：「鮑魚人蔘雞湯×1、無錫排骨×1」（用品名，方便閱讀）
  */
-var NF_SETTINGS_ITEM_HEADERS = ['品項ID', '品名', '單價', '類型', '套餐組成', '平常也賣', '停售上限'];
+var NF_SETTINGS_ITEM_HEADERS = ['品項ID', '品名', '單價', '類型', '套餐組成', '平常也賣', '停售上限', '製作入庫'];
 var NF_SETTINGS_ITEM_COL = 4; // D 欄
 
 var NF_SETTINGS_DEFAULTS = [
@@ -140,7 +141,8 @@ function nfWriteSettingsFromWebpos_(p) {
   var rows = items.map(function (it) {
     var comp = (it.composition || []).map(function (c) { return c.name + '×' + c.qty; }).join('、');
     return [it.id, it.name, it.price, it.isBundle ? '套餐' : '單點', comp, it.regular ? '是' : '否',
-      it.cap === null || it.cap === undefined ? '' : it.cap];
+      it.cap === null || it.cap === undefined ? '' : it.cap,
+      it.productionQty === null || it.productionQty === undefined ? '' : it.productionQty];
   });
   var itemLast = sh.getLastRow();
   if (itemLast > 1) sh.getRange(2, NF_SETTINGS_ITEM_COL, itemLast - 1, NF_SETTINGS_ITEM_HEADERS.length).clearContent();

@@ -7,7 +7,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
     getNianfaiGasStatus, createNianfaiSheet, syncNianfaiSettingsToSheet,
-    nianfaiFormSync, checkNianfaiForm, protectNianfaiSheet,
+    nianfaiFormSync, checkNianfaiForm, protectNianfaiSheet, rebuildNianfaiTabs,
 } from '../db';
 
 export default function NianfaiGoogleCard({ year, number, datesReady, showAlert, showConfirm, onStatusChange }) {
@@ -60,6 +60,14 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
         const r = await checkNianfaiForm(year);
         if (r.passed) await showAlert('每個品項與欄位都對應正確，可以開賣', { title: '檢查通過', icon: 'success' });
         else await showAlert('請修正以下問題後再檢查一次', { title: '檢查未通過', icon: 'warning', note: r.problems.join('\n') });
+    });
+
+    const handleRebuild = () => run('rebuild', async () => {
+        if (!await showConfirm('依目前品項重建「訂單整理」「供需庫存」「備料表」「修改紀錄」', {
+            title: '重建分頁', icon: 'warning', note: '訂單整理的手動欄（付款、取貨、出貨日、託運單號）會清空，修改紀錄也會清空；表單回應不受影響', confirmText: '重建', danger: true,
+        })) return;
+        await rebuildNianfaiTabs(year);
+        await showAlert('分頁已重建', { title: '完成', icon: 'success' });
     });
 
     const handleProtect = () => run('protect', async () => {
@@ -116,6 +124,7 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
                         <button onClick={handleSyncSettings} disabled={!!busy} className={`${btn} bg-gray-700 text-white`}>{busy === 'sync' ? '同步中...' : '同步品項到 Sheet'}</button>
                         <button onClick={handleFormSync} disabled={!!busy} className={`${btn} bg-gray-700 text-white`}>{busy === 'form' ? '處理中...' : '同步到表單'}</button>
                         <button onClick={handleProtect} disabled={!!busy} className={`${btn} bg-gray-100 text-gray-600`}>{busy === 'protect' ? '處理中...' : '重新套用保護範圍'}</button>
+                        <button onClick={handleRebuild} disabled={!!busy} className={`${btn} bg-gray-100 text-gray-600`}>{busy === 'rebuild' ? '重建中...' : '重建分頁'}</button>
                     </div>
                     <p className="text-xs text-gray-400">
                         可以自由修改表單的說明文字、段落說明、圖片與主題；請不要改題目名稱、選項與單點品名（改了「檢查表單對應」會擋下）。

@@ -2632,11 +2632,12 @@ async function buildNianfaiSheetPayload(year) {
     const keys = ['pickup_dates', 'delivery_period', 'last_pickup_end', 'order_deadline', 'pickup_hours'].map(k => `nianfai_${year}_${k}`);
     const [{ data: items, error }, { data: stockRows }, { data: settings }] = await Promise.all([
         supabase.from('menu_items').select('*').eq('nianfai_year', year).order('sort_order'),
-        supabase.from('menu_items').select('id, category').ilike('category', '%庫存%'),
+        supabase.from('menu_items').select('id, category, stock').ilike('category', '%庫存%'),
         supabase.from('app_settings').select('key, value').in('key', keys),
     ]);
     if (error) throw error;
     const catById = new Map((stockRows || []).map(r => [r.id, r.category]));
+    const stockById = new Map((stockRows || []).map(r => [r.id, r.stock]));
     const nameById = new Map((items || []).map(r => [r.id, r.name]));
     const kv = Object.fromEntries((settings || []).map(r => [r.key.replace(`nianfai_${year}_`, ''), r.value]));
     let pickupDates = [];
@@ -2658,6 +2659,8 @@ async function buildNianfaiSheetPayload(year) {
             // 平常也賣＝對應冷凍包庫存；年節限定對應年菜庫存
             regular: !!r.nianfai_stock_ref && catById.get(r.nianfai_stock_ref) !== NIANFAI_STOCK_CATEGORY,
             cap: r.nianfai_sellout_cap,
+            // 製作入庫＝對應庫存目前數量（供需庫存「製作」欄）
+            productionQty: r.nianfai_stock_ref ? (stockById.get(r.nianfai_stock_ref) ?? null) : null,
         })),
     };
 }
@@ -2732,6 +2735,19 @@ app.post('/api/nianfai/gas/check-form', nianfaiGasRoute(async (year) => {
     const result = { passed: !!r.passed, problems: r.problems || [], at: new Date().toISOString() };
     await supabase.from('app_settings').upsert({ key: `nianfai_${year}_form_check`, value: JSON.stringify(result), updated_at: result.at });
     return { ok: true, ...result };
+}));
+
+// 依目前「設定」重建訂單整理／供需庫存／備料表／修改紀錄（不動表單回應）
+app.post('/api/nianfai/gas/rebuild-tabs', nianfaiGasRoute(async (year) => {
+    await callNianfaiGas('syncSettings', await buildNianfaiSheetPayload(year));
+    const r = await callNianfaiGas('rebuildTabs', { year }, { timeoutMs: 120000 });
+    return { ok: true, result: r.result };
+}));
+
+// 排查用：回應分頁、觸發條件、各分頁前幾列的顯示值
+app.post('/api/nianfai/gas/diagnose', nianfaiGasRoute(async (year) => {
+    const r = await callNianfaiGas('diagnose', { year }, { timeoutMs: 60000 });
+    return { ok: true, result: r.result };
 }));
 
 // 重新套用保護範圍

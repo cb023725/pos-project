@@ -11,6 +11,8 @@
  *   applyFormSync     同步到表單：套用
  *   checkForm         檢查表單對應（開賣前必須通過）
  *   protect           重新套用保護範圍
+ *   rebuildTabs       依目前「設定」重建訂單整理／供需庫存／備料表／修改紀錄（不動表單回應）
+ *   diagnose          回傳回應分頁、觸發條件、各分頁前幾列的計算結果（排查用）
  *   submitOrder       WebPOS 現場單送進表單（WebposSubmit.gs）
  *   finishProduction  寫入停售上限並立即檢查（製作完成）
  *   ping              連線測試
@@ -38,6 +40,12 @@ function doPost(e) {
         return nfJson_({ ok: true, passed: chk.ok, problems: chk.problems });
       case 'protect':
         return nfJson_({ ok: true, result: nfApplyProtections_() });
+      case 'rebuildTabs':
+        var built = nfBuildTabs_(nfReadSettings_());
+        nfApplyProtections_();
+        return nfJson_({ ok: true, result: built });
+      case 'diagnose':
+        return nfJson_({ ok: true, result: nfDiagnose_() });
       case 'submitOrder':
         return nfJson_(nfSubmitWebposOrder_(body.order));
       case 'finishProduction':
@@ -93,4 +101,34 @@ function nfPing_(env, year) {
     items: settings.items.length,
     formAccepting: nfForm_().isAcceptingResponses(),
   };
+}
+
+/** 排查用：回應分頁、表單、觸發條件、各分頁前幾列的顯示值 */
+function nfDiagnose_() {
+  var ss = nfSpreadsheet_();
+  var form = nfForm_();
+  var out = {
+    spreadsheet: ss.getName(),
+    sheets: ss.getSheets().map(function (sh) { return { name: sh.getName(), lastRow: sh.getLastRow(), lastCol: sh.getLastColumn(), formUrl: sh.getFormUrl() || '' }; }),
+    formId: form.getId(),
+    formDestinationId: (function () { try { return form.getDestinationId(); } catch (e) { return 'ERR ' + e; } })(),
+    formResponses: form.getResponses().length,
+    formAccepting: form.isAcceptingResponses(),
+    triggers: ScriptApp.getProjectTriggers()
+      .filter(function (t) { return t.getTriggerSourceId && t.getTriggerSourceId() === ss.getId(); })
+      .map(function (t) { return t.getHandlerFunction() + ':' + t.getEventType(); }),
+  };
+  var dump = function (name, fromRow, nRows, nCols) {
+    var sh = ss.getSheetByName(name);
+    if (!sh) return null;
+    var lc = Math.min(sh.getLastColumn() || 1, nCols);
+    return sh.getRange(fromRow, 1, nRows, lc).getDisplayValues();
+  };
+  var resp = ss.getSheetByName(NF.SHEET_RESPONSES);
+  out.responses = resp ? dump(NF.SHEET_RESPONSES, 1, Math.min(Math.max(resp.getLastRow(), 1), 6), 40) : null;
+  out.orders = dump(NF.SHEET_ORDERS, 1, 6, 40);
+  out.ordersFormulas = ss.getSheetByName(NF.SHEET_ORDERS) ? ss.getSheetByName(NF.SHEET_ORDERS).getRange(3, 1, 1, 12).getFormulas()[0] : null;
+  out.stock = dump(NF.SHEET_STOCK, 1, 16, 15);
+  out.prep = dump(NF.SHEET_PREP, 1, 15, 12);
+  return out;
 }
