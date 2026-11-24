@@ -14,7 +14,7 @@ import useNianfaiSeason from '../hooks/useNianfaiSeason';
 import { formatPickupDate, formatNianfaiSeq, nianfaiDisplayName } from '../utils/nianfai';
 
 const BUNDLE_MAX = 8;
-const SINGLE_MAX = 9;
+const SINGLE_MAX = 8; // 跟表單單點數量選項一致（1～8，更多請 LINE 聯繫）
 const SHIPPING_FEE = 160;
 const FREE_SHIPPING_THRESHOLD = 3000;
 

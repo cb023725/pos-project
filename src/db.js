@@ -346,8 +346,20 @@ export async function abandonNianfaiReservation(reservationId) {
 export async function checkoutNianfaiReservation(reservationId, payload) {
     return api('POST', `/api/nianfai/reservations/${reservationId}/checkout`, payload);
 }
-export async function getNianfaiGasStatus() {
-    return api('GET', '/api/nianfai/gas/status');
+export async function getNianfaiGasStatus(year) {
+    return api('GET', `/api/nianfai/gas/status${year ? `?year=${year}` : ''}`);
+}
+export async function createNianfaiSheet(year) {
+    return api('POST', '/api/nianfai/gas/create-year', { year });
+}
+export async function nianfaiFormSync(year, apply) {
+    return api('POST', '/api/nianfai/gas/form-sync', { year, apply });
+}
+export async function checkNianfaiForm(year) {
+    return api('POST', '/api/nianfai/gas/check-form', { year });
+}
+export async function protectNianfaiSheet(year) {
+    return api('POST', '/api/nianfai/gas/protect', { year });
 }
 export async function syncNianfaiSettingsToSheet(year) {
     return api('POST', '/api/nianfai/gas/sync-settings', { year });

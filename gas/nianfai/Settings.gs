@@ -15,12 +15,20 @@ var NF_SETTINGS_DEFAULTS = [
   ['運費', 160],
   ['免運門檻', 3000],
   ['套餐上限', 8],
-  ['單點上限', 9],
+  ['單點上限', 8],
+  ['預購截止日', ''],            // YYYY-MM-DD（WebPOS 年菜管理頁設定）
   ['取貨日', ''],               // YYYY-MM-DD，逗號分隔（WebPOS 同步）
+  ['每日取貨時間', '12:00 ~ 20:00'],
   ['寄出期間', ''],             // 例：2027/1/25 (一) ~ 1/27 (三)
-  ['最後取貨日說明', ''],        // 例：2027/2/4 (四)；空白時用取貨日最後一天
+  ['最後取貨日說明', ''],        // 例：2027/2/4 (四)
   ['最後取貨結束時間', '16:00'],
   ['祝賀語', '羊年行大運'],
+  ['表單問候語', '家家圍爐慶團圓，\n鴻運呈祥賀新年，\n咕咕義新春年菜陪你迎接嶄新羊年！'],
+  ['店址', '台中市西區東興路三段13號1樓'],
+  ['電話', '04 2471 5526'],
+  ['LINE', 'https://lin.ee/ntYrjY9'],
+  ['套餐圖片ID', ''],           // 雲端硬碟圖片檔案 ID，建立表單時插在套餐題目前（空白就不放）
+  ['單點圖片ID', ''],           // 插在單點表格前
   ['取貨提醒開關', '關'],
   ['匯款戶名', ''],             // 確認信「匯款資訊」，由 Yw 自己填（不放在程式裡）
   ['匯款銀行', ''],
@@ -79,6 +87,10 @@ function nfReadSettings_() {
       if (sub) it.composition.push({ item: sub, qty: Number(m[2]) });
     });
   });
+  // 有沒有包含在任何套餐裡（表單上不在套餐裡、只能單點的品項加 *，沿用 2026 年寫法）
+  items.forEach(function (it) {
+    it.inBundle = items.some(function (b) { return b.isBundle && b.composition.some(function (c) { return c.item === it; }); });
+  });
   var pickupDates = String(kv['取貨日'] || '').split(/[,，\s]+/).filter(String);
   return {
     kv: kv,
@@ -88,7 +100,7 @@ function nfReadSettings_() {
     shippingFee: Number(kv['運費']) || 160,
     freeThreshold: Number(kv['免運門檻']) || 3000,
     bundleMax: Number(kv['套餐上限']) || 8,
-    singleMax: Number(kv['單點上限']) || 9,
+    singleMax: Number(kv['單點上限']) || 8,
     pickupDates: pickupDates,
   };
 }
@@ -103,6 +115,8 @@ function nfWriteSettingsFromWebpos_(p) {
     '套餐上限': p.bundleMax,
     '單點上限': p.singleMax,
     '取貨日': (p.pickupDates || []).join(','),
+    '預購截止日': p.orderDeadline,
+    '每日取貨時間': p.pickupHours,
     '寄出期間': p.deliveryPeriod,
     '最後取貨日說明': p.lastPickupText,
     '最後取貨結束時間': p.lastPickupEnd,

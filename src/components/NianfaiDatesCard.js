@@ -4,7 +4,9 @@
 //   nianfai_<年>_last_pickup_end 最後一天取貨結束時間（例 16:00，除夕前一天）
 //   nianfai_<年>_ship_dates      宅配寄出起訖（JSON { start, end }）
 //   nianfai_<年>_delivery_period 宅配寄出期間文字（由起訖產生，例「2027/1/25 (一) ~ 1/27 (三)」）
-// 自取與寄出日期都設定好才能開賣（onStatusChange 回報給年菜管理頁）。
+//   nianfai_<年>_order_deadline  預購截止日（表單須知）
+//   nianfai_<年>_pickup_hours    每日取貨時間（例「12:00 ~ 20:00」，表單須知）
+// 自取、寄出日期與預購截止日都設定好才能開賣、建立 Google 表單（onStatusChange 回報給年菜管理頁）。
 import React, { useState, useEffect, useMemo } from 'react';
 import { getSettingValue, saveSettingValue } from '../db';
 import { formatDateSlash, dateRange } from '../utils/nianfai';
@@ -18,31 +20,41 @@ export default function NianfaiDatesCard({ year, number, onStatusChange, showAle
     const [lastEnd, setLastEnd] = useState('16:00');
     const [shipStart, setShipStart] = useState('');
     const [shipEnd, setShipEnd] = useState('');
+    const [deadline, setDeadline] = useState('');
+    const [hourStart, setHourStart] = useState('12:00');
+    const [hourEnd, setHourEnd] = useState('20:00');
     const [saved, setSaved] = useState(null); // 已儲存的內容（判斷有沒有未儲存的修改）
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
         if (!year) return;
         (async () => {
-            const [p, l, sh] = await Promise.all([
+            const [p, l, sh, dl, hours] = await Promise.all([
                 getSettingValue(`nianfai_${year}_pickup_dates`, '[]'),
                 getSettingValue(`nianfai_${year}_last_pickup_end`, '16:00'),
                 getSettingValue(`nianfai_${year}_ship_dates`, '{}'),
+                getSettingValue(`nianfai_${year}_order_deadline`, ''),
+                getSettingValue(`nianfai_${year}_pickup_hours`, '12:00 ~ 20:00'),
             ]);
+            const hm = /(\d{1,2}:\d{2})\s*~\s*(\d{1,2}:\d{2})/.exec(hours || '') || [];
+            setDeadline(dl || '');
+            setHourStart(hm[1] || '12:00'); setHourEnd(hm[2] || '20:00');
             const dates = (parseJson(p, []) || []).slice().sort();
             const ship = parseJson(sh, {}) || {};
             setPickStart(dates[0] || ''); setPickEnd(dates[dates.length - 1] || '');
             setSelected(new Set(dates));
             setLastEnd(l || '16:00');
             setShipStart(ship.start || ''); setShipEnd(ship.end || '');
-            setSaved({ dates: dates.join(','), lastEnd: l || '16:00', ship: `${ship.start || ''}~${ship.end || ''}` });
+            setSaved({ dates: dates.join(','), lastEnd: l || '16:00', ship: `${ship.start || ''}~${ship.end || ''}`, deadline: dl || '', hours: `${hm[1] || '12:00'} ~ ${hm[2] || '20:00'}` });
         })();
     }, [year]);
 
     const days = useMemo(() => dateRange(pickStart, pickEnd), [pickStart, pickEnd]);
     const pickupDates = days.filter(d => selected.has(d));
-    const ready = !!saved && saved.dates !== '' && saved.ship !== '~';
-    const dirty = !!saved && (pickupDates.join(',') !== saved.dates || lastEnd !== saved.lastEnd || `${shipStart}~${shipEnd}` !== saved.ship);
+    const hoursText = `${hourStart} ~ ${hourEnd}`;
+    const ready = !!saved && saved.dates !== '' && saved.ship !== '~' && !!saved.deadline;
+    const dirty = !!saved && (pickupDates.join(',') !== saved.dates || lastEnd !== saved.lastEnd || `${shipStart}~${shipEnd}` !== saved.ship
+        || deadline !== saved.deadline || hoursText !== saved.hours);
 
     useEffect(() => { onStatusChange?.(ready); }, [ready, onStatusChange]);
 
@@ -64,6 +76,7 @@ export default function NianfaiDatesCard({ year, number, onStatusChange, showAle
     const handleSave = async () => {
         if (!pickupDates.length) { await showAlert('請設定至少一天自取日', { title: '自取日未設定', icon: 'warning' }); return; }
         if (!shipStart || !shipEnd || shipStart > shipEnd) { await showAlert('請設定宅配寄出的開始與結束日', { title: '寄出日未設定', icon: 'warning' }); return; }
+        if (!deadline) { await showAlert('請設定預購截止日', { title: '截止日未設定', icon: 'warning' }); return; }
         setSaving(true);
         try {
             await Promise.all([
@@ -71,8 +84,10 @@ export default function NianfaiDatesCard({ year, number, onStatusChange, showAle
                 saveSettingValue(`nianfai_${year}_last_pickup_end`, lastEnd),
                 saveSettingValue(`nianfai_${year}_ship_dates`, JSON.stringify({ start: shipStart, end: shipEnd })),
                 saveSettingValue(`nianfai_${year}_delivery_period`, shipText),
+                saveSettingValue(`nianfai_${year}_order_deadline`, deadline),
+                saveSettingValue(`nianfai_${year}_pickup_hours`, hoursText),
             ]);
-            setSaved({ dates: pickupDates.join(','), lastEnd, ship: `${shipStart}~${shipEnd}` });
+            setSaved({ dates: pickupDates.join(','), lastEnd, ship: `${shipStart}~${shipEnd}`, deadline, hours: hoursText });
             await showAlert('記得到「Google 表單／Sheet」重新同步', { title: '日期已儲存', icon: 'success' });
         } catch (e) {
             await showAlert(e.message, { title: '儲存失敗', icon: 'warning' });
@@ -88,9 +103,17 @@ export default function NianfaiDatesCard({ year, number, onStatusChange, showAle
                 <h3 className="text-xl font-bold text-gray-700">{number}. 取貨與寄出日期（{year}）</h3>
                 {!ready && <span className="text-sm font-bold text-red-600 bg-red-50 rounded-lg px-2 py-1">尚未設定，不能開賣</span>}
             </div>
-            <p className="text-sm text-gray-500 mb-4">每年初始化後設定。自取日會用在點單頁、補資料與表單選項；寄出期間會印在顧客聯與確認信上。</p>
+            <p className="text-sm text-gray-500 mb-4">每年初始化後設定，用在點單頁、補資料、Google 表單須知與選項、顧客聯與確認信。</p>
 
             <div className="space-y-4">
+                <div>
+                    <p className="font-bold text-gray-700 mb-2">預購截止日</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <input type="date" className={input} value={deadline} onChange={e => setDeadline(e.target.value)} />
+                        {deadline && <span className="text-sm text-gray-500 ml-2">{formatDateSlash(deadline)}</span>}
+                    </div>
+                </div>
+
                 <div>
                     <p className="font-bold text-gray-700 mb-2">來店自取</p>
                     <div className="flex flex-wrap items-center gap-2">
@@ -111,6 +134,12 @@ export default function NianfaiDatesCard({ year, number, onStatusChange, showAle
                         </div>
                     )}
                     {days.length > 0 && <p className="text-xs text-gray-400 mt-1">點日期可以取消／恢復；目前開放 {pickupDates.length} 天</p>}
+                    <div className="flex flex-wrap items-center gap-2 mt-3">
+                        <span className="text-sm text-gray-500">每日取貨時間</span>
+                        <input type="time" className={`${input} w-36`} value={hourStart} onChange={e => setHourStart(e.target.value)} />
+                        <span className="text-gray-400">～</span>
+                        <input type="time" className={`${input} w-36`} value={hourEnd} onChange={e => setHourEnd(e.target.value)} />
+                    </div>
                 </div>
 
                 <div>

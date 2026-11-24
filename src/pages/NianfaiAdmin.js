@@ -5,7 +5,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import useDialog from '../components/useDialog';
 import NianfaiDatesCard from '../components/NianfaiDatesCard';
-import { getSettingValue, saveSettingValue, getMenuItems, getInventoryItems, addMenuItem, updateMenuItem, getNianfaiItems, finishNianfaiProduction, getNianfaiDemand, getNianfaiGasStatus, syncNianfaiSettingsToSheet } from '../db';
+import NianfaiGoogleCard from '../components/NianfaiGoogleCard';
+import { getSettingValue, saveSettingValue, getMenuItems, getInventoryItems, addMenuItem, updateMenuItem, getNianfaiItems, finishNianfaiProduction, getNianfaiDemand } from '../db';
 
 const STATUS_ORDER = ['preparing', 'selling', 'closed', 'archived'];
 const STATUS_LABELS = { preparing: '準備中', selling: '開賣中', closed: '收單後', archived: '已封存（平常營業）' };
@@ -27,15 +28,9 @@ const NianfaiAdminPage = () => {
     const [isInitializing, setIsInitializing] = useState(false);
     const [isToggling, setIsToggling] = useState(false);
     const [finishingId, setFinishingId] = useState(null);
-    const [gas, setGas] = useState(null);            // GAS 連線狀態（null = 檢查中）
-    const [syncing, setSyncing] = useState(false);
+    const [gas, setGas] = useState(null);            // GAS 狀態（由 NianfaiGoogleCard 回報），用來決定能不能開賣
     const [demandInfo, setDemandInfo] = useState(null); // { source, updatedAt, error }
     const [datesReady, setDatesReady] = useState(false); // 取貨與寄出日期設定好了才能開賣
-
-    const loadGas = useCallback(async () => {
-        setGas(null);
-        try { setGas(await getNianfaiGasStatus()); } catch (e) { setGas({ configured: true, ok: false, error: e.message }); }
-    }, []);
 
     const load = useCallback(async () => {
         const year = await getSettingValue('nianfai_active_year', null);
@@ -59,22 +54,10 @@ const NianfaiAdminPage = () => {
         setItems(activeYearNum ? all.filter(i => i.category === '年菜' && i.nianfaiYear === activeYearNum) : []);
     }, []);
 
-    useEffect(() => { load(); loadGas(); }, [load, loadGas]);
+    useEffect(() => { load(); }, [load]);
 
-    // WebPOS 品項／價格／套餐組成／停售上限／取貨日 → Sheet「設定」；之後在 Sheet「年菜工具 → 同步到表單」更新題目
-    const handleSyncSheet = async () => {
-        if (!await showConfirm(`把 ${activeYear} 年菜品項、價格、取貨日寫入 Sheet「設定」`, { title: '同步品項到 Sheet', icon: 'info', confirmText: '同步' })) return;
-        setSyncing(true);
-        try {
-            const r = await syncNianfaiSettingsToSheet(activeYear);
-            await showAlert(`已同步 ${r.items} 個品項\n請到 Sheet「年菜工具 → 同步到表單」更新題目`, { title: '同步完成', icon: 'success' });
-            loadGas();
-        } catch (e) {
-            await showAlert(e.message, { title: '同步失敗', icon: 'warning' });
-        } finally {
-            setSyncing(false);
-        }
-    };
+    // 有接 GAS 時，開賣前必須建立好 Google 表單並通過「檢查表單對應」；沒接 GAS（例如本機測試）不擋
+    const googleReady = !gas || !gas.configured || (gas.ok && gas.created && !!gas.formCheck?.passed);
 
     // 新年度初始化＝真的複製：去年品項複製成新的 menu_items（新 id、新 nianfai_year），
     // 套餐的 bundle_composition 重新指向新品項 id；製作入庫/停售上限/流水號都歸零；
@@ -231,7 +214,7 @@ const NianfaiAdminPage = () => {
                 </p>
                 <div className="flex items-center gap-3">
                     {status !== 'archived' && (
-                        <button onClick={handleAdvanceStatus} disabled={!activeYear || isToggling || (status === 'preparing' && !datesReady)}
+                        <button onClick={handleAdvanceStatus} disabled={!activeYear || isToggling || (status === 'preparing' && (!datesReady || !googleReady))}
                             className="px-5 py-2.5 rounded-lg font-bold text-white bg-[#D47856] hover:bg-[#C46848] disabled:opacity-50">
                             {isToggling ? '處理中...' : NEXT_ACTION_LABELS[status]}
                         </button>
@@ -244,37 +227,13 @@ const NianfaiAdminPage = () => {
                     )}
                     {status === 'archived' && <p className="text-gray-400">已封存，明年初始化新年度後才會再出現。</p>}
                     {status === 'preparing' && !datesReady && <p className="text-sm font-bold text-red-600">請先在上方設定取貨與寄出日期</p>}
+                    {status === 'preparing' && datesReady && !googleReady && <p className="text-sm font-bold text-red-600">請先在下方建立 Google 表單，並通過「檢查表單對應」</p>}
                 </div>
             </div>
 
-            {activeYear && (
-                <div className="bg-white rounded-xl shadow p-6 mt-5">
-                    <div className="flex items-center justify-between mb-3">
-                        <h3 className="text-xl font-bold text-gray-700">5. Google 表單／Sheet</h3>
-                        <button onClick={loadGas} className="text-sm font-bold text-gray-500 hover:text-gray-700">重新檢查</button>
-                    </div>
-                    {gas === null ? (
-                        <p className="text-gray-400">檢查連線中...</p>
-                    ) : !gas.configured ? (
-                        <p className="text-gray-500">尚未設定 GAS 網址與密鑰（NIANFAI_GAS_URL／NIANFAI_GAS_SECRET）。現場單會停在「待傳送」，設定後自動補送。</p>
-                    ) : gas.ok ? (
-                        <div className="space-y-1 text-gray-700">
-                            <p><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500 mr-2" />已連線：<span className="font-bold">{gas.spreadsheet}</span></p>
-                            <p className="text-sm text-gray-500">
-                                Sheet 年度 {gas.year || '（未同步）'}・設定品項 {gas.items} 項・表單
-                                <span className={`font-bold ml-1 ${gas.formAccepting ? 'text-green-600' : 'text-red-600'}`}>{gas.formAccepting ? '開放中' : '已關閉'}</span>
-                            </p>
-                        </div>
-                    ) : (
-                        <p className="text-red-600 font-bold"><span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500 mr-2" />連線失敗：{gas.error}</p>
-                    )}
-                    {gas?.configured && (
-                        <button onClick={handleSyncSheet} disabled={syncing || !gas.ok}
-                            className="mt-4 px-4 py-2.5 rounded-lg bg-gray-700 text-white font-bold hover:bg-gray-800 disabled:opacity-40">
-                            {syncing ? '同步中...' : '同步品項到 Sheet'}
-                        </button>
-                    )}
-                </div>
+            {activeYear && status !== 'archived' && (
+                <NianfaiGoogleCard year={activeYear} number={5} datesReady={datesReady}
+                    showAlert={showAlert} showConfirm={showConfirm} onStatusChange={setGas} />
             )}
 
             {activeYear && (

@@ -32,44 +32,45 @@ function nfSubmitWebposOrder_(order) {
 
     var form = nfForm_();
     var resp = form.createResponse();
+    var roles = nfItemRoles_(form);
     form.getItems().forEach(function (item) {
-      var title = String(item.getTitle() || '');
+      var role = roles[item.getId()];
+      if (!role) return;
       var type = item.getType();
       var r = null;
-      if (type === FormApp.ItemType.MULTIPLE_CHOICE) {
+      if (role.kind === 'consent') {
+        var cc = item.asMultipleChoiceItem();
+        r = cc.createResponse(cc.getChoices()[0].getValue());
+      } else if (role.kind === 'method') {
         var mc = item.asMultipleChoiceItem();
         var choices = mc.getChoices().map(function (c) { return c.getValue(); });
-        if (title.indexOf('須知') >= 0) {
-          r = mc.createResponse(choices[0]);
-        } else if (title.indexOf('取貨方式') >= 0) {
-          var want = choices.filter(function (c) { return isDelivery ? c.indexOf('宅配') >= 0 : c.indexOf('自取') >= 0; })[0];
-          if (!want) throw new Error('表單「取貨方式」找不到' + (isDelivery ? '宅配' : '自取') + '選項');
-          r = mc.createResponse(want);
+        var want = choices.filter(function (c) { return isDelivery ? c.indexOf('宅配') >= 0 : c.indexOf('自取') >= 0; })[0];
+        if (!want) throw new Error('表單「取貨方式」找不到' + (isDelivery ? '宅配' : '自取') + '選項');
+        r = mc.createResponse(want);
+      } else if (role.kind === 'pickupDate') {
+        if (!isDelivery) {
+          var li = item.asListItem();
+          var dateOpt = li.getChoices().map(function (c) { return c.getValue(); })
+            .filter(function (o) { return nfIsoDate_(o) === order.pickupDate; })[0];
+          if (!dateOpt) throw new Error('表單取貨日沒有 ' + order.pickupDate + '，請先同步到表單');
+          r = li.createResponse(dateOpt);
         }
-      } else if (type === FormApp.ItemType.LIST) {
-        var li = item.asListItem();
-        var opts = li.getChoices().map(function (c) { return c.getValue(); });
-        if (title.indexOf('取貨日') >= 0) {
-          if (!isDelivery) {
-            var dateOpt = opts.filter(function (o) { return nfIsoDate_(o) === order.pickupDate; })[0];
-            if (!dateOpt) throw new Error('表單取貨日沒有 ' + order.pickupDate + '，請先同步到表單');
-            r = li.createResponse(dateOpt);
+      } else if (role.kind === 'bundle') {
+        if (qtyByName[role.name]) {
+          var bl = item.asListItem();
+          var q = String(qtyByName[role.name]);
+          if (bl.getChoices().map(function (c) { return c.getValue(); }).indexOf(q) < 0) {
+            throw new Error('「' + role.name + '」數量 ' + q + ' 超過表單選項，請送出後到表單回應修改');
           }
-        } else {
-          var bundleName = nfParseItemTitle_(title);
-          if (qtyByName[bundleName]) {
-            var q = String(qtyByName[bundleName]);
-            if (opts.indexOf(q) < 0) throw new Error('「' + bundleName + '」數量 ' + q + ' 超過表單選項，請送出後到表單回應修改');
-            r = li.createResponse(q);
-            used[bundleName] = true;
-          }
+          r = bl.createResponse(q);
+          used[role.name] = true;
         }
-      } else if (type === FormApp.ItemType.GRID) {
+      } else if (role.kind === 'grid') {
         var gi = item.asGridItem();
         var cols = gi.getColumns();
         var any = false;
-        var answers = gi.getRows().map(function (rowTitle) {
-          var name = nfParseItemTitle_(rowTitle);
+        var answers = gi.getRows().map(function (rowTitle, idx) {
+          var name = (role.rows && role.rows[idx]) || nfParseItemTitle_(rowTitle);
           var qty = qtyByName[name];
           if (!qty) return null;
           if (cols.indexOf(String(qty)) < 0) throw new Error('「' + name + '」數量 ' + qty + ' 超過表單選項，請送出後到表單回應修改');
@@ -78,9 +79,9 @@ function nfSubmitWebposOrder_(order) {
           return String(qty);
         });
         if (any) r = gi.createResponse(answers);
-      } else if (type === FormApp.ItemType.TEXT || type === FormApp.ItemType.PARAGRAPH_TEXT) {
-        var v = nfTextAnswer_(title, order, email, isDelivery, last5);
-        if (v) r = type === FormApp.ItemType.TEXT ? item.asTextItem().createResponse(v) : item.asParagraphTextItem().createResponse(v);
+      } else if (role.kind === 'text') {
+        var v = nfTextValue_(role.field, order, email, isDelivery, last5);
+        if (v) r = type === FormApp.ItemType.PARAGRAPH_TEXT ? item.asParagraphTextItem().createResponse(v) : item.asTextItem().createResponse(v);
       }
       if (r) resp.withItemResponse(r);
     });
@@ -102,16 +103,57 @@ function nfSubmitWebposOrder_(order) {
   }
 }
 
-function nfTextAnswer_(title, o, email, isDelivery, last5) {
-  if (title.indexOf('末五碼') >= 0) return last5;
-  if (title.indexOf('訂購人') >= 0 && title.indexOf('姓名') >= 0) return o.customerName;
-  if (title.indexOf('訂購人') >= 0 && title.indexOf('電話') >= 0) return o.customerPhone;
-  if (/e-?mail|電子郵件/i.test(title)) return email;
-  if (!isDelivery) return '';
-  if (title.indexOf('收件人') >= 0 && title.indexOf('電話') >= 0) return o.recipientPhone;
-  if (title.indexOf('收件地址') >= 0) return o.recipientAddress;
-  if (title.indexOf('收件人') === 0) return o.recipientName;
-  return '';
+// 每一題的角色：優先用建立表單時記下的 ID，沒有 ID 資料（例如舊表單）才用題目名稱判斷
+function nfItemRoles_(form) {
+  var roles = {};
+  var ids = NF_CTX && NF_CTX.meta && NF_CTX.meta.ids;
+  if (ids) {
+    if (ids.consent) roles[ids.consent] = { kind: 'consent' };
+    if (ids.method) roles[ids.method] = { kind: 'method' };
+    if (ids.pickupDate) roles[ids.pickupDate] = { kind: 'pickupDate' };
+    if (ids.grid) roles[ids.grid] = { kind: 'grid', rows: NF_CTX.meta.gridRows || [] };
+    Object.keys(ids.bundles || {}).forEach(function (name) { roles[ids.bundles[name]] = { kind: 'bundle', name: name }; });
+    ['name', 'phone', 'email', 'recipientName', 'recipientPhone', 'recipientAddress', 'last5'].forEach(function (k) {
+      if (ids[k]) roles[ids[k]] = { kind: 'text', field: k };
+    });
+    return roles;
+  }
+  form.getItems().forEach(function (item) {
+    var t = String(item.getTitle() || '');
+    var type = item.getType();
+    var id = item.getId();
+    if (type === FormApp.ItemType.MULTIPLE_CHOICE) {
+      if (t.indexOf('須知') >= 0) roles[id] = { kind: 'consent' };
+      else if (t.indexOf('取貨方式') >= 0) roles[id] = { kind: 'method' };
+    } else if (type === FormApp.ItemType.LIST) {
+      roles[id] = t.indexOf('取貨日') >= 0 ? { kind: 'pickupDate' } : { kind: 'bundle', name: nfParseItemTitle_(t) };
+    } else if (type === FormApp.ItemType.GRID) {
+      roles[id] = { kind: 'grid', rows: [] };
+    } else if (type === FormApp.ItemType.TEXT || type === FormApp.ItemType.PARAGRAPH_TEXT) {
+      var f = t.indexOf('末五碼') >= 0 ? 'last5'
+        : (t.indexOf('訂購人') >= 0 && t.indexOf('姓名') >= 0) ? 'name'
+        : (t.indexOf('訂購人') >= 0 && t.indexOf('電話') >= 0) ? 'phone'
+        : /e-?mail|電子郵件/i.test(t) ? 'email'
+        : (t.indexOf('收件人') >= 0 && t.indexOf('電話') >= 0) ? 'recipientPhone'
+        : t.indexOf('收件地址') >= 0 ? 'recipientAddress'
+        : t.indexOf('收件人') === 0 ? 'recipientName' : null;
+      if (f) roles[id] = { kind: 'text', field: f };
+    }
+  });
+  return roles;
+}
+
+function nfTextValue_(field, o, email, isDelivery, last5) {
+  switch (field) {
+    case 'last5': return last5;
+    case 'name': return o.customerName;
+    case 'phone': return o.customerPhone;
+    case 'email': return email;
+    case 'recipientName': return isDelivery ? o.recipientName : '';
+    case 'recipientPhone': return isDelivery ? o.recipientPhone : '';
+    case 'recipientAddress': return isDelivery ? o.recipientAddress : '';
+    default: return '';
+  }
 }
 
 function nfFindOnsiteRow_(last5) {

@@ -10,11 +10,13 @@
  *     email 是店家信箱（現場單客人沒填）→ 只寄給店家，用來確認訂單有進 Sheet
  * - 年份、寄出期間、最後取貨日、表單網址從「設定」／表單帶入
  *
- * 觸發條件由選單「年菜工具 → 初始化」安裝（試算表的「提交表單時」）。
+ * 觸發條件在建立年度時安裝（該年度試算表的「提交表單時」）。
  */
 function nfOnFormSubmit(e) {
-  var sheet = e && e.range ? e.range.getSheet() : nfSheet_(NF.SHEET_RESPONSES);
-  var rowNumber = e && e.range ? e.range.getRow() : sheet.getLastRow();
+  if (!e || !e.range) return;
+  nfUseSpreadsheet_(e.source || e.range.getSheet().getParent());
+  var sheet = e.range.getSheet();
+  var rowNumber = e.range.getRow();
   var statusCol = nfEnsureStatusColumn_(sheet);
   var settings = nfReadSettings_();
   var lastCol = sheet.getLastColumn();

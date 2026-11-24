@@ -7,11 +7,13 @@
  *   「設定」品項表（D～J 欄）           修改前跳警告（品項應由 WebPOS 同步）
  *
  * 表單送出、GAS 自己寫入（寄信狀態、WebPOS 同步）不受保護範圍影響。
- * 由「年菜工具 → 初始化」或「重新套用保護範圍」執行；只移除／重建說明以「年菜：」開頭的保護，
- * Yw 自己另外加的保護不會動。
+ * 建立年度時執行，之後可從 WebPOS 年菜管理頁「重新套用保護範圍」；只移除／重建說明以「年菜：」
+ * 開頭的保護，Yw 自己另外加的保護不會動。
  *
- * 匯款資訊被修改（不論是誰）→ 寄信通知店家信箱（可安裝的「編輯時」觸發，由初始化安裝；
- * 簡易 onEdit 觸發不能寄信，所以用可安裝的）。
+ * 可安裝的「編輯時」觸發（建立年度時安裝，只有人手動編輯才會觸發，表單送出與 GAS 寫入不會）：
+ *   - 「設定」匯款資訊被修改 → 寄信通知店家信箱
+ *   - 「表單回應」被手動修改 → 格子上色＋備註原值與時間、該列「已修改」打勾、寫入「修改紀錄」
+ *     （「訂單整理」整列淺色標示；原因由 Yw 補填，沒填的列標紅）
  */
 var NF_PROTECT_PREFIX = '年菜：';
 var NF_BANK_KEY_PREFIX = '匯款';
@@ -56,11 +58,18 @@ function nfBankRows_(st) {
   return rows;
 }
 
-/** 可安裝的「編輯時」觸發：「設定」的匯款資訊被修改就寄信通知 */
 function nfOnEdit(e) {
   if (!e || !e.range) return;
+  nfUseSpreadsheet_(e.source || e.range.getSheet().getParent());
+  var name = e.range.getSheet().getName();
+  if (name === NF.SHEET_SETTINGS) nfNotifyBankEdit_(e);
+  else if (name === NF.SHEET_RESPONSES) nfLogResponseEdit_(e);
+}
+
+/** 「設定」的匯款資訊被修改就寄信通知 */
+function nfNotifyBankEdit_(e) {
   var sh = e.range.getSheet();
-  if (sh.getName() !== NF.SHEET_SETTINGS || e.range.getColumn() > 2) return;
+  if (e.range.getColumn() > 2) return;
   var r0 = e.range.getRow();
   var n = e.range.getNumRows();
   var lines = [];
@@ -82,4 +91,44 @@ function nfOnEdit(e) {
       '\n\n之後寄出的確認信都會使用新的匯款資訊。如果不是你改的，請立即改回並檢查試算表的共用設定。',
     name: NF.SENDER_NAME,
   });
+}
+
+/** 手動修改「表單回應」：標示格子、備註原值、該列「已修改」打勾、寫入修改紀錄 */
+function nfLogResponseEdit_(e) {
+  var sh = e.range.getSheet();
+  var lastCol = sh.getLastColumn();
+  var headers = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+  var statusIdx = headers.indexOf(NF.STATUS_HEADER);
+  var editedCol = nfEnsureEditedColumn_(sh);
+  var r0 = e.range.getRow();
+  var c0 = e.range.getColumn();
+  var nRows = e.range.getNumRows();
+  var nCols = e.range.getNumColumns();
+  if (r0 + nRows - 1 < 2) return; // 只改到標題列
+  var settings = nfReadSettings_();
+  var cols = nfMapColumns_(headers, settings);
+  var now = nfFormatTimestamp_(new Date());
+  var single = nRows === 1 && nCols === 1;
+  var logRows = [];
+  for (var r = Math.max(r0, 2); r < r0 + nRows && logRows.length < 200; r++) {
+    var rowVals = sh.getRange(r, 1, 1, lastCol).getValues()[0];
+    var orderLabel = nfFormatTimestamp_(rowVals[0]) + ' ' + (cols.name !== undefined ? rowVals[cols.name] : '');
+    var touched = false;
+    for (var c = c0; c < c0 + nCols; c++) {
+      if (c === editedCol || c - 1 === statusIdx) continue; // GAS 自己的欄位不記錄
+      var cellRange = sh.getRange(r, c);
+      var newVal = cellRange.getDisplayValue();
+      var oldVal = single ? (e.oldValue === undefined ? '' : String(e.oldValue)) : '（多格同時修改，原值請查看「檔案 → 版本記錄」）';
+      cellRange.setBackground('#fff2cc');
+      var note = cellRange.getNote();
+      cellRange.setNote((note ? note + '\n' : '') + now + ' 修改，原值：' + (single ? oldVal : '（多格修改）'));
+      logRows.push([now, orderLabel.trim(), String(headers[c - 1] || ''), oldVal, newVal, '']);
+      touched = true;
+    }
+    if (touched) sh.getRange(r, editedCol).setValue(true);
+  }
+  if (logRows.length) {
+    var log = nfSheet_(NF.SHEET_LOG);
+    log.getRange(log.getLastRow() + 1, 1, logRows.length, 6).setValues(logRows);
+  }
 }

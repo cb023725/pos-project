@@ -16,12 +16,52 @@ function nfParseItemTitle_(title) {
 }
 
 function nfMapColumns_(headers, settings) {
+  var cols = nfMapColumnsByTitle_(headers, settings);
+  // 優先用建立表單時記下的題目 ID：Yw 改了題目文字，回應分頁的欄名會跟著變，用 ID 找目前的題目名稱再對欄
+  var meta = NF_CTX && NF_CTX.meta;
+  if (!meta || !meta.ids) return cols;
+  var form = nfForm_();
+  var hdr = headers.map(function (h) { return String(h || '').trim(); });
+  var idxOf = function (title) { return hdr.indexOf(String(title || '').trim()); };
+  var titleOf = function (id) { try { var it = form.getItemById(id); return it ? it.getTitle() : null; } catch (e) { return null; } };
+  ['method', 'name', 'phone', 'email', 'recipientName', 'recipientPhone', 'recipientAddress', 'pickupDate', 'last5'].forEach(function (k) {
+    if (!meta.ids[k]) return;
+    var i = idxOf(titleOf(meta.ids[k]));
+    if (i >= 0) cols[k] = i;
+  });
+  var itemCols = [];
+  Object.keys(meta.ids.bundles || {}).forEach(function (name) {
+    var it = settings.byName[name];
+    var i = idxOf(titleOf(meta.ids.bundles[name]));
+    if (it && i >= 0) itemCols.push({ col: i, item: it });
+  });
+  if (meta.ids.grid) {
+    var gi = form.getItemById(meta.ids.grid);
+    if (gi) {
+      var gridTitle = gi.getTitle();
+      gi.asGridItem().getRows().forEach(function (rowTitle, r) {
+        var it = settings.byName[(meta.gridRows || [])[r]] || settings.byName[nfParseItemTitle_(rowTitle)];
+        var i = idxOf(gridTitle + ' [' + rowTitle + ']');
+        if (it && i >= 0) itemCols.push({ col: i, item: it });
+      });
+    }
+  }
+  // 品項：ID 找到的欄位為準，再補上標題比對找到、但 ID 沒涵蓋的舊欄位（例如改價產生的新欄）
+  var seen = {};
+  itemCols.forEach(function (c) { seen[c.col] = true; });
+  cols.items.forEach(function (c) { if (!seen[c.col]) itemCols.push(c); });
+  cols.items = itemCols;
+  return cols;
+}
+
+function nfMapColumnsByTitle_(headers, settings) {
   var cols = { items: [] };
   headers.forEach(function (h, i) {
     var t = String(h || '').trim();
     if (!t) return;
     if (i === 0) { cols.timestamp = i; return; }
     if (t === NF.STATUS_HEADER) { cols.status = i; return; }
+    if (t === NF.EDITED_HEADER) { cols.edited = i; return; }
     var itemName = nfParseItemTitle_(t);
     if (settings.byName[itemName]) { cols.items.push({ col: i, item: settings.byName[itemName] }); return; }
     if (t.indexOf('取貨方式') >= 0) cols.method = i;
@@ -93,10 +133,20 @@ function nfParseOrder_(row, cols, settings, rowNumber) {
 
 /** 確保「寄信狀態」欄存在（表單回應最右側），回傳欄號（1-based） */
 function nfEnsureStatusColumn_(sheet) {
+  return nfEnsureExtraColumn_(sheet, NF.STATUS_HEADER);
+}
+
+/** 確保「已修改」欄存在（手動改過的列打勾，「訂單整理」整列淺色標示） */
+function nfEnsureEditedColumn_(sheet) {
+  return nfEnsureExtraColumn_(sheet, NF.EDITED_HEADER);
+}
+
+function nfEnsureExtraColumn_(sheet, header) {
   var lastCol = Math.max(sheet.getLastColumn(), 1);
   var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-  var idx = headers.indexOf(NF.STATUS_HEADER);
+  var idx = headers.indexOf(header);
   if (idx >= 0) return idx + 1;
-  sheet.getRange(1, lastCol + 1).setValue(NF.STATUS_HEADER).setFontWeight('bold');
+  if (sheet.getMaxColumns() <= lastCol) sheet.insertColumnAfter(lastCol);
+  sheet.getRange(1, lastCol + 1).setValue(header).setFontWeight('bold');
   return lastCol + 1;
 }
