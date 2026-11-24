@@ -38,6 +38,7 @@ function makeSheet(name) {
     },
     getFormUrl: () => formUrl, _setFormUrl: (u) => { formUrl = u; },
     clear: () => { data.length = 0; return sh; },
+    deleteRows: (r, n) => { data.splice(r - 1, n); return sh; },
     protect: () => chain({}),
   };
   return chain(sh);
