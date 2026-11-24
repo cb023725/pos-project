@@ -1,8 +1,10 @@
 /**
  * WebPOS 現場單 → 用 FormApp 送出同一份表單（handoff 第 2 節：不再人工輸入第二次）
  *
- * - 匯款末五碼填「現結＋流水號」（例：現結27001），送出前先找「表單回應」有沒有同一個，
- *   有就不重送（WebPOS 重試或網路重送都不會變兩筆）
+ * - 匯款末五碼填「現結＋流水號」（例：現結27001）
+ * - 防重複用 WebPOS 訂單編號（指令碼屬性 SUB_<env>:<year>:<orderId>）：同一張訂單重送直接回報已送出；
+ *   「表單回應」已經有同一個「現結流水號」但不是這張訂單 → 明確回報錯誤（例如測試資料清空後流水號
+ *   重新開始），不會默默跳過
  * - 題目一律依名稱對應；品項找不到題目就整筆失敗，請 Yw 先「同步到表單」
  * - 表單已關閉（停售／收單）時：暫時開啟 → 送出 → 立即關閉（只有 WebPOS 能在關閉後加單）
  * - 送出後表單的「提交時」觸發照常執行：寄確認信、檢查停售
@@ -17,8 +19,14 @@ function nfSubmitWebposOrder_(order) {
   lock.waitLock(30000);
   try {
     var last5 = NF.ONSITE_PREFIX + order.seqLabel;
+    var subKey = order.orderId ? 'SUB_' + NF_CTX.env + ':' + NF_CTX.year + ':' + order.orderId : null;
+    var prev = subKey ? nfProps_().getProperty(subKey) : null;
+    if (prev) return { ok: true, duplicate: true, timestamp: prev };
     var dup = nfFindOnsiteRow_(last5);
-    if (dup) return { ok: true, duplicate: true, timestamp: dup.timestampText };
+    if (dup) {
+      if (!subKey) return { ok: true, duplicate: true, timestamp: dup.timestampText }; // 舊版 WebPOS 沒帶訂單編號
+      throw new Error('表單回應第 ' + dup.rowNumber + ' 列已經有「' + last5 + '」，但不是這張訂單（可能是測試資料清空後流水號重新開始），請先處理那一列');
+    }
 
     var settings = nfReadSettings_();
     var qtyByName = {};
@@ -97,7 +105,9 @@ function nfSubmitWebposOrder_(order) {
     } finally {
       if (!wasAccepting) form.setAcceptingResponses(false);
     }
-    return { ok: true, duplicate: false, timestamp: nfFormatTimestamp_(submitted.getTimestamp()) };
+    var tsText = nfFormatTimestamp_(submitted.getTimestamp());
+    if (subKey) nfProps_().setProperty(subKey, tsText);
+    return { ok: true, duplicate: false, timestamp: tsText };
   } finally {
     lock.releaseLock();
   }

@@ -77,7 +77,7 @@ function makeForm(title) {
     addMultipleChoiceItem: () => mkItem(ItemType.MULTIPLE_CHOICE), addListItem: () => mkItem(ItemType.LIST), addGridItem: () => mkItem(ItemType.GRID),
     addTextItem: () => mkItem(ItemType.TEXT), addPageBreakItem: () => mkItem(ItemType.PAGE_BREAK), addSectionHeaderItem: () => mkItem(ItemType.SECTION_HEADER), addImageItem: () => mkItem(ItemType.IMAGE),
     getItems: (type) => items.filter(i => !type || i.getType() === type), getItemById: (iid) => items.find(i => i.getId() === Number(iid)) || null,
-    isAcceptingResponses: () => accepting, setAcceptingResponses: (b) => { accepting = b; return form; }, getResponses: () => responses,
+    isAcceptingResponses: () => accepting, setAcceptingResponses: (b) => { accepting = b; return form; }, getResponses: () => responses, deleteAllResponses: () => { responses.length = 0; return form; },
     setDestination: (t, ssId) => {
       dest = spreadsheets[ssId]; const sh = dest.insertSheet('表單回應 1'); sh._setFormUrl('https://docs.google.com/forms/d/' + id + '/edit');
       const headers = ['時間戳記'];
@@ -102,7 +102,7 @@ const forms = {};
 
 const ctx = {
   console,
-  PropertiesService: { getScriptProperties: () => { const p = ctx._props; return { getProperty: (k) => p[k] ?? null, setProperty: (k, v) => { p[k] = v; }, getProperties: () => ({ ...p }) }; } },
+  PropertiesService: { getScriptProperties: () => { const p = ctx._props; return { getProperty: (k) => p[k] ?? null, setProperty: (k, v) => { p[k] = v; }, deleteProperty: (k) => { delete p[k]; }, getProperties: () => ({ ...p }) }; } },
   _props: { WEBPOS_SECRET: 'x'.repeat(20) },
   DriveApp: chain({ getRootFolder: () => chain({ getName: () => '我的雲端硬碟', getFoldersByName: () => ({ hasNext: () => false }), createFolder: (n) => chain({ getId: () => 'folder' + nextId(), getName: () => n }) }),
     getFileById: () => chain({ moveTo: () => {}, getBlob: () => ({}) }) }),
@@ -146,19 +146,25 @@ run('useYear', () => { ctx.nfUseYear_('dev', 2027); return Object.keys(ctx.NF_CT
 const respSheet = ctx.NF_CTX.ss.getSheetByName('表單回應');
 console.log('  回應欄位：', respSheet.getRange(1, 1, 1, respSheet.getLastColumn()).getValues()[0].join(' | '));
 run('checkForm (before orders)', () => ctx.nfCheckForm_());
-run('submitOrder pickup', () => ctx.nfSubmitWebposOrder_({ seqLabel: '27001', customerName: '測試', customerPhone: '0900', email: 'goodgoodeatrestaurant@gmail.com', deliveryMethod: 'pickup', pickupDate: '2027-01-30',
+run('submitOrder pickup', () => ctx.nfSubmitWebposOrder_({ orderId: 101, seqLabel: '27001', customerName: '測試', customerPhone: '0900', email: 'goodgoodeatrestaurant@gmail.com', deliveryMethod: 'pickup', pickupDate: '2027-01-30',
   items: [{ name: '富貴套餐', qty: 1 }, { name: '花雕雞', qty: 2 }] }));
-run('submitOrder duplicate', () => ctx.nfSubmitWebposOrder_({ seqLabel: '27001', items: [{ name: '花雕雞', qty: 1 }] }));
-run('submitOrder delivery', () => ctx.nfSubmitWebposOrder_({ seqLabel: '27002', customerName: '測試2', customerPhone: '0911', email: 'guest@example.com', deliveryMethod: 'delivery',
+run('submitOrder duplicate (same order)', () => ctx.nfSubmitWebposOrder_({ orderId: 101, seqLabel: '27001', items: [{ name: '花雕雞', qty: 1 }] }));
+run('submitOrder collision (other order, same seq) → 應該報錯', () => { try { ctx.nfSubmitWebposOrder_({ orderId: 999, seqLabel: '27001', items: [{ name: '花雕雞', qty: 1 }] }); return 'NO ERROR (bad)'; } catch (e) { return 'error: ' + e.message; } });
+run('submitOrder delivery', () => ctx.nfSubmitWebposOrder_({ orderId: 102, seqLabel: '27002', customerName: '測試2', customerPhone: '0911', email: 'guest@example.com', deliveryMethod: 'delivery',
   recipientName: '收', recipientPhone: '0922', recipientAddress: '台北', items: [{ name: '海味XO醬', qty: 1 }] }));
 run('demand', () => { const d = ctx.nfComputeDemand_(); return { byName: d.demandByName, onsite: d.onsiteSeqs }; });
 run('onFormSubmit (confirm mail)', () => ctx.nfOnFormSubmit({ range: respSheet.getRange(2, 1), source: ctx.NF_CTX.ss }));
 run('onFormSubmit delivery', () => ctx.nfOnFormSubmit({ range: respSheet.getRange(3, 1), source: ctx.NF_CTX.ss }));
 run('planFormSync', () => { const p = ctx.nfPlanFormSync_(); return { changes: p.changes, warnings: p.warnings }; });
 run('finishProduction + sellout', () => { ctx.nfSetSelloutCap_('chicken', '花雕雞', 3); return ctx.nfCheckSellout_('test'); });
-run('submit when closed', () => ctx.nfSubmitWebposOrder_({ seqLabel: '27003', customerName: 'x', customerPhone: '1', email: 'goodgoodeatrestaurant@gmail.com', deliveryMethod: 'pickup', pickupDate: '2027-01-29', items: [{ name: '鮑魚人蔘雞湯', qty: 1 }] }));
+run('submit when closed', () => ctx.nfSubmitWebposOrder_({ orderId: 103, seqLabel: '27003', customerName: 'x', customerPhone: '1', email: 'goodgoodeatrestaurant@gmail.com', deliveryMethod: 'pickup', pickupDate: '2027-01-29', items: [{ name: '鮑魚人蔘雞湯', qty: 1 }] }));
 run('form closed again?', () => ctx.NF_CTX.form.isAcceptingResponses());
+run('clear whole row → no 已修改', () => { const lc = respSheet.getLastColumn(); const hdr = respSheet.getRange(1, 1, 1, lc).getValues()[0]; const ed = hdr.indexOf('已修改') + 1;
+  respSheet.getRange(3, 1, 1, ed - 2).clearContent(); ctx.nfOnEdit({ range: respSheet.getRange(3, 1, 2, ed - 2), source: ctx.NF_CTX.ss });
+  return { row3edited: respSheet.getRange(3, ed).getValue(), row4edited: respSheet.getRange(4, ed).getValue(), log: ctx.NF_CTX.ss.getSheetByName('修改紀錄').getRange(2, 1, 1, 3).getValues()[0] }; });
 run('onEdit response log', () => { respSheet.getRange(2, 2).setValue('改'); ctx.nfOnEdit({ range: respSheet.getRange(2, 2), source: ctx.NF_CTX.ss, oldValue: '原' }); return ctx.NF_CTX.ss.getSheetByName('修改紀錄').getRange(2, 1, 1, 6).getValues()[0]; });
+run('resetTestData', () => ctx.nfResetTestData_());
+run('submit after reset (same seq, new order)', () => ctx.nfSubmitWebposOrder_({ orderId: 202, seqLabel: '27001', customerName: '重來', customerPhone: '0900', email: 'goodgoodeatrestaurant@gmail.com', deliveryMethod: 'pickup', pickupDate: '2027-01-29', items: [{ name: '花雕雞', qty: 1 }] }));
 const orders = ctx.NF_CTX.ss.getSheetByName('訂單整理');
 console.log('  訂單整理欄位：', orders.getRange(1, 1, 1, orders.getLastColumn()).getValues()[0].join(' | '));
 console.log('  小計公式：', orders.getRange(2, 1, 1, orders.getLastColumn()).getValues()[0].find(v => String(v).includes('設定')));

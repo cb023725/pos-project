@@ -1885,7 +1885,21 @@ app.post('/api/dev/reset-test-data', async (req, res) => {
             await supabase.from('app_settings').upsert({ key, value, updated_at: nowIso });
         }
 
-        res.json({ ok: true, clearedOrders: orderIds.length, clearedNianfaiOrders: nfOrderIds.length, clearedReservations: (resvRows || []).length });
+        // 測試試算表一起清空，不然流水號重新開始後會跟表單回應裡的舊測試單撞號
+        let gasReset = null;
+        if (nianfaiGasConfigured()) {
+            const { data: yr } = await supabase.from('app_settings').select('value').eq('key', 'nianfai_active_year').maybeSingle();
+            const year = parseInt(yr?.value, 10);
+            if (year) {
+                try {
+                    gasReset = (await callNianfaiGas('resetTestData', { year }, { timeoutMs: 60000 })).result;
+                    nianfaiDemandCache.delete(year);
+                } catch (e) {
+                    gasReset = { error: e.message };
+                }
+            }
+        }
+        res.json({ ok: true, clearedOrders: orderIds.length, clearedNianfaiOrders: nfOrderIds.length, clearedReservations: (resvRows || []).length, gasReset });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -2514,6 +2528,7 @@ async function submitToNianfaiForm(orderId) {
         await callNianfaiGas('submitOrder', {
             year: nf.year,
             order: {
+                orderId: nf.order_id, // GAS 用訂單編號防重複（流水號在清空測試資料後會重新開始）
                 seqLabel: nianfaiSeqLabel(nf.year, nf.seq_no),
                 customerName: nf.customer_name, customerPhone: nf.customer_phone,
                 // 客人有填就用客人的（GAS 寄給客人並 bcc 店家）；沒填用店家信箱（只寄給店家）

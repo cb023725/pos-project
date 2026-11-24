@@ -13,6 +13,7 @@
  *   protect           重新套用保護範圍
  *   rebuildTabs       依目前「設定」重建訂單整理／供需庫存／備料表／修改紀錄（不動表單回應）
  *   diagnose          回傳回應分頁、觸發條件、各分頁前幾列的計算結果（排查用）
+ *   resetTestData     只限 dev：清空表單回應、修改紀錄與送單紀錄（WebPOS「一鍵清空測試資料」）
  *   submitOrder       WebPOS 現場單送進表單（WebposSubmit.gs）
  *   finishProduction  寫入停售上限並立即檢查（製作完成）
  *   ping              連線測試
@@ -46,6 +47,8 @@ function doPost(e) {
         return nfJson_({ ok: true, result: built });
       case 'diagnose':
         return nfJson_({ ok: true, result: nfDiagnose_() });
+      case 'resetTestData':
+        return nfJson_({ ok: true, result: nfResetTestData_() });
       case 'submitOrder':
         return nfJson_(nfSubmitWebposOrder_(body.order));
       case 'finishProduction':
@@ -131,4 +134,30 @@ function nfDiagnose_() {
   out.stock = dump(NF.SHEET_STOCK, 1, 16, 15);
   out.prep = dump(NF.SHEET_PREP, 1, 15, 12);
   return out;
+}
+
+/** 只限 dev：WebPOS「一鍵清空測試資料」時一起清空測試試算表，避免流水號重新開始後跟舊回應撞號 */
+function nfResetTestData_() {
+  if (NF_CTX.env !== 'dev') throw new Error('只有測試環境可以清空回應');
+  var form = nfForm_();
+  form.deleteAllResponses();
+  var resp = nfSheet_(NF.SHEET_RESPONSES);
+  var last = resp.getLastRow();
+  if (last > 1) {
+    var rng = resp.getRange(2, 1, last - 1, resp.getMaxColumns());
+    rng.clearContent(); rng.setBackground(null); rng.clearNote();
+  }
+  var log = nfSpreadsheet_().getSheetByName(NF.SHEET_LOG);
+  if (log && log.getLastRow() > 1) log.getRange(2, 1, log.getLastRow() - 1, 6).clearContent();
+  var orders = nfSpreadsheet_().getSheetByName(NF.SHEET_ORDERS);
+  if (orders) { // 訂單整理的手動欄（付款、取貨、出貨日、託運單號）
+    var hdr = orders.getRange(NF_ORDERS_HEADER_ROW, 1, 1, orders.getLastColumn()).getValues()[0];
+    ['付款', '取貨'].forEach(function (h) { var i = hdr.indexOf(h); if (i >= 0) orders.getRange(NF_ORDERS_FIRST_ROW, i + 1, NF_DATA_ROWS, 1).uncheck(); });
+    ['出貨日', '託運單號'].forEach(function (h) { var i = hdr.indexOf(h); if (i >= 0) orders.getRange(NF_ORDERS_FIRST_ROW, i + 1, NF_DATA_ROWS, 1).clearContent(); });
+  }
+  var prefix = 'SUB_' + NF_CTX.env + ':' + NF_CTX.year + ':';
+  var props = nfProps_();
+  Object.keys(props.getProperties()).forEach(function (k) { if (k.indexOf(prefix) === 0) props.deleteProperty(k); });
+  if (!form.isAcceptingResponses()) form.setAcceptingResponses(true);
+  return { cleared: Math.max(last - 1, 0) };
 }

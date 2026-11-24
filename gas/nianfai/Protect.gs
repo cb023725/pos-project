@@ -110,8 +110,17 @@ function nfLogResponseEdit_(e) {
   var now = nfFormatTimestamp_(new Date());
   var single = nRows === 1 && nCols === 1;
   var logRows = [];
+  var formLastCol = Math.min.apply(null, [statusIdx >= 0 ? statusIdx : lastCol, editedCol - 1].filter(function (x) { return x > 0; }));
+  var cleared = [];
   for (var r = Math.max(r0, 2); r < r0 + nRows && logRows.length < 200; r++) {
     var rowVals = sh.getRange(r, 1, 1, lastCol).getValues()[0];
+    // 整列表單欄位都是空的＝清除整列（取消訂單）或改到空白列：不上色、不打勾，保持空白列，只記一行
+    var formVals = rowVals.slice(0, formLastCol);
+    if (formVals.every(function (v) { return v === '' || v === null; })) {
+      if (!single || (e.oldValue !== undefined && e.oldValue !== '')) cleared.push(r);
+      if (editedCol) sh.getRange(r, editedCol).clearContent();
+      continue;
+    }
     var orderLabel = nfFormatTimestamp_(rowVals[0]) + ' ' + (cols.name !== undefined ? rowVals[cols.name] : '');
     var touched = false;
     for (var c = c0; c < c0 + nCols; c++) {
@@ -126,6 +135,10 @@ function nfLogResponseEdit_(e) {
       touched = true;
     }
     if (touched) sh.getRange(r, editedCol).setValue(true);
+  }
+  if (cleared.length) {
+    var span = cleared.length === 1 ? '第 ' + cleared[0] + ' 列' : '第 ' + cleared[0] + '～' + cleared[cleared.length - 1] + ' 列';
+    logRows.push([now, span, '（整列清除）', '', '', '']);
   }
   if (logRows.length) {
     var log = nfSheet_(NF.SHEET_LOG);
