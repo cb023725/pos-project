@@ -188,6 +188,7 @@ function nfPing_(env, year) {
     sender: Session.getEffectiveUser().getEmail(), // 信件實際寄件帳號（顯示名稱是「咕咕義小餐館」）
     mailQuota: nfMailQuota_(),
     hasOrderSheets: !!nfSpreadsheet_().getSheetByName(NF.SHEET_DELIVERY),
+    bankMissing: nfBankMissing_(settings), // 匯款資訊沒填完：WebPOS 擋正式上線與開賣
   };
 }
 
@@ -247,6 +248,8 @@ function nfResetTestData_() {
 /** 測試完畢正式上線：清空所有測試回應，之後正式客人從表單回應第 2 列開始；每個年度只能做一次 */
 function nfGoLive_(accepting) {
   if (NF_CTX.meta.live) throw new Error(NF_CTX.year + ' 年已經正式上線（' + (NF_CTX.meta.liveAt || '') + '），不能再清空');
+  var bankMissing = nfBankMissing_();
+  if (bankMissing.length) throw new Error('請先在試算表「設定」填好匯款資訊：' + bankMissing.join('、') + '（確認信會用到，沒填客人看不到匯款帳號）');
   var result = nfClearAllResponses_();
   NF_CTX.meta.live = true;
   NF_CTX.meta.liveAt = nfFormatTimestamp_(new Date());

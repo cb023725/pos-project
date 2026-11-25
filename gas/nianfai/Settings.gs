@@ -41,6 +41,12 @@ var NF_SETTINGS_DEFAULTS = [
 ];
 
 var NF_MONEY_KEYS = ['運費', '免運門檻'];
+var NF_BANK_KEYS = ['匯款戶名', '匯款銀行', '匯款分行', '匯款帳號'];
+/** 「設定」還沒填的匯款資訊（確認信要用，沒填完不能正式上線／開賣） */
+function nfBankMissing_(settings) {
+  var kv = (settings || nfReadSettings_()).kv;
+  return NF_BANK_KEYS.filter(function (k) { return !String(kv[k] || '').trim(); });
+}
 /** 「1,000」「$3,000」也讀得懂 */
 function nfNum_(v) { return Number(String(v === null || v === undefined ? '' : v).replace(/[,$＄\s]/g, '')) || 0; }
 

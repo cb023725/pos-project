@@ -125,6 +125,7 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
     const created = !!gas?.created;
     const live = gas?.phase === 'live';
     const checked = !!fc?.passed;
+    const bankMissing = gas?.bankMissing || [];
 
     return (
         <div className="bg-white rounded-xl shadow p-6 mt-5">
@@ -205,7 +206,8 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
                             ) : (
                                 <>
                                     <p>清空所有測試資料（表單回覆、表單回應、WebPOS 年菜單與發票），訂購編號流水號歸 001。<span className="font-bold">每年只能一次。</span></p>
-                                    <button onClick={handleGoLive} disabled={!!busy || !created || !checked} className={`${btn} bg-[#C1032F] text-white`}>
+                                    {bankMissing.length > 0 && <p className="font-bold text-red-600">請先在試算表「設定」填好匯款資訊（還沒填：{bankMissing.join('、')}），確認信要用，沒填完不能正式上線</p>}
+                                    <button onClick={handleGoLive} disabled={!!busy || !created || !checked || bankMissing.length > 0} className={`${btn} bg-[#C1032F] text-white`}>
                                         {busy === 'golive' ? '處理中...' : '測試完畢，正式上線'}
                                     </button>
                                 </>

@@ -63,7 +63,8 @@ const NianfaiAdminPage = () => {
 
     // 有接 GAS 時，開賣前必須建立好 Google 表單並通過「檢查表單對應」；沒接 GAS（例如本機測試）不擋
     // 有接 GAS 時，開賣前必須：建立 Google 表單、通過「檢查表單對應」、測試完畢正式上線；沒接 GAS（本機測試）不擋
-    const googleReady = !gas || !gas.configured || (gas.ok && gas.created && !!gas.formCheck?.passed && gas.phase === 'live');
+    const bankMissing = gas?.bankMissing || [];
+    const googleReady = !gas || !gas.configured || (gas.ok && gas.created && !!gas.formCheck?.passed && gas.phase === 'live' && !bankMissing.length);
 
     // 正式上線後，Google 表單開關跟著開賣狀態（開賣中開放，其餘關閉）；測試中表單保持開放
     const syncFormAccepting = async (nextStatus) => {
@@ -239,7 +240,7 @@ const NianfaiAdminPage = () => {
                     )}
                     {status === 'archived' && <p className="text-gray-400">已封存，明年初始化新年度後才會再出現。</p>}
                     {status === 'preparing' && !datesReady && <p className="text-sm font-bold text-red-600">請先在上方設定取貨與寄出日期</p>}
-                    {status === 'preparing' && datesReady && !googleReady && <p className="text-sm font-bold text-red-600">請先完成下方「Google 表單／Sheet」的步驟（第 ⑤ 步正式上線）</p>}
+                    {status === 'preparing' && datesReady && !googleReady && <p className="text-sm font-bold text-red-600">{bankMissing.length > 0 ? `請先在試算表「設定」填好匯款資訊（還沒填：${bankMissing.join('、')}）才能開賣` : '請先完成下方「Google 表單／Sheet」的步驟（第 ⑤ 步正式上線）'}</p>}
                 </div>
             </div>
 

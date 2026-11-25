@@ -176,6 +176,10 @@ run('clear whole row → no 已修改', () => { const lc = respSheet.getLastColu
 run('onEdit response log', () => { respSheet.getRange(2, 2).setValue('改'); ctx.nfOnEdit({ range: respSheet.getRange(2, 2), source: ctx.NF_CTX.ss, oldValue: '原' }); return ctx.NF_CTX.ss.getSheetByName('修改紀錄').getRange(2, 1, 1, 6).getValues()[0]; });
 run('resetTestData', () => ctx.nfResetTestData_());
 run('submit after reset (same seq, new order)', () => ctx.nfSubmitWebposOrder_({ orderId: 202, seqLabel: '27001', customerName: '重來', customerPhone: '0900', email: 'goodgoodeatrestaurant@gmail.com', deliveryMethod: 'pickup', pickupDate: '2027-01-29', items: [{ name: '花雕雞', qty: 1 }] }));
+run('goLive：匯款資訊沒填完 → 擋下', () => { ['匯款戶名','匯款銀行','匯款分行','匯款帳號'].forEach(k => ctx.nfSetKv_(k, ''));
+  let msg = 'NO ERROR (bad)'; try { ctx.nfGoLive_(false); } catch (e) { msg = 'error: ' + e.message; }
+  [['匯款戶名','測試戶名'],['匯款銀行','測試銀行'],['匯款分行','測試分行'],['匯款帳號','000123456789']].forEach(([k, v]) => ctx.nfSetKv_(k, v));
+  return { msg, live: !!ctx.NF_CTX.meta.live, missingAfterFill: ctx.nfBankMissing_() }; });
 run('goLive (第一次)', () => { ctx.nfSubmitWebposOrder_({ orderId: 303, seqLabel: '27002', customerName: 't', customerPhone: '1', email: 'goodgoodeatrestaurant@gmail.com', deliveryMethod: 'pickup', pickupDate: '2027-01-29', items: [{ name: '花雕雞', qty: 1 }] });
   const r = ctx.nfGoLive_(false); return { ...r, rows: respSheet.getLastRow(), accepting: ctx.NF_CTX.form.isAcceptingResponses(), responses: ctx.NF_CTX.form.getResponses().length }; });
 run('goLive (第二次) → 應該拒絕', () => { try { ctx.nfGoLive_(true); return 'NO ERROR (bad)'; } catch (e) { return 'error: ' + e.message; } });
