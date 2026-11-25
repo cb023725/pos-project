@@ -116,7 +116,7 @@ def notes(items):
         # 逗號處才斷行：每個子句不拆開，放不下就整句換到下一行
         parts = text.split('，')
         text = '，'.join(nb(p) for p in parts[:-1]) + ('，' if len(parts) > 1 else '') + nb(parts[-1])
-        row = f'        <tr><td style="padding: 5px 6px; vertical-align: top; font-size: 12px; color: #444; line-height: 1.7;">{text}</td></tr>'
+        row = f'        <tr><td style="padding: 6px 6px; vertical-align: top; font-size: 12px; color: #444; line-height: 1.45;">{text}</td></tr>'
         rows.append(f'        <? if ({cond}) {{ ?>\n{row}\n        <? }} ?>' if cond else row)
     return ('      <table style="width: 100%; border-collapse: collapse; border: none;">\n'
             + '\n'.join(rows) + '\n      </table>')
@@ -241,8 +241,8 @@ BANK = '\n    <? if (!data.isOnsite) { ?>' + section('匯款資訊', GREEN, info
 LINE_LINK = f'<a href="<?= data.line ?>" target="_blank" style="color: {BLUE}; font-weight: bold;">官方 LINE</a>'
 PAY_NOTES = [
     ('!data.isOnsite', f'預購商品需付款完成才算訂購成功，尚未付款請轉帳至下方{nb("匯款帳號。")}'),
-    ('!data.isOnsite', f'修改訂單或確認匯款狀態，{nb("請加入" + LINE_LINK + "洽詢。")}'),
-    ('data.isOnsite', f'修改訂單，{nb("請加入" + LINE_LINK + "洽詢。")}'),
+    ('!data.isOnsite', f'<strong>修改訂單</strong>或<strong>確認匯款狀態</strong>，{nb("請加入" + LINE_LINK + "洽詢。")}'),
+    ('data.isOnsite', f'<strong>修改訂單</strong>，{nb("請加入" + LINE_LINK + "洽詢。")}'),
 ]
 
 
