@@ -88,7 +88,7 @@ function nfBuildLookupSheet_(ss, s, defs) {
   var sh = nfGetOrCreateSheet_(ss, NF.SHEET_LOOKUP);
   var D = function (k) { return nfOrderRange_('delivery', defs.delivery, k); };
   var P = function (k) { return nfOrderRange_('pickup', defs.pickup, k); };
-  var labels = ['訂購人', '取貨方式', '進度', '取貨／出貨日', '品項', '金額', '付款', '電話', '末五碼', '收件資訊', '信件'];
+  var labels = ['訂購人', '取貨方式', '進度', '取貨／出貨日', '品項', '金額', '付款', '電話', '末五碼', '配送資訊', '信件'];
   var mail = function (label, rng) { return '"' + label + '："&IF(' + rng + '="","未寄",' + rng + ')'; };
   var dArr = [
     D('name'), 'IF(' + D('id') + '="","","宅配")', D('status'), 'IF(' + D('shipDate') + '="","尚未出貨",' + D('shipDate') + ')',
@@ -110,7 +110,7 @@ function nfBuildLookupSheet_(ss, s, defs) {
   sh.setRowHeight(1, 44);
   sh.setRowHeights(top, n, 32);
   sh.setRowHeight(top + 4, 52);  // 品項
-  sh.setRowHeight(top + 9, 52);  // 收件資訊
+  sh.setRowHeight(top + 9, 52);  // 配送資訊
   sh.setRowHeight(top + 10, 52); // 信件
   nfStyleTitle_(sh, 'A1', '🔍 查詢訂單');
   sh.getRange('B1').setBackground('#fef3c7').setNumberFormat('@').setFontSize(13).setFontWeight('bold')

@@ -16,7 +16,7 @@ function nfCreateYear_(p) {
   if (nfProps_().getProperty(nfYearKey_(env, year))) {
     throw new Error(year + ' 年的試算表與表單已經建立過了（' + env + '）');
   }
-  var folder = nfGetOrCreateFolder_(p.folderName || '咕咕義年菜');
+  var folder = nfGetOrCreatePath_(p.folderPath || ['000GGE', '2. 年菜', year + (env === 'prod' ? ' 年菜' : ' 年菜測試')]);
   var title = year + ' 年菜訂單' + (env === 'prod' ? '' : '（測試）');
 
   // 1. 試算表：預設分頁改名為「設定」，寫入 WebPOS 傳來的品項與日期
@@ -60,6 +60,18 @@ function nfCreateYear_(p) {
     formUrl: form.getPublishedUrl(),
     formEditUrl: form.getEditUrl(),
   };
+}
+
+/** 依路徑找資料夾（從我的雲端硬碟根目錄開始），沒有就建立；第一層在根目錄找不到時，再找整個雲端硬碟 */
+function nfGetOrCreatePath_(names) {
+  var folder = DriveApp.getRootFolder();
+  names.forEach(function (name, i) {
+    var it = folder.getFoldersByName(name);
+    if (it.hasNext()) { folder = it.next(); return; }
+    if (i === 0) { var any = DriveApp.getFoldersByName(name); if (any.hasNext()) { folder = any.next(); return; } }
+    folder = folder.createFolder(name);
+  });
+  return folder;
 }
 
 function nfGetOrCreateFolder_(name) {
@@ -167,11 +179,11 @@ function nfFormTexts_(s) {
       '',
       '・出貨與取貨',
       '    寄件日期：',
-      String(kv['寄出期間'] || ''),
+      '    ' + String(kv['寄出期間'] || ''),
       '    年節物流繁忙，恕無法指定到貨日',
       '',
       '    店取日期：',
-      firstPick + '~' + lastPick,
+      '    ' + firstPick + '~' + lastPick,
       '    取貨時間：' + (kv['每日取貨時間'] || ''),
       '    ' + lastPickShort + ' 取貨時間只到 ' + (kv['最後取貨結束時間'] || ''),
       '',

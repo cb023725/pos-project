@@ -2846,8 +2846,9 @@ app.post('/api/nianfai/gas/create-year', nianfaiGasRoute(async (year) => {
         throw new Error('請先設定取貨、寄出日期與預購截止日');
     }
     if (!payload.items.length) throw new Error('這個年度還沒有年菜品項');
-    const folderName = process.env.NIANFAI_DRIVE_FOLDER || (IS_DEV ? '咕咕義年菜（測試）' : '咕咕義年菜');
-    const r = await callNianfaiGas('createYear', { ...payload, folderName }, { timeoutMs: 330000 });
+    // 雲端硬碟：000GGE ＞ 2. 年菜 ＞ 2027 年菜測試（dev）／2027 年菜（prod）
+    const folderPath = ['000GGE', '2. 年菜', `${year} ${IS_DEV ? "年菜測試" : "年菜"}`];
+    const r = await callNianfaiGas('createYear', { ...payload, folderPath }, { timeoutMs: 330000 });
     const now = new Date().toISOString();
     await supabase.from('app_settings').upsert([
         { key: `nianfai_${year}_sheet_url`, value: r.spreadsheetUrl, updated_at: now },

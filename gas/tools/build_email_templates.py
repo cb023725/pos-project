@@ -42,8 +42,11 @@ def page(title, greeting, body):
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="format-detection" content="telephone=no, date=no, address=no, email=no">
+  <meta name="x-apple-disable-message-reformatting">
   <title>{title}</title>
   <style>
+    a[x-apple-data-detectors] {{ color: inherit !important; text-decoration: none !important; font-size: inherit !important; font-family: inherit !important; font-weight: inherit !important; line-height: inherit !important; }}
     body {{ font-family: "Microsoft JhengHei", "PingFang TC", "Heiti TC", sans-serif; color: #333; line-height: 1.5; }}
   </style>
 </head>
@@ -104,7 +107,7 @@ def nb(text):
 
 
 def notes(items):
-    """條列（・）：符號與文字分兩欄，文字換行時對齊文字開頭。
+    """注意事項：一點一段（不加項目符號），段落之間留空隙。
     items 可以是字串，或 (條件, 字串)：條件是範本 JS 運算式，成立才顯示。
     每點的句尾自己用 nb() 包起來，換行時不會只剩一兩個字。"""
     rows = []
@@ -113,8 +116,7 @@ def notes(items):
         # 逗號處才斷行：每個子句不拆開，放不下就整句換到下一行
         parts = text.split('，')
         text = '，'.join(nb(p) for p in parts[:-1]) + ('，' if len(parts) > 1 else '') + nb(parts[-1])
-        row = ('        <tr><td style="width: 14px; padding: 5px 0 5px 4px; vertical-align: top; font-size: 12px; color: #999; line-height: 1.7;">・</td>'
-               f'<td style="padding: 5px 4px 5px 0; vertical-align: top; font-size: 12px; color: #444; line-height: 1.7;">{text}</td></tr>')
+        row = f'        <tr><td style="padding: 5px 6px; vertical-align: top; font-size: 12px; color: #444; line-height: 1.7;">{text}</td></tr>'
         rows.append(f'        <? if ({cond}) {{ ?>\n{row}\n        <? }} ?>' if cond else row)
     return ('      <table style="width: 100%; border-collapse: collapse; border: none;">\n'
             + '\n'.join(rows) + '\n      </table>')
@@ -239,13 +241,13 @@ BANK = '\n    <? if (!data.isOnsite) { ?>' + section('匯款資訊', GREEN, info
 LINE_LINK = f'<a href="<?= data.line ?>" target="_blank" style="color: {BLUE}; font-weight: bold;">官方 LINE</a>'
 PAY_NOTES = [
     ('!data.isOnsite', f'預購商品需付款完成才算訂購成功，尚未付款請轉帳至下方{nb("匯款帳號。")}'),
-    ('!data.isOnsite', f'修改訂單或確認匯款狀態，{nb("請洽" + LINE_LINK + "。")}'),
-    ('data.isOnsite', f'修改訂單，{nb("請洽" + LINE_LINK + "。")}'),
+    ('!data.isOnsite', f'修改訂單或確認匯款狀態，{nb("請加入" + LINE_LINK + "洽詢。")}'),
+    ('data.isOnsite', f'修改訂單，{nb("請加入" + LINE_LINK + "洽詢。")}'),
 ]
 
 
 def ack_button(text):
-    """客人確認按鈕：點開確認頁、再按一次才記錄（信箱掃描不會誤判），工作表顯示「客人已確認」"""
+    """客人確認按鈕：點一下送出「年菜確認」表單並顯示感謝畫面，工作表顯示「已確認」"""
     return f'''
     <div style="text-align: center; margin: 24px 0 4px;">
       <a href="<?= data.ackUrl ?>" target="_blank" style="background-color: {BRAND}; border-radius: 28px; color: #ffffff; display: inline-block; font-size: 14px; font-weight: bold; letter-spacing: 1px; padding: 10px 30px; text-decoration: none;">{text}</a>
@@ -289,19 +291,19 @@ def pre_ship():
     greeting = lines(
         '感謝您訂購咕咕義冷凍年菜料理包',
         f'年菜將於 {blue("<?= data.shipPeriodShort ?>")} 寄出',
-        '寄出前請確認以下收件資訊是否正確',
+        '寄出前請確認以下配送資訊是否正確',
     )
-    body = (section('訂購明細', RED, ITEMS_QTY) + section('收件資訊', BLUE, info_rows([
+    body = (section('訂購明細', RED, ITEMS_QTY) + section('配送資訊', BLUE, info_rows([
         ('收件姓名', '<?= data.receiverName ?>'),
         ('收件電話', '<?= data.receiverPhone ?>'),
         ('收件地址', '<?= data.receiverAddress ?>'),
     ]), boxed=True)
-        + section('物流小叮嚀', AMBER, notes([
+        + section('注意事項', AMBER, notes([
             f'年菜由黑貓低溫宅配，寄出後約 <strong>1~3</strong> 天送達，實際仍以{nb("物流配送為準。")}',
             f'春節期間物流較繁忙，無法指定{nb("到貨日期與時段。")}',
             f'若近期有<strong>出國計畫</strong>或<strong>不便收貨</strong>，請盡快告知我們{nb("調整出貨日期。")}',
         ]))
-        + ack_button('收件資訊正確，我已確認')
+        + ack_button('配送資訊正確，我已確認')
         + '''
     <p style="color: #d9534f; font-weight: bold; font-size: 14px; text-align: center; margin: 24px 0 0;">預祝 新年快樂，<?= data.greeting ?>！</p>
 ''')
@@ -321,7 +323,7 @@ def shipped():
              f'<span style="font-weight: normal; color: #999; font-size: 11px;">（點擊查詢黑貓配送進度）</span>')
     body = section('訂購明細', RED, ITEMS_QTY) + section('配送資訊', BLUE, info_rows([
         ('收件姓名', '<?= data.receiverName ?>'),
-        ('聯絡電話', '<?= data.receiverPhone ?>'),
+        ('收件電話', '<?= data.receiverPhone ?>'),
         ('收件地址', '<?= data.receiverAddress ?>'),
         ('託運單號', track),
     ]), boxed=True) + ack_button('我已收到出貨通知')

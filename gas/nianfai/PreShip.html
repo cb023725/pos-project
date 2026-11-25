@@ -3,8 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="format-detection" content="telephone=no, date=no, address=no, email=no">
+  <meta name="x-apple-disable-message-reformatting">
   <title>冷凍年菜宅配寄出前確認</title>
   <style>
+    a[x-apple-data-detectors] { color: inherit !important; text-decoration: none !important; font-size: inherit !important; font-family: inherit !important; font-weight: inherit !important; line-height: inherit !important; }
     body { font-family: "Microsoft JhengHei", "PingFang TC", "Heiti TC", sans-serif; color: #333; line-height: 1.5; }
   </style>
 </head>
@@ -17,7 +20,7 @@
       <div style="font-size: 13px; color: #444; line-height: 1.8;">
         感謝您訂購咕咕義冷凍年菜料理包<br>
         年菜將於 <span style="color: #2A52BE; font-weight: bold;"><?= data.shipPeriodShort ?></span> 寄出<br>
-        寄出前請確認以下收件資訊是否正確
+        寄出前請確認以下配送資訊是否正確
       </div>
     </div>
 
@@ -64,7 +67,7 @@
       </table>
     </div>
 
-    <h3 style="color: #333; font-size: 15px; margin-top: 30px; margin-bottom: 12px; letter-spacing: 1px; border-left: 8px solid #2A52BE; padding-left: 10px;">收件資訊</h3>
+    <h3 style="color: #333; font-size: 15px; margin-top: 30px; margin-bottom: 12px; letter-spacing: 1px; border-left: 8px solid #2A52BE; padding-left: 10px;">配送資訊</h3>
     <div style="background-color: #fcfcfc; border: 1px solid #f0f0f0; border-radius: 8px; padding: 5px 10px; margin-bottom: 10px;">
       <table style="width: 100%; border-collapse: collapse; border: none; margin: 0;">
         <tr style="border-bottom: 1px solid #f0f0f0;">
@@ -82,17 +85,17 @@
       </table>
     </div>
 
-    <h3 style="color: #333; font-size: 15px; margin-top: 30px; margin-bottom: 12px; letter-spacing: 1px; border-left: 8px solid #f59e0b; padding-left: 10px;">物流小叮嚀</h3>
+    <h3 style="color: #333; font-size: 15px; margin-top: 30px; margin-bottom: 12px; letter-spacing: 1px; border-left: 8px solid #f59e0b; padding-left: 10px;">注意事項</h3>
     <div style="border: 1px solid #f0f0f0; border-radius: 8px; padding: 5px; margin-bottom: 10px;">
       <table style="width: 100%; border-collapse: collapse; border: none;">
-        <tr><td style="width: 14px; padding: 5px 0 5px 4px; vertical-align: top; font-size: 12px; color: #999; line-height: 1.7;">・</td><td style="padding: 5px 4px 5px 0; vertical-align: top; font-size: 12px; color: #444; line-height: 1.7;"><span style="white-space: nowrap;">年菜由黑貓低溫宅配</span>，<span style="white-space: nowrap;">寄出後約 <strong>1~3</strong> 天送達</span>，<span style="white-space: nowrap;">實際仍以<span style="white-space: nowrap;">物流配送為準。</span></span></td></tr>
-        <tr><td style="width: 14px; padding: 5px 0 5px 4px; vertical-align: top; font-size: 12px; color: #999; line-height: 1.7;">・</td><td style="padding: 5px 4px 5px 0; vertical-align: top; font-size: 12px; color: #444; line-height: 1.7;"><span style="white-space: nowrap;">春節期間物流較繁忙</span>，<span style="white-space: nowrap;">無法指定<span style="white-space: nowrap;">到貨日期與時段。</span></span></td></tr>
-        <tr><td style="width: 14px; padding: 5px 0 5px 4px; vertical-align: top; font-size: 12px; color: #999; line-height: 1.7;">・</td><td style="padding: 5px 4px 5px 0; vertical-align: top; font-size: 12px; color: #444; line-height: 1.7;"><span style="white-space: nowrap;">若近期有<strong>出國計畫</strong>或<strong>不便收貨</strong></span>，<span style="white-space: nowrap;">請盡快告知我們<span style="white-space: nowrap;">調整出貨日期。</span></span></td></tr>
+        <tr><td style="padding: 5px 6px; vertical-align: top; font-size: 12px; color: #444; line-height: 1.7;"><span style="white-space: nowrap;">年菜由黑貓低溫宅配</span>，<span style="white-space: nowrap;">寄出後約 <strong>1~3</strong> 天送達</span>，<span style="white-space: nowrap;">實際仍以<span style="white-space: nowrap;">物流配送為準。</span></span></td></tr>
+        <tr><td style="padding: 5px 6px; vertical-align: top; font-size: 12px; color: #444; line-height: 1.7;"><span style="white-space: nowrap;">春節期間物流較繁忙</span>，<span style="white-space: nowrap;">無法指定<span style="white-space: nowrap;">到貨日期與時段。</span></span></td></tr>
+        <tr><td style="padding: 5px 6px; vertical-align: top; font-size: 12px; color: #444; line-height: 1.7;"><span style="white-space: nowrap;">若近期有<strong>出國計畫</strong>或<strong>不便收貨</strong></span>，<span style="white-space: nowrap;">請盡快告知我們<span style="white-space: nowrap;">調整出貨日期。</span></span></td></tr>
       </table>
     </div>
 
     <div style="text-align: center; margin: 24px 0 4px;">
-      <a href="<?= data.ackUrl ?>" target="_blank" style="background-color: #C1032F; border-radius: 28px; color: #ffffff; display: inline-block; font-size: 14px; font-weight: bold; letter-spacing: 1px; padding: 10px 30px; text-decoration: none;">收件資訊正確，我已確認</a>
+      <a href="<?= data.ackUrl ?>" target="_blank" style="background-color: #C1032F; border-radius: 28px; color: #ffffff; display: inline-block; font-size: 14px; font-weight: bold; letter-spacing: 1px; padding: 10px 30px; text-decoration: none;">配送資訊正確，我已確認</a>
       <div style="font-size: 11px; color: #999; margin-top: 8px;">按下按鈕讓我們知道您已收到這封信</div>
     </div>
 

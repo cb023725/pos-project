@@ -93,7 +93,7 @@ function nfBuildOrderData_(order, settings) {
 function nfSendConfirmation_(order, settings, subjectPrefix) {
   var data = nfBuildOrderData_(order, settings);
   var tpl = HtmlService.createTemplateFromFile(order.isDelivery ? 'ConfirmDelivery' : 'ConfirmPickup');
-  tpl.data = data;
+  tpl.data = nfPlainDates_(data);
   var html = tpl.evaluate().getContent();
   var to = order.email || NF.STORE_EMAIL;
   var isStore = to.toLowerCase() === NF.STORE_EMAIL.toLowerCase();

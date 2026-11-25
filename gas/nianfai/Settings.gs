@@ -25,7 +25,7 @@ var NF_SETTINGS_DEFAULTS = [
   ['最後取貨日說明', ''],        // 例：2027/2/4 (四)
   ['最後取貨結束時間', '16:00'],
   ['祝賀語', '羊年行大運'],
-  ['表單問候語', '家家圍爐慶團圓，\n鴻運呈祥賀新年，\n咕咕義新春年菜陪你迎接嶄新羊年！'],
+  ['表單問候語', '家家圍爐慶團圓\n鴻運呈祥賀新年\n咕咕義新春年菜\n陪你迎接嶄新羊年！'],
   ['店址', '台中市西區東興路三段13號1樓'],
   ['電話', '04 2471 5526'],
   ['LINE', 'https://lin.ee/ntYrjY9'],
@@ -40,6 +40,21 @@ var NF_SETTINGS_DEFAULTS = [
   ['匯款帳號', ''],
 ];
 
+var NF_MONEY_KEYS = ['運費', '免運門檻'];
+/** 「1,000」「$3,000」也讀得懂 */
+function nfNum_(v) { return Number(String(v === null || v === undefined ? '' : v).replace(/[,$＄\s]/g, '')) || 0; }
+
+/** 「設定」的金額（運費、免運門檻、品項單價）一律顯示千分位 */
+function nfFormatSettingsMoney_(sh) {
+  var last = Math.max(sh.getLastRow(), 2);
+  sh.getRange(2, NF_SETTINGS_ITEM_COL + 2, last - 1, 1).setNumberFormat('#,##0'); // 單價
+  sh.getRange(1, 1, last, 1).getValues().forEach(function (r, i) {
+    if (NF_MONEY_KEYS.indexOf(String(r[0]).trim()) < 0) return;
+    var c = sh.getRange(i + 1, 2), v = c.getValue();
+    if (v !== '' && v !== null) c.setNumberFormat('#,##0').setValue(nfNum_(v));
+  });
+}
+
 function nfEnsureSettingsSheet_() {
   var ss = nfSpreadsheet_();
   var sh = ss.getSheetByName(NF.SHEET_SETTINGS);
@@ -48,6 +63,7 @@ function nfEnsureSettingsSheet_() {
     sh.getRange(1, 1, 1, 2).setValues([['項目', '值']]).setFontWeight('bold');
     sh.getRange(2, 1, NF_SETTINGS_DEFAULTS.length, 2).setValues(NF_SETTINGS_DEFAULTS);
   }
+  nfFormatSettingsMoney_(sh);
   if (!sh.getRange(1, NF_SETTINGS_ITEM_COL).getValue()) {
     sh.getRange(1, NF_SETTINGS_ITEM_COL, 1, NF_SETTINGS_ITEM_HEADERS.length)
       .setValues([NF_SETTINGS_ITEM_HEADERS]).setFontWeight('bold');
@@ -73,7 +89,7 @@ function nfReadSettings_() {
       items.push({
         id: String(r[0] || '').trim(),
         name: String(r[1]).trim(),
-        price: Number(r[2]) || 0,
+        price: nfNum_(r[2]) || 0,
         isBundle: String(r[3]).trim() === '套餐',
         compositionText: String(r[4] || ''),
         regular: String(r[5]).trim() === '是',
@@ -104,8 +120,8 @@ function nfReadSettings_() {
     items: items,
     byName: byName,
     year: String(kv['年度'] || ''),
-    shippingFee: Number(kv['運費']) || 160,
-    freeThreshold: Number(kv['免運門檻']) || 3000,
+    shippingFee: nfNum_(kv['運費']) || 160,
+    freeThreshold: nfNum_(kv['免運門檻']) || 3000,
     bundleMax: Number(kv['套餐上限']) || 8,
     singleMax: Number(kv['單點上限']) || 8,
     pickupDates: pickupDates,
@@ -135,7 +151,12 @@ function nfWriteSettingsFromWebpos_(p) {
     var v = kvUpdates[k];
     if (v === undefined || v === null) return;
     var idx = keys.indexOf(k);
-    if (idx >= 0) {
+    if (NF_MONEY_KEYS.indexOf(k) >= 0) { // 金額：存數字＋千分位格式
+      var r0 = idx >= 0 ? idx + 1 : keys.length + 1;
+      sh.getRange(r0, 1, 1, 2).setValues([[k, nfNum_(v)]]);
+      sh.getRange(r0, 2).setNumberFormat('#,##0');
+      if (idx < 0) keys.push(k);
+    } else if (idx >= 0) {
       sh.getRange(idx + 1, 2).setNumberFormat('@').setValue(String(v));
     } else {
       var row = keys.length + 1;
@@ -155,6 +176,7 @@ function nfWriteSettingsFromWebpos_(p) {
   var itemLast = sh.getLastRow();
   if (itemLast > 1) sh.getRange(2, NF_SETTINGS_ITEM_COL, itemLast - 1, NF_SETTINGS_ITEM_HEADERS.length).clearContent();
   if (rows.length) sh.getRange(2, NF_SETTINGS_ITEM_COL, rows.length, NF_SETTINGS_ITEM_HEADERS.length).setValues(rows);
+  nfFormatSettingsMoney_(sh);
   return { items: rows.length };
 }
 

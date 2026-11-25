@@ -86,6 +86,8 @@ function doPost(e) {
         return nfJson_({ ok: true, result: nfTestConfirmUrl_(body.id, body.type) });
       case 'testConfirmLog':
         return nfJson_({ ok: true, result: nfTestConfirmLog_() });
+      case 'testSetKv':
+        return nfJson_({ ok: true, result: nfTestSetKv_(body.key, body.value) });
       case 'testCell':
         return nfJson_({ ok: true, result: nfTestCell_(body.sheet, body.a1) });
       case 'removeFormImages':

@@ -108,3 +108,10 @@ function nfTestConfirmLog_() {
   Object.keys(props).forEach(function (k) { if (k.indexOf(prefix) === 0) out.states[k.slice(prefix.length)] = JSON.parse(props[k]); });
   return out;
 }
+
+/** 測試用：改「設定」的一個項目（只限測試環境） */
+function nfTestSetKv_(key, value) {
+  nfTestGuard_();
+  nfSetKv_(key, value);
+  return true;
+}

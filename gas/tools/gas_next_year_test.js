@@ -59,7 +59,7 @@ check('自取：金額與保冷袋', p[0]['金額'] === 9080 && p[0]['保冷袋'
 
 // ── 確認信 ──
 const mails = ctx._mails.filter(m => m.html);
-const m1 = mails[0].html, m3 = mails[2].html;
+const m1 = mails[0].html.replace(/\u200B/g, ""), m3 = mails[2].html.replace(/\u200B/g, ""); // 日期裡的零寬字元（防手機變連結）
 check('確認信：新價格、新套餐組成', m1.includes('$3,800') && m1.includes('$1,680') && m1.includes('紅燒牛腩筋') && !m1.includes('花雕雞</div>'), '');
 check('確認信：寄出期間（新）', m1.includes('1/15 (六) ~ 1/17 (一)'));
 check('確認信：最後一天取貨時段 11:00 - 15:00、現場單顯示 28001', m3.includes('11:00 - 15:00') && m3.includes('28001'));

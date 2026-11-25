@@ -19,11 +19,11 @@ function nfConfirmForm_() {
   if (!form) {
     form = FormApp.create(NF_CTX.year + ' 年菜確認' + (NF_CTX.env === 'dev' ? '（測試）' : ''));
     form.setTitle('咕咕義小餐館｜年菜確認')
-      .setDescription('請確認下方的訂單資訊，沒問題請按「提交」完成確認。\n如需修改訂單或收件資訊，請洽咕咕義小餐館官方 LINE。')
+      .setDescription('請確認下方的訂單資訊，沒問題請按「提交」完成確認。\n如需修改訂單或配送資訊，請加入咕咕義小餐館官方 LINE 洽詢。')
       .setCollectEmail(false)
       .setAllowResponseEdits(false)
       .setShowLinkToRespondAgain(false)
-      .setConfirmationMessage('✓ 已收到您的確認，謝謝！\n如需修改訂單或收件資訊，請洽咕咕義小餐館官方 LINE。');
+      .setConfirmationMessage('✓ 已收到您的確認，謝謝！\n如需修改訂單或配送資訊，請加入咕咕義小餐館官方 LINE 洽詢。');
     var ids = {
       order: form.addTextItem().setTitle('訂單').setRequired(true).getId(),
       what: form.addTextItem().setTitle('確認內容').setRequired(true).getId(),

@@ -225,7 +225,7 @@ function nfSendNotice_(type, row, settings, attachment, subjectPrefix) {
   var tpl, html;
   data.ackUrl = row.id ? nfConfirmUrl_(row, type) : '#'; // 確認按鈕：預先填好的「年菜確認」Google 表單（ConfirmForm.gs）
   tpl = HtmlService.createTemplateFromFile(file);
-  tpl.data = data;
+  tpl.data = nfPlainDates_(data);
   html = tpl.evaluate().getContent();
   if (row.id) html = html.replace('</body>', nfOpenPixel_(row.id, type) + '</body>');
   var opts = { htmlBody: html, name: NF.SENDER_NAME };
@@ -307,7 +307,7 @@ function nfAckUrl_(id, type) {
 }
 
 var NF_ACK_TEXT = {
-  preShip: { q: '請確認收件資訊正確無誤', btn: '收件資訊正確，我已確認', done: '已收到您的確認，年菜將依寄出期間寄出。如需修改收件資訊，請洽官方 LINE。' },
+  preShip: { q: '請確認配送資訊正確無誤', btn: '配送資訊正確，我已確認', done: '已收到您的確認，年菜將依寄出期間寄出。如需修改配送資訊，請加入官方 LINE 洽詢。' },
   shipped: { q: '請確認您已收到出貨通知', btn: '我已收到出貨通知', done: '感謝確認！收到年菜後請確認品項及數量，有任何問題請與我們聯絡。' },
   pickupReminder: { q: '請確認您已收到取貨提醒', btn: '我已收到取貨提醒', done: '感謝確認！期待您準時來店取貨。如需變更取貨日，請提前通知我們備貨。' },
 };

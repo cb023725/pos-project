@@ -108,6 +108,18 @@ function nfFormatTimestamp_(d) {
   return Utilities.formatDate(d, NF.TZ, NF.TIMESTAMP_FORMAT);
 }
 
+/**
+ * 信件裡的日期／時間顯示成純文字：手機 Outlook、iPhone 郵件會把「1/25」「12:00」自動變成藍色連結（加入行事曆），
+ * 在「/」「:」後面插入看不見的零寬字元，偵測就認不出來。只改顯示用的欄位，不影響寫入試算表的資料。
+ */
+var NF_PLAIN_FIELDS = ['shipPeriod', 'shipPeriodShort', 'shipDate', 'pickupDate', 'pickupHours', 'lastPickupEnd', 'orderTime', 'timestamp', 'deadline'];
+function nfPlainDates_(data) {
+  NF_PLAIN_FIELDS.forEach(function (k) {
+    if (typeof data[k] === 'string') data[k] = data[k].replace(/([\/:~])/g, '$1\u200B');
+  });
+  return data;
+}
+
 function nfMoney_(n) {
   return Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
