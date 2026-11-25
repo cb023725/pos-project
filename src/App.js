@@ -25,6 +25,7 @@ import SettingsPage from './pages/Settings';
 import NianfaiAdminPage from './pages/NianfaiAdmin';
 import NianfaiOrderPage from './pages/NianfaiOrder';
 import NianfaiQueuePage from './pages/NianfaiQueue';
+import NewVersionBanner from './components/NewVersionBanner';
 
 import './index.css';
 
@@ -40,6 +41,7 @@ function AppContent() {
 
   return (
     <Layout hideTimeBar={hideTimeBar}>
+      <NewVersionBanner />
       <Routes>
         <Route path="/" element={<Navigate to="/tables" replace />} />
         <Route path="/order" element={<OrderPage />} />

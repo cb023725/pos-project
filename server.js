@@ -1493,8 +1493,8 @@ function buildNianfaiStubPDF(data, filePath) {
             y = P.section('宅配資訊', y);
             y = P.blank('訂購人姓名：', y);
             y = P.blank('訂購人電話：', y);
-            y = P.blank('收件人姓名：', y, { same: true });
-            y = P.blank('收件人電話：', y, { same: true });
+            y = P.blank('收件人姓名：', y);
+            y = P.blank('收件人電話：', y);
             y = P.blank('宅配地址：', y, { lines: 2 });
         } else {
             y = P.section('取貨資訊', y);
@@ -3776,8 +3776,13 @@ app.post('/print-preview', async (req, res) => {
 // ----------------------------------------------------
 // React build 靜態檔案（API 路由之後）
 // ----------------------------------------------------
-app.use(express.static(path.join(__dirname, 'build')));
+// index.html 與 asset-manifest.json 不快取（其他 JS/CSS 檔名含雜湊，可以長期快取）：更新後重新整理就是新版
+const NO_CACHE_FILES = new Set(['index.html', 'asset-manifest.json']);
+app.use(express.static(path.join(__dirname, 'build'), {
+    setHeaders: (res, filePath) => { if (NO_CACHE_FILES.has(path.basename(filePath))) res.set('Cache-Control', 'no-cache'); },
+}));
 app.get(/.*/, (req, res) => {
+    res.set('Cache-Control', 'no-cache');
     res.sendFile(path.join(__dirname, 'build', 'index.html'), (err) => {
         if (err) {
             res.status(503).send('<html><head><meta http-equiv="refresh" content="5"></head><body style="font-family:sans-serif;text-align:center;padding:60px"><h2>系統重新建置中，請稍候...</h2><p>頁面將在 5 秒後自動重新整理</p></body></html>');
