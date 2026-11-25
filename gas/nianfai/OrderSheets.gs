@@ -324,7 +324,9 @@ function nfSetupOrderSheet_(ss, kind, defs, settings) {
     if (d.type === 'mail' && /Status$/.test(d.key)) {
       rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextStartsWith('失敗').setFontColor('#dc2626').setBold(true)
         .setRanges([sh.getRange(2, j + 1, NF_DATA_ROWS, 1)]).build());
-      rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextStartsWith('已開信').setFontColor('#1d4ed8').setBold(true)
+      rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextStartsWith('客人已確認').setBackground('#dcfce7').setFontColor('#15803d').setBold(true)
+        .setRanges([sh.getRange(2, j + 1, NF_DATA_ROWS, 1)]).build());
+      rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextStartsWith('已開信').setFontColor('#1d4ed8')
         .setRanges([sh.getRange(2, j + 1, NF_DATA_ROWS, 1)]).build());
     }
   });
@@ -402,9 +404,10 @@ function nfTrackNoProblem_(row, allRows) {
   return '';
 }
 
-/** 工作表顯示用：已開信 MM/dd HH:mm ＞ 已寄出 ／ 失敗：原因 */
+/** 工作表顯示用：客人已確認 ＞ 已開信（參考）＞ 已寄出 ／ 失敗：原因 */
 function nfMailStatusText_(ms) {
   if (!ms) return '';
+  if (ms.ackAt) return '客人已確認 ' + String(ms.ackAt).slice(5, 16);
   if (ms.openedAt) return '已開信 ' + String(ms.openedAt).slice(5, 16);
   return ms.status;
 }

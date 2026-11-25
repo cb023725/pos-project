@@ -119,7 +119,7 @@ const ctx = {
   MailApp: { sendEmail: (o) => { ctx._mails.push({ to: o.to, subject: o.subject, body: o.body }); if (!ctx._quiet) console.log('  [MailApp]', o.subject); }, getRemainingDailyQuota: () => ctx._quota },
   GmailApp: { sendEmail: (to, subj, b, o) => { if (ctx._failTo === to) throw new Error('模擬寄送失敗'); ctx._mails.push({ to, subject: subj, html: o.htmlBody, attachments: (o.attachments || []).length }); if (!ctx._quiet) console.log('  [Gmail] to', to, 'bcc', o.bcc || '-', subj); } },
   // 簡易 Apps Script 範本引擎（<? ?> 程式、<?= ?> 輸出），讓 HTML 範本真的跑一遍
-  HtmlService: { createTemplateFromFile: (name) => { const src = fs.readFileSync(path.join(__dirname, '..', 'nianfai', name + '.html'), 'utf8'); const t = {
+  HtmlService: { createHtmlOutput: (h) => { const o = { html: h, setTitle: () => o, addMetaTag: () => o, getContent: () => h }; return o; }, createTemplateFromFile: (name) => { const src = fs.readFileSync(path.join(__dirname, '..', 'nianfai', name + '.html'), 'utf8'); const t = {
     evaluate: () => { let code = 'let __o="";'; let last = 0; src.replace(/<\?(=?)([\s\S]*?)\?>/g, (m, eq, body, idx) => { code += '__o+=' + JSON.stringify(src.slice(last, idx)) + ';'; code += eq ? '__o+=String(' + body + ');' : body; last = idx + m.length; return m; });
       code += '__o+=' + JSON.stringify(src.slice(last)) + ';return __o;'; const html = new Function('data', code)(t.data); return { getContent: () => html }; } }; return t; } },
   ContentService: { createTextOutput: (s) => ({ setMimeType: () => s }), MimeType: { JSON: 'json' } },
@@ -236,8 +236,17 @@ run('開信追蹤：簽章正確才記錄，工作表顯示已開信', () => {
   ctx._props.WEB_APP_URL = 'https://script.google.com/macros/s/TEST/exec';
   const id = sheetObj('宅配').find(x => x['訂購姓名'] === '宅配客')['訂單編號'];
   const key = 'dev|2027|preShip|' + id; const good = ctx.nfOpenToken_(key);
+  ctx.nfRecordOpen_(key, good); const tooSoon = sheetObj('宅配').find(x => x['訂單編號'] === id)['寄出前確認']; // 寄出 3 分鐘內＝信箱掃描
+  const mk = ctx.nfMailKey_(id); const st = JSON.parse(ctx._props[mk]); st.preShip.at = '2026/11/25 00:00:00'; ctx._props[mk] = JSON.stringify(st);
   const forged = ctx.nfRecordOpen_(key, 'forged'); const ok = ctx.nfRecordOpen_(key, good);
-  return { forged, ok, status: sheetObj('宅配').find(x => x['訂單編號'] === id)['寄出前確認'] };
+  return { tooSoon, forged, ok, status: sheetObj('宅配').find(x => x['訂單編號'] === id)['寄出前確認'] };
+});
+run('客人確認：確認頁不記錄、按按鈕才記錄、假簽章無效', () => {
+  const id = sheetObj('宅配').find(x => x['訂購姓名'] === '宅配客')['訂單編號'];
+  const key = 'dev|2027|preShip|' + id; const sig = ctx.nfOpenToken_(key);
+  const page = ctx.nfAckGet_(key, sig).html; const before = sheetObj('宅配').find(x => x['訂單編號'] === id)['寄出前確認'];
+  const bad = ctx.nfAckPost_(key, 'x').html.includes('連結無效'); ctx.nfAckPost_(key, sig);
+  return { pageHasButton: page.includes('<button'), before, after: sheetObj('宅配').find(x => x['訂單編號'] === id)['寄出前確認'], bad };
 });
 run('Sheet 選單模式：只寄選取的列、取貨提醒不限日期', () => { const p = ctx.nfMailPlan_('pickupReminder', null, [sheetObj('自取')[1]['訂單編號']]); return p.list.map(x => x.name + ':' + (x.reason || '可寄')); });
 run('取貨提醒（明天）＋失敗重試一次', () => { ctx._mails = []; ctx._failTo = 'b@example.com'; const r = ctx.nfMailSend_('pickupReminder', null, null, { retry: true, auto: true }); ctx._failTo = null;

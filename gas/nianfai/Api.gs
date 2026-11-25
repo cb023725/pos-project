@@ -30,6 +30,10 @@
  *   ping              連線測試
  */
 function doPost(e) {
+  // 客人在確認頁按「確認」（HTML 表單送出，不需要密鑰，用簽章驗證）
+  if (e && e.parameter && e.parameter.action === 'ack') {
+    try { return nfAckPost_(e.parameter.k, e.parameter.s); } catch (err) { return HtmlService.createHtmlOutput('系統忙碌，請稍後再試'); }
+  }
   try {
     var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     if (!nfSecret_() || body.secret !== nfSecret_()) return nfJson_({ ok: false, error: '密鑰錯誤' });
@@ -67,6 +71,8 @@ function doPost(e) {
         return nfJson_({ ok: true, result: nfTestStatus_(body.id) });
       case 'testFollowUp':
         return nfJson_({ ok: true, result: nfTestFollowUp_(body.id, body.ship) });
+      case 'testClearOpened':
+        return nfJson_({ ok: true, result: nfTestClearOpened_() });
       case 'fixFormTimeTexts':
         return nfJson_({ ok: true, result: nfFixFormTimeTexts_() });
       case 'mailSample':
@@ -105,6 +111,7 @@ function doPost(e) {
 
 function doGet(e) {
   var p = (e && e.parameter) || {};
+  if (p.action === 'ack') return nfAckGet_(p.k, p.s); // 客人確認頁
   if (p.action === 'open') { // 開信追蹤，不需要密鑰
     try { nfRecordOpen_(p.k, p.s); } catch (err) { console.error(err); }
     return ContentService.createTextOutput('');

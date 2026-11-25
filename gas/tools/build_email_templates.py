@@ -233,9 +233,19 @@ BANK = '\n    <? if (!data.isOnsite) { ?>' + section('匯款資訊', GREEN, info
 LINE_LINK = f'<a href="<?= data.line ?>" target="_blank" style="color: {BLUE}; font-weight: bold;">官方 LINE</a>'
 PAY_NOTES = [
     ('!data.isOnsite', f'預購商品需付款完成才算訂購成功，尚未付款請轉帳至下方{nb("匯款帳號。")}'),
-    ('!data.isOnsite', f'如需變更訂單或確認匯款，{nb("請洽" + LINE_LINK + "。")}'),
-    ('data.isOnsite', f'如需變更訂單，{nb("請洽" + LINE_LINK + "。")}'),
+    ('!data.isOnsite', f'修改訂單或確認匯款狀態，{nb("請洽" + LINE_LINK + "。")}'),
+    ('data.isOnsite', f'修改訂單，{nb("請洽" + LINE_LINK + "。")}'),
 ]
+
+
+def ack_button(text):
+    """客人確認按鈕：點開確認頁、再按一次才記錄（信箱掃描不會誤判），工作表顯示「客人已確認」"""
+    return f'''
+    <div style="text-align: center; margin: 24px 0 4px;">
+      <a href="<?= data.ackUrl ?>" target="_blank" style="background-color: {BRAND}; border-radius: 28px; color: #ffffff; display: inline-block; font-size: 14px; font-weight: bold; letter-spacing: 1px; padding: 10px 30px; text-decoration: none;">{text}</a>
+      <div style="font-size: 11px; color: #999; margin-top: 8px;">按下按鈕讓我們知道您已收到這封信</div>
+    </div>
+'''
 
 
 def confirm(delivery):
@@ -259,11 +269,10 @@ def confirm(delivery):
             ('取貨時段', '<?= data.pickupHours ?>'),
             ('取貨地點', map_link('<?= data.storeAddress ?>')),
         ]), boxed=True)
-        # 取貨時間：訂在最後一天（除夕前一天）的提早結束，其他天是每日取貨時間
+        # 每日取貨時段已寫在「取貨資訊」，注意事項只提醒除夕前一天提早結束（紅字）
         first = [
             f'請依指定的取貨日期前往取貨，如需變更取貨日請{nb("提前通知我們備貨。")}',
-            ('data.isLastDay', f'您的取貨日為除夕前一天，取貨時間為 {nb("<?= data.pickupHours ?>。")}'),
-            ('!data.isLastDay', f'每日取貨時間為 {nb("<?= data.pickupHours ?>。")}'),
+            f'除夕前一天取貨時間只到 <span style="color: {RED}; font-weight: bold;"><?= data.lastPickupEnd ?></span>。',
         ]
     body = (section('訂購明細', RED, items_amount(delivery)) + info
             + section('注意事項', AMBER, notes(first + PAY_NOTES)) + ADD_BUTTON + BANK)
@@ -286,6 +295,7 @@ def pre_ship():
             f'春節期間物流較繁忙，無法指定{nb("到貨日期與時段。")}',
             f'若近期有<strong>出國計畫</strong>或<strong>不便收貨</strong>，請盡快告知我們{nb("調整出貨日期。")}',
         ]))
+        + ack_button('收件資訊正確，我已確認')
         + '''
     <p style="color: #d9534f; font-weight: bold; font-size: 14px; text-align: center; margin: 24px 0 0;">預祝 新年快樂，<?= data.greeting ?>！</p>
 ''')
@@ -308,7 +318,7 @@ def shipped():
         ('聯絡電話', '<?= data.receiverPhone ?>'),
         ('收件地址', '<?= data.receiverAddress ?>'),
         ('託運單號', track),
-    ]), boxed=True)
+    ]), boxed=True) + ack_button('我已收到出貨通知')
     return page('年菜寄出通知', greeting, body)
 
 
@@ -324,7 +334,7 @@ def pickup_reminder():
         ('取貨日期', '<?= data.shipDate ?>'),
         ('取貨時段', '<?= data.pickupHours ?>'),
         ('取貨地點', map_link('<?= data.storeAddress ?>')),
-    ]), boxed=True)
+    ]), boxed=True) + ack_button('我已收到取貨提醒')
     return page('冷凍年菜取貨提醒', greeting, body)
 
 

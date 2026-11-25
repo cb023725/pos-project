@@ -50,3 +50,18 @@ function nfTestFollowUp_(id, ship) {
   });
   return out;
 }
+
+/** 清掉這個年度所有的開信／客人確認紀錄（之前被信箱掃描誤記的「已開信」、測試按過的確認） */
+function nfTestClearOpened_() {
+  nfTestGuard_();
+  var prefix = 'ML_' + NF_CTX.env + ':' + NF_CTX.year + ':';
+  var props = nfProps_(), n = 0;
+  Object.keys(props.getProperties()).forEach(function (k) {
+    if (k.indexOf(prefix) !== 0) return;
+    var st = JSON.parse(props.getProperty(k));
+    Object.keys(st).forEach(function (t) { if (st[t].openedAt || st[t].ackAt) { delete st[t].openedAt; delete st[t].ackAt; n++; } });
+    props.setProperty(k, JSON.stringify(st));
+  });
+  nfSyncOrderSheets_();
+  return { cleared: n };
+}

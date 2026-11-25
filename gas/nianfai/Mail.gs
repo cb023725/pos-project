@@ -32,7 +32,6 @@ function nfMailPlan_(type, dateIso, ids) {
     var email = String(r.email || '').trim();
     var reason = '';
     if (ms && ms.status === '已寄出') reason = '已寄過（' + ms.at + '）';
-    else if (String(r.note || '').indexOf('現場單') >= 0) reason = '現場單不寄';
     else if (!email || email.toLowerCase() === NF.STORE_EMAIL.toLowerCase()) reason = '沒有 email';
     else if (type === 'shipped' && !r.shipDate) reason = '缺出貨日';
     else if (type === 'shipped') reason = nfTrackNoProblem_(r, prev.rows.delivery);
@@ -179,9 +178,11 @@ function nfSendNotice_(type, row, settings, attachment, subjectPrefix) {
     data.isLastDay = ph.isLastDay;
   }
   data.shipPeriodShort = data.shipPeriod.replace(/^\d{4}\//, '');
-  var tpl = HtmlService.createTemplateFromFile(file);
+  var tpl, html;
+  data.ackUrl = row.id ? nfAckUrl_(row.id, type) : '#';
+  tpl = HtmlService.createTemplateFromFile(file);
   tpl.data = data;
-  var html = tpl.evaluate().getContent();
+  html = tpl.evaluate().getContent();
   if (row.id) html = html.replace('</body>', nfOpenPixel_(row.id, type) + '</body>');
   var opts = { htmlBody: html, name: NF.SENDER_NAME };
   if (attachment) opts.attachments = [attachment];
@@ -239,12 +240,79 @@ function nfOpenToken_(key) {
   return Utilities.base64EncodeWebSafe(sig).replace(/=+$/, '').slice(0, 22);
 }
 
+function nfMailKeyParam_(id, type) {
+  var key = NF_CTX.env + '|' + NF_CTX.year + '|' + type + '|' + id;
+  return 'k=' + encodeURIComponent(key) + '&s=' + nfOpenToken_(key);
+}
+
 function nfOpenPixel_(id, type) {
   var base = nfProps_().getProperty('WEB_APP_URL');
   if (!base) return '';
-  var key = NF_CTX.env + '|' + NF_CTX.year + '|' + type + '|' + id;
-  var url = base + '?action=open&k=' + encodeURIComponent(key) + '&s=' + nfOpenToken_(key);
-  return '<img src="' + url + '" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px;">';
+  return '<img src="' + base + '?action=open&' + nfMailKeyParam_(id, type) + '" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px;">';
+}
+
+/**
+ * 客人確認：信裡的按鈕先開一個確認頁（doGet action=ack），客人在頁面上再按一次「確認」才記錄（doPost）。
+ * 信箱的安全掃描只會打開連結、不會按頁面上的按鈕，所以「客人已確認」代表客人真的看過信。
+ */
+function nfAckUrl_(id, type) {
+  var base = nfProps_().getProperty('WEB_APP_URL');
+  return base ? base + '?action=ack&' + nfMailKeyParam_(id, type) : '#';
+}
+
+var NF_ACK_TEXT = {
+  preShip: { q: '請確認收件資訊正確無誤', btn: '收件資訊正確，我已確認', done: '已收到您的確認，年菜將依寄出期間寄出。如需修改收件資訊，請洽官方 LINE。' },
+  shipped: { q: '請確認您已收到出貨通知', btn: '我已收到出貨通知', done: '感謝確認！收到年菜後請確認品項及數量，有任何問題請與我們聯絡。' },
+  pickupReminder: { q: '請確認您已收到取貨提醒', btn: '我已收到取貨提醒', done: '感謝確認！期待您準時來店取貨。如需變更取貨日，請提前通知我們備貨。' },
+};
+
+function nfAckParse_(key, sig) {
+  if (!key || !sig || sig !== nfOpenToken_(key)) return null;
+  var p = String(key).split('|');
+  if (p.length < 4 || !NF_ACK_TEXT[p[2]]) return null;
+  return { env: p[0], year: p[1], type: p[2], id: p.slice(3).join('|') };
+}
+
+function nfAckPage_(title, body, form) {
+  var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_top">' +
+    '<style>body{font-family:"PingFang TC","Microsoft JhengHei",sans-serif;background:#f9f9f9;margin:0;padding:24px;color:#333}' +
+    '.c{max-width:420px;margin:40px auto;background:#fff;border:1px solid #e0e0e0;border-radius:12px;padding:28px;text-align:center}' +
+    'h1{font-size:18px;margin:12px 0}p{font-size:14px;line-height:1.7;color:#555}button{background:#C1032F;color:#fff;border:0;border-radius:28px;font-size:16px;font-weight:bold;padding:12px 32px;margin-top:12px}</style>' +
+    '</head><body><div class="c"><img src="https://mcusercontent.com/c27db4d77ffc4c29cdbe402a9/images/945a049c-4a56-d37c-288c-e12771643211.png" width="180" alt="咕咕義小餐館">' +
+    '<h1>' + esc(title) + '</h1><p>' + esc(body) + '</p>' + (form || '') + '</div></body></html>';
+  return HtmlService.createHtmlOutput(html).setTitle('咕咕義小餐館').addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+/** doGet action=ack：確認頁（還沒記錄） */
+function nfAckGet_(key, sig) {
+  var a = nfAckParse_(key, sig);
+  if (!a) return nfAckPage_('連結無效', '請直接聯絡咕咕義小餐館官方 LINE。');
+  var t = NF_ACK_TEXT[a.type];
+  var esc = function (s) { return String(s).replace(/"/g, '&quot;'); };
+  var form = '<form method="post" action="' + esc(nfProps_().getProperty('WEB_APP_URL') || '') + '">' +
+    '<input type="hidden" name="action" value="ack"><input type="hidden" name="k" value="' + esc(key) + '"><input type="hidden" name="s" value="' + esc(sig) + '">' +
+    '<button type="submit">' + t.btn + '</button></form>';
+  return nfAckPage_(t.q, '請按下方按鈕完成確認。', form);
+}
+
+/** doPost（表單送出）action=ack：記錄客人已確認 */
+function nfAckPost_(key, sig) {
+  var a = nfAckParse_(key, sig);
+  if (!a) return nfAckPage_('連結無效', '請直接聯絡咕咕義小餐館官方 LINE。');
+  if (!nfProps_().getProperty(nfYearKey_(a.env, a.year))) return nfAckPage_('連結已失效', '請直接聯絡咕咕義小餐館官方 LINE。');
+  nfUseYear_(a.env, a.year);
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var st = nfMailState_(a.id);
+    if (st[a.type] && !st[a.type].ackAt) {
+      st[a.type].ackAt = nfFormatTimestamp_(new Date());
+      nfProps_().setProperty(nfMailKey_(a.id), JSON.stringify(st));
+    }
+  } finally { lock.releaseLock(); }
+  try { nfSyncOrderSheets_(); } catch (e) { /* 下次同步時會顯示 */ }
+  return nfAckPage_('感謝您的確認', NF_ACK_TEXT[a.type].done);
 }
 
 /** doGet action=open（不需要密鑰，用簽章驗證）：第一次開信記下時間 */
@@ -252,19 +320,21 @@ function nfRecordOpen_(key, sig) {
   if (!key || !sig || sig !== nfOpenToken_(key)) return false;
   var p = String(key).split('|');
   if (p.length < 4) return false;
-  var raw = nfProps_().getProperty(nfYearKey_(p[0], p[1]));
-  if (!raw) return false;
-  NF_CTX = { env: p[0], year: p[1], meta: JSON.parse(raw) };
+  if (!nfProps_().getProperty(nfYearKey_(p[0], p[1]))) return false;
+  nfUseYear_(p[0], p[1]);
   var id = p.slice(3).join('|'), type = p[2];
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) return false;
   try {
     var st = nfMailState_(id);
     if (!st[type] || st[type].status !== '已寄出' || st[type].openedAt) return true;
+    // 寄出 3 分鐘內的載入多半是信箱的安全掃描（Outlook／Hotmail 送達時就會先抓圖），不算開信
+    var sentAt = new Date(String(st[type].at).replace(/\//g, '-').replace(' ', 'T') + '+08:00');
+    if (!isNaN(sentAt) && Date.now() - sentAt.getTime() < 3 * 60 * 1000) return true;
     st[type].openedAt = nfFormatTimestamp_(new Date());
     nfProps_().setProperty(nfMailKey_(id), JSON.stringify(st));
   } finally { lock.releaseLock(); }
-  try { nfUseYear_(p[0], p[1]); nfSyncOrderSheets_(); } catch (e) { /* 下次同步時會顯示 */ }
+  try { nfSyncOrderSheets_(); } catch (e) { /* 下次同步時會顯示 */ }
   return true;
 }
 
