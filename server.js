@@ -2920,91 +2920,85 @@ app.post('/api/nianfai/gas/sync-orders', nianfaiGasRoute(async (year) => {
 // ── 表單說明圖片：Google 表單說明只能純文字，依同一份資料畫成有標題、顏色的圖片放在表單最上方 ──
 // 文案沿用表單說明（問候語、套餐組成、不含牛腩提醒、單點、優惠、宅配、自取、諮詢），數字與品項跟著設定變
 const execFileP = (cmd, args) => new Promise((resolve, reject) => execFile(cmd, args, (e, out, err) => e ? reject(new Error(err || e.message)) : resolve(out)));
-async function buildNianfaiFormImage(t) {
-    const RED = '#C1032F', DARK = '#1f2937', GREY = '#6b7280', W = 740, M = 36, CW = W - M * 2;
+// 表單圖片（放在題目上方；表單說明只能純文字）：part = 'bundle'（套餐題上方）／'singles'（單點表格上方）
+// 單一字型（微軟正黑體）＋描邊加粗：黑體的數字、英文字距不自然
+async function buildNianfaiFormImage(t, part) {
+    // 版面寬 480：表單在手機上會把圖縮到螢幕寬（約 360px），這個寬度縮放後品名約 16px，仍然好讀
+    const RED = '#C1032F', DARK = '#1f2937', GREY = '#6b7280', W = 480, M = 22, CW = W - M * 2;
+    const money = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
     const draw = (doc) => {
-        // 只用微軟正黑體；粗體用描邊（黑體的數字、英文字距很怪：「$3, 500」）
         let strokeOn = false;
-        const reg = (sz, c = DARK) => { strokeOn = false; return doc.font('Reg').fontSize(sz).fillColor(c).lineWidth(0); };
-        const bold = (sz, c = DARK) => { strokeOn = true; return doc.font('Reg').fontSize(sz).fillColor(c).strokeColor(c).lineWidth(sz > 18 ? 0.9 : 0.6); };
-        const put = (txt, x, yy) => doc.text(txt, x, yy, { lineBreak: false, fill: true, stroke: strokeOn });
-        // 一行多段（不同顏色／粗細），置中或靠左
+        const font = (sz, c = DARK, b = false) => { strokeOn = b; doc.font('Reg').fontSize(sz).fillColor(c).strokeColor(c).lineWidth(b ? (sz > 22 ? 0.8 : 0.55) : 0); };
+        const put = (txt, x, y, opts = {}) => doc.text(txt, x, y, { lineBreak: false, fill: true, stroke: strokeOn, ...opts });
+        // 量寬度後還原目前字級（不然接著畫的字會變成量測用的字級）
+        const wOf = (txt, sz) => { const cur = doc._fontSize; const w = doc.font('Reg').fontSize(sz).widthOfString(txt); doc.fontSize(cur); return w; };
         const runs = (segs, y, { center = false, x = M } = {}) => {
-            const width = segs.reduce((w, g) => w + (g.b ? bold(g.s) : reg(g.s)).widthOfString(g.t), 0);
+            const width = segs.reduce((w, g) => w + wOf(g.t, g.s), 0);
             let cx = center ? (W - width) / 2 : x;
             const h = Math.max(...segs.map(g => g.s));
-            for (const g of segs) {
-                (g.b ? bold(g.s, g.c || DARK) : reg(g.s, g.c || DARK));
-                put(g.t, cx, y + (h - g.s) * 0.75);
-                cx += doc.widthOfString(g.t);
-            }
-            return y + h + 8;
+            for (const g of segs) { font(g.s, g.c || DARK, !!g.b); put(g.t, cx, y + (h - g.s) * 0.8); cx += wOf(g.t, g.s); }
+            return y + h;
         };
-        const heading = (title, y) => {
-            doc.rect(M, y, 6, 24).fill(RED);
-            bold(19); put(title, M + 16, y + 1);
-            return y + 38;
+        const title = (main, sub, y) => {
+            font(27, RED, true); put(main, M, y);
+            const sx = M + wOf(main, 27) + 10;
+            font(16, GREY); put(sub, sx, y + 9);
         };
-        const dot = (x, y, c = RED) => doc.circle(x, y, 3.2).fill(c);
-        let y = 34;
-        // 問候語
-        String(t.greeting || '').split('\n').filter(Boolean).forEach(l => { y = runs([{ t: l, s: 22, b: true, c: RED }], y, { center: true }); });
-        y += 14;
-        doc.moveTo(M, y).lineTo(W - M, y).lineWidth(1).strokeColor('#e5c7cd').stroke();
-        y += 22;
-        // 套餐
-        if (t.bundle) {
-            y = heading(`${t.bundle.name}　六人份`, y);
-            y = runs([{ t: '五菜一湯　', s: 16 }, { t: '優惠價 ', s: 16, c: RED, b: true }, { t: `$${Number(t.bundle.price).toLocaleString('en-US')}`, s: 26, c: RED, b: true }], y, { x: M + 16 }) + 4;
-            const comp = t.bundle.composition, half = Math.ceil(comp.length / 2), colW = CW / 2;
-            comp.forEach((c, i) => {
-                const cx = M + 22 + (i >= half ? colW : 0), cy = y + (i % half) * 30;
-                dot(cx, cy + 10);
-                reg(16).text(c.name + (c.qty > 1 ? ` ×${c.qty}` : ''), cx + 12, cy, { lineBreak: false });
+        let y = 18;
+        if (part === 'bundle' && t.bundle) {
+            const b = t.bundle;
+            title(b.name, '六人份・五菜一湯', y);
+            const price = money(b.price), px = W - M - wOf(price, 28);
+            font(28, RED, true); put(price, px, y - 1);
+            font(15, GREY); put('優惠價', px - wOf('優惠價', 15) - 5, y + 10);
+            y += 44;
+            doc.moveTo(M, y).lineTo(W - M, y).lineWidth(1).strokeColor('#f1c6cf').stroke();
+            y += 14;
+            // 六道菜：兩欄方塊
+            const cols = 2, gap = 9, bw = (CW - gap) / cols, bh = 46;
+            b.composition.forEach((c, i) => {
+                const bx = M + (i % cols) * (bw + gap), by = y + Math.floor(i / cols) * (bh + gap);
+                doc.roundedRect(bx, by, bw, bh, 9).fill('#fdf2f4');
+                const name = c.name + (c.qty > 1 ? ` ×${c.qty}` : '');
+                const sz = wOf(name, 20) > bw - 12 ? 17 : 20;
+                font(sz, DARK, true); put(name, bx, by + (bh - sz) / 2 - 1, { width: bw, align: 'center' });
             });
-            y += half * 30 + 12;
-            // 不含牛腩提醒（醒目框）
-            const boxH = 92;
-            doc.roundedRect(M, y, CW, boxH, 8).fillAndStroke('#fff7e0', '#f59e0b');
-            let by = y + 14;
-            by = runs([{ t: '因應部分顧客不吃牛肉或年節不拜牛', s: 15 }], by, { center: true });
-            by = runs([{ t: '年菜套餐內容 ', s: 17, b: true }, { t: '不包含', s: 19, b: true, c: RED }, { t: ' 紅燒牛腩筋', s: 17, b: true }], by, { center: true });
-            runs([{ t: '若需加購紅燒牛腩筋請至單點區選擇', s: 15, c: GREY }], by, { center: true });
-            y += boxH + 26;
+            y += Math.ceil(b.composition.length / cols) * (bh + gap) + 4;
+            // 不含牛腩：提醒框
+            const bh2 = 66;
+            doc.roundedRect(M, y, CW, bh2, 9).fillAndStroke('#fff8e6', '#f5b335');
+            runs([{ t: '考量部分顧客不吃牛肉，套餐', s: 16 }, { t: '不含', s: 18, b: true, c: RED }, { t: '「紅燒牛腩筋」', s: 16, b: true }], y + 12, { center: true });
+            runs([{ t: '需要的話，請在下方單點加購', s: 15, c: GREY }], y + 40, { center: true });
+            y += bh2 + 16;
+        } else {
+            title('單點菜單', `每項可訂 1～${t.singleMax || 8} 份`, y);
+            y += 44;
+            doc.moveTo(M, y).lineTo(W - M, y).lineWidth(1).strokeColor('#f1c6cf').stroke();
+            y += 8;
+            const rh = 40;
+            (t.singles || []).forEach((it, i) => {
+                if (i % 2 === 0) doc.rect(M, y, CW, rh).fill('#fafafa');
+                const ty = y + (rh - 19) / 2;
+                font(19, DARK, true); put(it.name, M + 10, ty);
+                if (!it.inBundle) {
+                    const tx = M + 10 + wOf(it.name, 19) + 8, tw = wOf('套餐未含', 13) + 14;
+                    doc.roundedRect(tx, y + (rh - 22) / 2, tw, 22, 11).fill('#eef2ff');
+                    font(13, '#4338ca'); put('套餐未含', tx + 7, y + (rh - 22) / 2 + 4);
+                }
+                const p = money(it.price);
+                font(19, RED, true); put(p, W - M - 10 - wOf(p, 19), ty);
+                y += rh;
+            });
+            y += 16;
         }
-        // 單點
-        y = heading('單點菜單', y);
-        reg(15, GREY).text('以下菜色可單點：', M + 16, y, { lineBreak: false });
-        y += 28;
-        const sg = t.singles || [], sh = Math.ceil(sg.length / 2), sw = CW / 2;
-        sg.forEach((it, i) => {
-            const cx = M + 22 + (i >= sh ? sw : 0), cy = y + (i % sh) * 30;
-            dot(cx, cy + 10);
-            reg(16).text(it.name + (it.inBundle ? '' : '*'), cx + 12, cy, { lineBreak: false });
-        });
-        y += sh * 30 + 18;
-        // 優惠、宅配、自取、諮詢
-        const money = (n) => Number(n).toLocaleString('en-US');
-        const block = (title, lines) => {
-            y = heading(title, y);
-            for (const segs of lines) { dot(M + 22, y + 10, '#f59e0b'); y = runs(segs, y, { x: M + 34 }) + 2; }
-            y += 12;
-        };
-        block('優惠活動', [[{ t: '訂購套餐或單筆訂購滿', s: 16 }, { t: `${money(t.freeThreshold)}元`, s: 16, b: true, c: RED }, { t: '，加贈保冷袋一只', s: 16 }, { t: '（限來店自取）', s: 14, c: GREY }]]);
-        block('冷凍宅配', [
-            [{ t: '低溫運費：', s: 16 }, { t: `${money(t.shippingFee)}元`, s: 16, b: true, c: RED }],
-            [{ t: '訂購套餐 或 同地址消費滿', s: 16 }, { t: `${money(t.freeThreshold)}元`, s: 16, b: true, c: RED }, { t: '享免運', s: 16, b: true }, { t: '（限台灣本島）', s: 14, c: GREY }],
-        ]);
-        block('來店自取', [[{ t: '店取地址：', s: 16 }, { t: t.address || '', s: 16, b: true }]]);
-        block('訂購諮詢', [[{ t: '聯絡電話：', s: 16 }, { t: t.phone || '', s: 16, b: true }], [{ t: 'LINE 官方：', s: 16 }, { t: t.line || '', s: 16, b: true }]]);
-        return y + 10;
+        return y;
     };
-    const tmp = path.join(os.tmpdir(), `nf_form_${Date.now()}`);
-    const m = new PDFDocument({ size: [W, 4000], margin: 0 }); m.registerFont('Bold', FONT_BOLD).registerFont('Reg', FONT_REG);
+    const tmp = path.join(os.tmpdir(), `nf_form_${part}_${Date.now()}`);
+    const m = new PDFDocument({ size: [W, 3000], margin: 0 }); m.registerFont('Reg', FONT_REG);
     const H = Math.ceil(draw(m));
     await new Promise((resolve, reject) => {
         const doc = new PDFDocument({ size: [W, H], margin: 0 });
-        doc.registerFont('Bold', FONT_BOLD).registerFont('Reg', FONT_REG);
+        doc.registerFont('Reg', FONT_REG);
         const out = fs.createWriteStream(tmp + '.pdf');
         out.on('finish', resolve); out.on('error', reject);
         doc.pipe(out);
@@ -3012,24 +3006,24 @@ async function buildNianfaiFormImage(t) {
         draw(doc);
         doc.end();
     });
-    await execFileP('sips', ['-s', 'format', 'png', '--resampleWidth', String(W * 2), tmp + '.pdf', '--out', tmp + '.png']);
+    await execFileP('sips', ['-s', 'format', 'png', '--resampleWidth', String(W * 3), tmp + '.pdf', '--out', tmp + '.png']);
     const png = fs.readFileSync(tmp + '.png');
     fs.unlink(tmp + '.pdf', () => {}); fs.unlink(tmp + '.png', () => {});
     return png;
 }
-// 預覽（回傳 PNG）／套用到表單
+// 預覽（回傳 PNG，?part=bundle|singles）／套用到表單（兩張圖放到題目上方＋更新說明文字）
 app.get('/api/nianfai/form-image.png', async (req, res) => {
     const year = parseInt(req.query.year, 10);
     if (!year || !nianfaiGasConfigured()) return res.status(400).send('缺少年度或 GAS 未設定');
     try {
         const t = (await callNianfaiGas('formTextData', { year }, { timeoutMs: 60000 })).result;
-        res.set('Content-Type', 'image/png').set('Cache-Control', 'no-store').send(await buildNianfaiFormImage(t));
+        res.set('Content-Type', 'image/png').set('Cache-Control', 'no-store').send(await buildNianfaiFormImage(t, req.query.part === 'singles' ? 'singles' : 'bundle'));
     } catch (e) { res.status(500).send(e.message); }
 });
 app.post('/api/nianfai/gas/form-image', nianfaiGasRoute(async (year) => {
     const t = (await callNianfaiGas('formTextData', { year }, { timeoutMs: 60000 })).result;
-    const png = await buildNianfaiFormImage(t);
-    const r = await callNianfaiGas('setDescImage', { year, png: png.toString('base64') }, { timeoutMs: 120000 });
+    const [bundle, singles] = await Promise.all([buildNianfaiFormImage(t, 'bundle'), buildNianfaiFormImage(t, 'singles')]);
+    const r = await callNianfaiGas('setFormImages', { year, bundle: bundle.toString('base64'), singles: singles.toString('base64') }, { timeoutMs: 180000 });
     return { ok: true, result: r.result };
 }));
 // 表單網址、短網址（forms.gle）、海報用 QR code

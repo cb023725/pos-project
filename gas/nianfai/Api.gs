@@ -84,6 +84,8 @@ function doPost(e) {
         return nfJson_({ ok: true, result: nfFormTextData_() });
       case 'setDescImage':
         return nfJson_({ ok: true, result: nfSetDescImage_(body.png) });
+      case 'setFormImages':
+        return nfJson_({ ok: true, result: nfSetFormImages_(body.bundle, body.singles) });
       case 'formLinks':
         return nfJson_({ ok: true, result: nfFormLinks_() });
       case 'fixFormTimeTexts':

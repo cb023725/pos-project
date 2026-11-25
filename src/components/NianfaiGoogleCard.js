@@ -51,7 +51,7 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
 
     const handleFormImage = () => run('image', async () => {
         await generateNianfaiFormImage(year);
-        await showAlert('已放到表單最上方，請打開「預覽表單」確認', { title: '說明圖片已更新', icon: 'success' });
+        await showAlert('套餐與單點圖片已放到題目上方、說明已更新，請打開「預覽表單」確認', { title: '表單已更新', icon: 'success' });
     });
 
     // 海報用短網址與 QR code
@@ -174,11 +174,13 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
                             </p>
                             <p>可以改：說明文字、段落說明、圖片、主題顏色。<span className="text-red-600 font-bold">不要改：題目名稱、選項、單點品名</span>（改了第 ③ 步會擋下）。</p>
                             <div className="bg-gray-50 rounded-lg p-3 space-y-2">
-                                <p className="font-bold text-gray-700">說明圖片</p>
-                                <p>Google 表單的說明只能純文字，這裡依品項、價格、運費、店家資訊畫成有標題和重點顏色的圖片，放在表單最上方（重新產生會替換同一張）。原本的文字說明不會動，要不要刪由你決定。</p>
+                                <p className="font-bold text-gray-700">菜單圖片</p>
+                                <p>表單說明只能放純文字，所以套餐與單點菜單畫成圖片（大字、重點標色，手機上也看得清楚），分別放在「套餐」題目和「單點」表格上方；品項、價格改了再按一次會替換同一張。表單說明會換成文字版的優惠、宅配、自取與諮詢（LINE 連結可以點）。</p>
                                 <p>
-                                    <a href={`/api/nianfai/form-image.png?year=${year}`} target="_blank" rel="noreferrer" className={link}>預覽圖片</a>
-                                    <button onClick={handleFormImage} disabled={!!busy || !created} className={`${btn} ml-3 bg-gray-700 text-white`}>{busy === 'image' ? '產生中...' : '產生並放到表單'}</button>
+                                    <a href={`/api/nianfai/form-image.png?year=${year}&part=bundle`} target="_blank" rel="noreferrer" className={link}>預覽套餐圖</a>
+                                    <span className="mx-2 text-gray-300">｜</span>
+                                    <a href={`/api/nianfai/form-image.png?year=${year}&part=singles`} target="_blank" rel="noreferrer" className={link}>預覽單點圖</a>
+                                    <button onClick={handleFormImage} disabled={!!busy || !created} className={`${btn} ml-3 bg-gray-700 text-white`}>{busy === 'image' ? '產生中...' : '產生並更新表單'}</button>
                                 </p>
                             </div>
                         </Step>
