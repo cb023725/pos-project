@@ -65,3 +65,19 @@ function nfTestClearOpened_() {
   nfSyncOrderSheets_();
   return { cleared: n };
 }
+
+/** 排查用：讀某個分頁某格的原始值、型別、格式、驗證 */
+function nfTestCell_(sheet, a1) {
+  nfTestGuard_();
+  var rg = nfSheet_(sheet).getRange(a1);
+  var v = rg.getValue(), dv = rg.getDataValidation();
+  return { value: String(v), type: typeof v, format: rg.getNumberFormat(), validation: dv ? String(dv.getCriteriaType()) : null };
+}
+
+function nfTestFormat_(sheet, a1, fmt) {
+  nfTestGuard_();
+  var rg = nfSheet_(sheet).getRange(a1);
+  var out = { before: rg.getNumberFormat() };
+  try { rg.setNumberFormat(fmt); SpreadsheetApp.flush(); out.after = rg.getNumberFormat(); } catch (e) { out.error = String(e); }
+  return out;
+}

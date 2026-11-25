@@ -59,6 +59,8 @@ function nfGetOrCreateSheet_(ss, name) {
     if (sh.clearConditionalFormatRules) sh.clearConditionalFormatRules();
     try { sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).setDataValidation(null); } catch (e) { /* 略過 */ }
     try { for (var d = 0; d < 3; d++) sh.getRange(1, 1, 1, sh.getMaxColumns()).shiftColumnGroupDepth(-1); } catch (e2) { /* 沒有群組 */ }
+    try { sh.getBandings().forEach(function (b) { b.remove(); }); } catch (e4) { /* 沒有色帶 */ }
+    try { sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).breakApart(); } catch (e5) { /* 沒有合併 */ }
     try { sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(function (p) { if (String(p.getDescription() || '').indexOf(NF_PROTECT_PREFIX) === 0) p.remove(); }); } catch (e3) { /* 略過 */ }
   } else {
     sh = ss.insertSheet(name);
@@ -96,14 +98,18 @@ function nfBuildLookupSheet_(ss, s, defs) {
   ];
   var formula = '=IF(LEN($B$1)=0,"",IFERROR(LET(d,ARRAYFORMULA({' + dArr.join(',') + ';' + pArr.join(',') + '}),' +
     'FILTER(d,INDEX(d,,2)<>"",ISNUMBER(SEARCH($B$1,INDEX(d,,3)&"|"&INDEX(d,,4)&"|"&INDEX(d,,5))))),"查無符合的訂單"))';
-  sh.getRange('A1').setValue('🔍 輸入姓名／電話／末五碼／流水號：').setFontWeight('bold');
-  sh.getRange('B1').setBackground('#fef3c7').setNumberFormat('@');
-  sh.getRange('C1').setValue('← 輸入任何一部分即可，例如「王」「0912」「27001」').setFontColor('#6b7280');
-  sh.getRange(3, 1, 1, head.length).setValues([head]).setFontWeight('bold').setBackground('#f3f4f6');
+  sh.getRange(1, 1, 200, head.length).setFontSize(11).setVerticalAlignment('middle').setFontFamily('Arial').setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
+  sh.setRowHeights(1, 200, 30);
+  sh.setRowHeight(1, 40);
+  sh.getRange('A1').setValue('🔍 查詢訂單').setFontWeight('bold').setFontSize(14);
+  sh.getRange('B1').setBackground('#fef3c7').setNumberFormat('@').setFontSize(13).setFontWeight('bold')
+    .setBorder(true, true, true, true, false, false, '#f59e0b', SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+  sh.getRange('C1').setValue('← 輸入姓名、電話、末五碼或流水號的任何一部分，例如「王」「0912」「27001」').setFontColor('#6b7280').setFontSize(10);
+  nfStyleHead_(sh.getRange(3, 1, 1, head.length).setValues([head]));
   sh.getRange('A4').setFormula(formula);
   sh.getRange(4, 7, NF_DATA_ROWS, 1).setNumberFormat('#,##0');
   sh.setFrozenRows(3);
-  [[1, 220], [2, 150], [3, 90], [4, 105], [5, 90], [6, 260], [7, 70], [8, 110], [9, 50], [10, 170], [11, 260], [12, 110]]
+  [[1, 130], [2, 170], [3, 100], [4, 110], [5, 90], [6, 300], [7, 80], [8, 120], [9, 60], [10, 170], [11, 320], [12, 110]]
     .forEach(function (w) { sh.setColumnWidth(w[0], w[1]); });
 }
 
@@ -120,7 +126,21 @@ function nfItemParts_(s, i) {
   return parts;
 }
 
-/** 統計：A:B 收款／訂單數／包材／進度；D:J 各品項 */
+/** 共用外觀：字體、列高、標題列樣式 */
+function nfStyleTitle_(sh, a1, text, width) {
+  sh.getRange(a1).setValue(text).setFontSize(16).setFontWeight('bold').setFontColor('#111827');
+}
+function nfStyleHead_(rg) {
+  rg.setFontWeight('bold').setFontColor('#ffffff').setBackground('#374151').setHorizontalAlignment('center').setVerticalAlignment('middle');
+}
+function nfBar_(value, max, color) {
+  return '=IFERROR(SPARKLINE(' + value + ',{"charttype","bar";"max",MAX(1,' + max + ');"color1","' + color + '";"color2","#e5e7eb"}),"")';
+}
+
+/**
+ * 統計：上方四個大數字（訂單數、總金額、已收、未收）→ 出貨／取貨進度條 → 來源與包材 → 各品項
+ * 已取消的訂單不計入；套餐拆成組成計入單點品項
+ */
 function nfBuildStatsSheet_(ss, s, defs) {
   var sh = nfGetOrCreateSheet_(ss, NF.SHEET_STATS);
   var R = function (kind, k) { return nfOrderRange_(kind, defs[kind], k); };
@@ -128,73 +148,150 @@ function nfBuildStatsSheet_(ss, s, defs) {
   var sumIfs = function (kind, k, extra) { return 'SUMIFS(' + R(kind, k) + ',' + R(kind, 'id') + ',"<>",' + ok(kind) + (extra ? ',' + extra : '') + ')'; };
   var cnt = function (kind, extra) { return 'COUNTIFS(' + R(kind, 'id') + ',"<>",' + ok(kind) + (extra ? ',' + extra : '') + ')'; };
   var both = function (fn) { return '=' + fn('delivery') + '+' + fn('pickup'); };
+  sh.getRange(1, 1, 60, 8).setFontSize(11).setVerticalAlignment('middle').setFontFamily('Arial');
+  sh.setRowHeights(1, 60, 30);
+  [140, 110, 90, 90, 90, 90, 90, 160].forEach(function (w, i) { sh.setColumnWidth(i + 1, w); });
 
-  var left = [
-    ['收款', ''],
-    ['總金額（含運費）', both(function (k) { return sumIfs(k, 'amount'); })],
-    ['已收', both(function (k) { return sumIfs(k, 'amount', R(k, 'paid') + ',TRUE'); })],
-    ['未收', '=B2-B3'],
-    ['', ''],
-    ['訂單數', ''],
-    ['宅配', '=' + cnt('delivery')],
-    ['自取', '=' + cnt('pickup')],
-    ['線上', both(function (k) { return cnt(k, R(k, 'note') + ',"<>*現場單*"'); })],
-    ['現場', both(function (k) { return cnt(k, R(k, 'note') + ',"*現場單*"'); })],
-    ['合計', '=B7+B8'],
-    ['', ''],
-    ['包材', ''],
-    ['宅配紙箱＋保冷袋', '=B7'],
-    ['保冷提袋（自取）', '=' + sumIfs('pickup', 'bags')],
-    ['', ''],
-    ['出貨／取貨進度', ''],
-    ['宅配已出貨', '=' + cnt('delivery', R('delivery', 'shipDate') + ',"<>"')],
-    ['宅配未出貨', '=B7-B18'],
-    ['自取已取貨', '=' + cnt('pickup', R('pickup', 'picked') + ',TRUE')],
-    ['自取未取貨', '=B8-B20'],
+  nfStyleTitle_(sh, 'A1', '📊 ' + s.year + ' 年菜統計');
+  sh.getRange('E1').setValue('已取消的訂單不計入').setFontColor('#9ca3af').setFontSize(10);
+  // 大數字
+  var kpi = [
+    ['A', '訂單數', '=' + cnt('delivery') + '+' + cnt('pickup'), '0'],
+    ['C', '總金額（含運費）', both(function (k) { return sumIfs(k, 'amount'); }), '$#,##0'],
+    ['E', '已收', both(function (k) { return sumIfs(k, 'amount', R(k, 'paid') + ',TRUE'); }), '$#,##0'],
+    ['G', '未收', '=C4-E4', '$#,##0'],
   ];
-  sh.getRange(1, 1, left.length, 2).setValues(left);
-  [1, 6, 13, 17].forEach(function (r) { sh.getRange(r, 1, 1, 2).setFontWeight('bold').setBackground('#f3f4f6'); });
-  sh.getRange(2, 2, 3, 1).setNumberFormat('#,##0');
+  kpi.forEach(function (x) {
+    var c2 = String.fromCharCode(x[0].charCodeAt(0) + 1);
+    sh.getRange(x[0] + '3:' + c2 + '3').merge().setValue(x[1]).setFontColor('#6b7280').setFontSize(10).setHorizontalAlignment('center').setBackground('#f9fafb');
+    sh.getRange(x[0] + '4:' + c2 + '4').merge().setFormula(x[2]).setNumberFormat(x[3]).setFontSize(20).setFontWeight('bold')
+      .setHorizontalAlignment('center').setBackground('#f9fafb');
+  });
+  sh.setRowHeight(4, 44);
+  sh.getRange('G4').setFontColor('#b91c1c');
 
-  // D 品項｜E 總訂購量｜F 宅配｜G 自取｜H 已出貨＋已取貨｜I 未出貨＋未取貨｜J 金額（品項，不含運費）
-  var head = ['品項', '總訂購量', '宅配', '自取', '已出貨＋已取貨', '未出貨＋未取貨', '金額'];
+  // 進度
+  sh.getRange('A6').setValue('出貨／取貨進度').setFontWeight('bold').setFontSize(12);
+  var prog = [
+    ['宅配已出貨', cnt('delivery', R('delivery', 'shipDate') + ',"<>"'), cnt('delivery'), '#16a34a'],
+    ['自取已取貨', cnt('pickup', R('pickup', 'picked') + ',TRUE'), cnt('pickup'), '#16a34a'],
+    ['已付款', both(function (k) { return cnt(k, R(k, 'paid') + ',TRUE'); }).slice(1), '(' + cnt('delivery') + '+' + cnt('pickup') + ')', '#2563eb'],
+  ];
+  prog.forEach(function (x, i) {
+    var r = 7 + i;
+    sh.getRange(r, 1).setValue(x[0]);
+    sh.getRange(r, 2).setFormula('=(' + x[1] + ')&" / "&(' + x[2] + ')').setHorizontalAlignment('center').setFontWeight('bold');
+    sh.getRange(r, 3, 1, 6).merge().setFormula(nfBar_('(' + x[1] + ')', '(' + x[2] + ')', x[3]));
+  });
+
+  // 來源與包材
+  sh.getRange('A11').setValue('來源與包材').setFontWeight('bold').setFontSize(12);
+  var mini = [
+    ['宅配', '=' + cnt('delivery'), '筆'], ['自取', '=' + cnt('pickup'), '筆'],
+    ['線上', both(function (k) { return cnt(k, R(k, 'note') + ',"<>*現場單*"'); }), '筆'], ['現場', both(function (k) { return cnt(k, R(k, 'note') + ',"*現場單*"'); }), '筆'],
+    ['宅配紙箱', '=' + cnt('delivery'), '個'], ['保冷提袋', '=' + sumIfs('pickup', 'bags'), '個'],
+  ];
+  mini.forEach(function (x, i) {
+    var r = 12 + Math.floor(i / 2), c = (i % 2) * 4 + 1;
+    sh.getRange(r, c).setValue(x[0]).setFontColor('#6b7280');
+    sh.getRange(r, c + 1).setFormula(x[1]).setFontWeight('bold').setHorizontalAlignment('right');
+    sh.getRange(r, c + 2).setValue(x[2]).setFontColor('#6b7280');
+  });
+
+  // 各品項
+  var top = 16;
+  sh.getRange(top - 1, 1).setValue('各品項（套餐拆成組成計入）').setFontWeight('bold').setFontSize(12);
+  var head = ['品項', '總訂購量', '宅配', '自取', '已出／取', '未出／取', '品項金額', '完成進度'];
+  nfStyleHead_(sh.getRange(top, 1, 1, head.length).setValues([head]));
   var rows = s.items.map(function (it, i) {
     var parts = nfItemParts_(s, i);
     var sum = function (kind, extra) {
       return parts.map(function (p) { return (p.mult === 1 ? '' : p.mult + '*') + sumIfs(kind, p.key, extra); }).join('+');
     };
-    var r = i + 2;
+    var r = top + 1 + i;
     return [
       it.isBundle ? it.name + '（份）' : it.name,
-      '=F' + r + '+G' + r,
+      '=C' + r + '+D' + r,
       '=' + sum('delivery'),
       '=' + sum('pickup'),
       '=' + sum('delivery', R('delivery', 'shipDate') + ',"<>"') + '+' + sum('pickup', R('pickup', 'picked') + ',TRUE'),
-      '=E' + r + '-H' + r,
+      '=B' + r + '-E' + r,
       '=(' + sumIfs('delivery', 'qty_' + i) + '+' + sumIfs('pickup', 'qty_' + i) + ')*' + it.price,
+      nfBar_('E' + r, 'B' + r, '#16a34a'),
     ];
   });
-  sh.getRange(1, 4, 1, head.length).setValues([head]).setFontWeight('bold').setBackground('#f3f4f6');
-  if (rows.length) sh.getRange(2, 4, rows.length, head.length).setValues(rows);
-  var tr = rows.length + 2;
-  sh.getRange(tr, 4).setValue('品項金額合計（不含運費）').setFontWeight('bold');
-  sh.getRange(tr, 10).setFormula('=SUM(J2:J' + (tr - 1) + ')').setFontWeight('bold');
-  sh.getRange(2, 10, tr - 1, 1).setNumberFormat('#,##0');
+  if (rows.length) {
+    var body = sh.getRange(top + 1, 1, rows.length, head.length).setValues(rows);
+    body.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false);
+    sh.getRange(top + 1, 2, rows.length, 5).setHorizontalAlignment('center');
+    sh.getRange(top + 1, 7, rows.length + 1, 1).setNumberFormat('$#,##0');
+    sh.getRange(top + 1, 2, rows.length, 1).setFontWeight('bold');
+    s.items.forEach(function (it, i) { if (it.isBundle) sh.getRange(top + 1 + i, 1).setFontWeight('bold').setFontColor('#b91c1c'); });
+  }
+  var tr = top + 1 + rows.length;
+  sh.getRange(tr, 1).setValue('品項金額合計（不含運費）').setFontWeight('bold');
+  sh.getRange(tr, 7).setFormula('=SUM(G' + (top + 1) + ':G' + (tr - 1) + ')').setFontWeight('bold');
   sh.setFrozenRows(1);
-  sh.setColumnWidth(1, 150);
-  sh.setColumnWidth(3, 24);
-  sh.setColumnWidth(4, 170);
-  [5, 6, 7, 8, 9, 10].forEach(function (c) { sh.setColumnWidth(c, 100); });
+  sh.setHiddenGridlines(true);
 }
 
-/** 備料表：列是品項、欄是 宅配｜各取貨日｜合計 */
+/**
+ * 備料表：
+ *   上方「截至日期」：選一個日期，顯示這天（含）以前要準備好的總數量（宅配依出貨日，還沒填出貨日的算第一個寄出日；自取依取貨日）
+ *   下方「每日明細」：列是品項、欄是 宅配｜各取貨日｜合計，最下面是每天的保冷袋與宅配件數
+ */
 function nfBuildPrepSheet_(ss, s, defs) {
   var sh = nfGetOrCreateSheet_(ss, NF.SHEET_PREP);
   var R = function (kind, k) { return nfOrderRange_(kind, defs[kind], k); };
   var ok = function (kind) { return R(kind, 'note') + ',' + NF_NOT_CANCELLED; };
   var dates = s.pickupDates.map(nfFormDateLabel_);
+  var ncol = Math.max(dates.length + 3, 5);
+  sh.getRange(1, 1, 80, ncol).setFontSize(11).setVerticalAlignment('middle').setFontFamily('Arial');
+  sh.setRowHeights(1, 80, 30);
+  sh.setColumnWidth(1, 170);
+  for (var c = 2; c <= ncol; c++) sh.setColumnWidth(c, 110);
+  nfStyleTitle_(sh, 'A1', '🥘 ' + s.year + ' 備料表');
+
+  // ── 截至日期 ──
+  sh.getRange('A3').setValue('截至日期').setFontWeight('bold').setHorizontalAlignment('right');
+  var first = s.pickupDates[0] ? /^(\d{4})-(\d{2})-(\d{2})/.exec(s.pickupDates[0]) : null;
+  sh.getRange('B3').setValue(first ? new Date(+first[1], +first[2] - 1, +first[3]) : new Date())
+    .setNumberFormat('yyyy/m/d').setBackground('#fef3c7').setFontWeight('bold').setFontSize(13).setHorizontalAlignment('center')
+    .setBorder(true, true, true, true, false, false, '#f59e0b', SpreadsheetApp.BorderStyle.SOLID_MEDIUM)
+    .setDataValidation(SpreadsheetApp.newDataValidation().requireDate().setAllowInvalid(false).setHelpText('點兩下選日期').build());
+  sh.getRange('C3').setValue('← 點兩下選日期：顯示這天（含）以前要準備好的數量').setFontColor('#6b7280').setFontSize(10);
+  var cumHead = ['品項', '需準備總數', '其中宅配', '其中自取'];
+  nfStyleHead_(sh.getRange(5, 1, 1, 4).setValues([cumHead]));
+  var upTo = R('delivery', 'sortDate'), upToP = R('pickup', 'sortDate');
+  var cumRows = s.items.map(function (it, i) {
+    var parts = nfItemParts_(s, i);
+    var sum = function (kind, dateRange) {
+      return parts.map(function (p) {
+        return (p.mult === 1 ? '' : p.mult + '*') + 'SUMIFS(' + R(kind, p.key) + ',' + R(kind, 'id') + ',"<>",' + ok(kind) + ',' + dateRange + ',"<="&$B$3)';
+      }).join('+');
+    };
+    var r = 6 + i;
+    return [it.isBundle ? it.name + '（份）' : it.name, '=C' + r + '+D' + r, '=' + sum('delivery', upTo), '=' + sum('pickup', upToP)];
+  });
+  var cumEnd = 6 + cumRows.length;
+  if (cumRows.length) {
+    sh.getRange(6, 1, cumRows.length, 4).setValues(cumRows).applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false);
+    sh.getRange(6, 2, cumRows.length, 3).setHorizontalAlignment('center');
+    sh.getRange(6, 2, cumRows.length, 1).setFontWeight('bold').setFontSize(13).setFontColor('#b91c1c');
+  }
+  sh.getRange(cumEnd, 1, 2, 4).setValues([
+    ['保冷提袋（自取）', '=D' + (cumEnd), '', '=SUMIFS(' + R('pickup', 'bags') + ',' + R('pickup', 'id') + ',"<>",' + ok('pickup') + ',' + upToP + ',"<="&$B$3)'],
+    ['宅配紙箱', '=C' + (cumEnd + 1), '=COUNTIFS(' + R('delivery', 'id') + ',"<>",' + ok('delivery') + ',' + upTo + ',"<="&$B$3)', ''],
+  ]).setFontColor('#374151');
+  sh.getRange(cumEnd, 2, 2, 3).setHorizontalAlignment('center');
+  sh.getRange(cumEnd, 1, 2, 1).setFontWeight('bold');
+  sh.getRange(cumEnd, 1, 1, 4).setBorder(true, null, null, null, null, null, '#9ca3af', SpreadsheetApp.BorderStyle.SOLID);
+
+  // ── 每日明細 ──
+  var t = cumEnd + 4;
+  sh.getRange(t - 1, 1).setValue('每日明細（宅配＋各取貨日）').setFontWeight('bold').setFontSize(12);
   var head = ['品項', '宅配'].concat(dates).concat(['合計']);
-  sh.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold').setBackground('#f3f4f6');
+  nfStyleHead_(sh.getRange(t, 1, 1, head.length).setValues([head]));
   var rows = s.items.map(function (it, i) {
     var parts = nfItemParts_(s, i);
     var cell = function (kind, extra) {
@@ -202,25 +299,32 @@ function nfBuildPrepSheet_(ss, s, defs) {
         return (p.mult === 1 ? '' : p.mult + '*') + 'SUMIFS(' + R(kind, p.key) + ',' + R(kind, 'id') + ',"<>",' + ok(kind) + (extra ? ',' + extra : '') + ')';
       }).join('+');
     };
-    var r = i + 2;
+    var r = t + 1 + i;
     var row = [it.isBundle ? it.name + '（份）' : it.name, cell('delivery')];
-    dates.forEach(function (d, di) { row.push(cell('pickup', R('pickup', 'pickupDate') + ',' + nfColLetter_(di + 3) + '$1')); });
+    dates.forEach(function (d, di) { row.push(cell('pickup', R('pickup', 'pickupDate') + ',' + nfColLetter_(di + 3) + '$' + t)); });
     row.push('=SUM(B' + r + ':' + nfColLetter_(head.length - 1) + r + ')');
     return row;
   });
-  if (rows.length) sh.getRange(2, 1, rows.length, head.length).setValues(rows);
-  var b = rows.length + 3;
-  var bagRow = ['保冷袋', ''];
+  if (rows.length) {
+    sh.getRange(t + 1, 1, rows.length, head.length).setValues(rows).applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false);
+    sh.getRange(t + 1, 2, rows.length, head.length - 1).setHorizontalAlignment('center');
+    sh.getRange(t + 1, head.length, rows.length, 1).setFontWeight('bold');
+    // 0 顯示成淡灰，數字一眼看得出來
+    sh.setConditionalFormatRules([SpreadsheetApp.newConditionalFormatRule().whenNumberEqualTo(0).setFontColor('#d1d5db')
+      .setRanges([sh.getRange(t + 1, 2, rows.length, head.length - 1), sh.getRange(6, 2, cumRows.length, 3)]).build()]);
+  }
+  var b = t + 1 + rows.length;
+  var bagRow = ['保冷提袋（自取）', ''];
   dates.forEach(function (d, di) {
-    bagRow.push('=SUMIFS(' + R('pickup', 'bags') + ',' + ok('pickup') + ',' + R('pickup', 'pickupDate') + ',' + nfColLetter_(di + 3) + '$1)');
+    bagRow.push('=SUMIFS(' + R('pickup', 'bags') + ',' + ok('pickup') + ',' + R('pickup', 'pickupDate') + ',' + nfColLetter_(di + 3) + '$' + t + ')');
   });
   bagRow.push('=SUM(C' + b + ':' + nfColLetter_(head.length - 1) + b + ')');
-  var shipRow = ['宅配件數', '=COUNTIFS(' + R('delivery', 'id') + ',"<>",' + ok('delivery') + ')'].concat(dates.map(function () { return ''; })).concat(['']);
-  sh.getRange(b, 1, 2, head.length).setValues([bagRow, shipRow]);
-  sh.getRange(b, 1, 2, 1).setFontWeight('bold');
-  sh.setFrozenRows(1);
+  var shipRow = ['宅配紙箱', '=COUNTIFS(' + R('delivery', 'id') + ',"<>",' + ok('delivery') + ')'].concat(dates.map(function () { return ''; })).concat(['']);
+  sh.getRange(b, 1, 2, head.length).setValues([bagRow, shipRow]).setHorizontalAlignment('center');
+  sh.getRange(b, 1, 2, 1).setFontWeight('bold').setHorizontalAlignment('left');
+  sh.getRange(b, 1, 1, head.length).setBorder(true, null, null, null, null, null, '#9ca3af', SpreadsheetApp.BorderStyle.SOLID);
   sh.setFrozenColumns(1);
-  sh.setColumnWidth(1, 160);
+  sh.setHiddenGridlines(true);
 }
 
 function nfBuildLogSheet_(ss) {

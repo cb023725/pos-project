@@ -15,9 +15,9 @@
  */
 var NF_DATA_ROWS = 1000; // 每張表預留的資料列數（第 2 列起）
 var NF_MAIL_TYPES = {
-  preShip: { label: '寄出前確認', kind: 'delivery', statusKey: 'preShipStatus', atKey: 'preShipAt' },
-  shipped: { label: '出貨通知', kind: 'delivery', statusKey: 'shippedStatus', atKey: 'shippedAt' },
-  pickupReminder: { label: '取貨提醒', kind: 'pickup', statusKey: 'remindStatus', atKey: 'remindAt' },
+  preShip: { label: '寄出前確認', kind: 'delivery', statusKey: 'preShipStatus' },
+  shipped: { label: '出貨通知', kind: 'delivery', statusKey: 'shippedStatus' },
+  pickupReminder: { label: '取貨提醒', kind: 'pickup', statusKey: 'remindStatus' },
 };
 
 function nfOrderSheetName_(kind) {
@@ -25,46 +25,51 @@ function nfOrderSheetName_(kind) {
 }
 
 /**
- * 欄位定義。manual：開放手動填；state：跟著訂單編號保存（重寫時帶回）；text：純文字格式（避免 0 開頭電話、
- * 編號被 Sheets 轉成數字或日期）；mail：寄信狀態（以指令碼屬性為準）
+ * 欄位定義（照閱讀順序：先看狀態與客人、再看品項金額、付款、出貨／取貨、信件；其餘收進可展開的群組）。
+ * manual：開放手動填（標題橘底）；state：跟著訂單編號保存；text：純文字格式；
+ * group：收進群組（點欄位上方的「+」展開）；type：formula 類（status／trackLink／sortDate）每列由 GAS 寫公式
  */
 function nfOrderCols_(kind, settings) {
   var c = [];
   var add = function (key, header, o) {
     o = o || {};
-    c.push({ key: key, header: header, manual: !!o.manual, state: !!(o.state || o.manual), text: !!o.text, type: o.type || '', width: o.width || 0, itemIdx: o.itemIdx });
+    c.push({ key: key, header: header, manual: !!o.manual, state: !!(o.state || o.manual), text: !!o.text, type: o.type || '',
+      width: o.width || 0, align: o.align || '', group: !!o.group, note: o.note || '', itemIdx: o.itemIdx });
   };
-  add('id', '訂單編號', { text: true, width: 150 });
-  add('paid', '付款', { manual: true, type: 'check', width: 44 });
-  if (kind === 'pickup') {
-    add('picked', '已取貨', { manual: true, type: 'check', width: 52 });
-    add('pickedAt', '取貨時間', { state: true, text: true, width: 140 });
-    add('pickupDate', '取貨日', { text: true, width: 110 });
-  }
-  add('name', '訂購姓名', { width: 90 });
-  add('phone', '電話', { text: true, width: 105 });
-  add('last5', '末五碼', { text: true, width: 90 });
-  add('summary', '品項', { width: 260 });
-  add('amount', '金額', { type: 'money', width: 70 });
+  var NOTE_STATUS = kind === 'delivery'
+    ? '顏色：紅＝待付款｜黃＝待出貨（已付款、還沒填出貨日）｜綠＝已出貨｜灰＝已取消'
+    : '顏色：紅＝待付款｜黃＝待取貨（已付款）｜綠＝已取貨｜灰＝已取消';
+  var NOTE_MAIL = '只顯示最新狀態與時間。顏色：藍＝已寄出｜紫＝已開信（僅供參考）｜綠＝客人已按確認｜紅＝寄送失敗。\n沒有變綠的客人可以電話提醒。';
+  add('status', '狀態', { type: 'status', width: 70, align: 'center', note: NOTE_STATUS });
+  if (kind === 'pickup') add('pickupDate', '取貨日', { text: true, width: 110, align: 'center' });
+  add('name', '訂購人', { width: 100 });
+  add('phone', '電話', { text: true, width: 110 });
+  add('summary', '品項', { width: 300 });
+  add('amount', '金額', { type: 'money', width: 80, align: 'right', note: '含運費的最終金額' });
+  add('last5', '末五碼', { text: true, width: 90, align: 'center', note: '匯款帳號末五碼；現場單顯示「現結＋流水號」' });
+  add('paid', '付款', { manual: true, type: 'check', width: 56, align: 'center', note: '確認收到款項後打勾（現場單自動打勾）' });
   if (kind === 'delivery') {
-    add('recipientName', '收件姓名', { width: 90 });
-    add('recipientPhone', '收件電話', { text: true, width: 105 });
-    add('recipientAddress', '收件地址', { width: 220 });
-    add('shipDate', '出貨日', { manual: true, type: 'shipDate', text: true, width: 100 });
-    add('trackNo', '託運單號', { manual: true, text: true, width: 120 });
-    add('trackLink', '查詢', { type: 'trackLink', width: 50 }); // 點擊到黑貓查件
-    add('preShipStatus', '寄出前確認', { type: 'mail', width: 90 });
-    add('preShipAt', '寄出前確認時間', { type: 'mail', text: true, width: 140 });
-    add('shippedStatus', '出貨通知', { type: 'mail', width: 90 });
-    add('shippedAt', '出貨通知時間', { type: 'mail', text: true, width: 140 });
+    add('recipientName', '收件人', { width: 100 });
+    add('recipientPhone', '收件電話', { text: true, width: 110 });
+    add('recipientAddress', '收件地址', { width: 260 });
+    add('shipDate', '出貨日', { manual: true, type: 'shipDate', text: true, width: 100, align: 'center', note: '用下拉選單選寄出日' });
+    add('trackNo', '託運單號', { manual: true, text: true, width: 130, align: 'center', note: '黑貓託運單號（10 或 12 碼數字）。格式錯誤標紅、重複標橘；出貨日和託運單號都填好才能寄出貨通知' });
+    add('trackLink', '查詢', { type: 'trackLink', width: 56, align: 'center', note: '點擊到黑貓查件，核對單號' });
+    add('preShipStatus', '寄出前確認', { type: 'mail', width: 150, align: 'center', note: NOTE_MAIL });
+    add('shippedStatus', '出貨通知', { type: 'mail', width: 150, align: 'center', note: NOTE_MAIL });
   } else {
-    add('bags', '保冷袋', { width: 52 });
-    add('remindStatus', '取貨提醒', { type: 'mail', width: 90 });
-    add('remindAt', '取貨提醒時間', { type: 'mail', text: true, width: 140 });
+    add('bags', '保冷袋', { width: 64, align: 'center' });
+    add('picked', '已取貨', { manual: true, type: 'check', width: 64, align: 'center', note: '客人取貨時打勾，會自動記下取貨時間' });
+    add('pickedAt', '取貨時間', { state: true, text: true, width: 130, align: 'center' });
+    add('remindStatus', '取貨提醒', { type: 'mail', width: 150, align: 'center', note: NOTE_MAIL });
   }
-  add('note', '狀態', { width: 110 });
-  add('email', '訂購e-mail', { text: true, width: 180 });
-  settings.items.forEach(function (it, i) { add('qty_' + i, it.name, { type: 'qty', width: 64, itemIdx: i }); });
+  // 以下收進群組
+  add('note', '備註', { width: 120, group: true, note: '現場單／已修改／已取消' });
+  add('email', '訂購e-mail', { text: true, width: 200, group: true });
+  add('id', '訂單編號', { text: true, width: 160, group: true, note: '表單送出的時間戳記，每張訂單唯一，請勿修改' });
+  add('sortDate', kind === 'delivery' ? '備料日' : '備料日', { type: 'sortDate', width: 90, group: true, align: 'center',
+    note: kind === 'delivery' ? '備料表「截至日期」用：有出貨日用出貨日，沒有就算第一個寄出日' : '備料表「截至日期」用：取貨日' });
+  settings.items.forEach(function (it, i) { add('qty_' + i, it.name, { type: 'qty', width: 76, align: 'center', group: true, itemIdx: i }); });
   return c;
 }
 
@@ -207,7 +212,6 @@ function nfSyncOrderSheets_(opts) {
           var T = NF_MAIL_TYPES[t];
           if (T.kind !== kind) return;
           r[T.statusKey] = nfMailStatusText_(ms[t]);
-          r[T.atKey] = ms[t] ? ms[t].at : '';
         });
       });
     });
@@ -243,12 +247,30 @@ function nfWriteOrderSheet_(ss, kind, defs, rows, settings, rebuild) {
     if (d.type === 'check' || d.type === 'shipDate') sh.getRange(2, j + 1, NF_DATA_ROWS, 1).setDataValidation(null);
   });
   if (!rows.length) return sh;
-  var trackCol = nfColL_(defs, 'trackNo');
+  var L = function (key, i) { return '$' + nfColL_(defs, key) + (i + 2); };
+  var firstShip = String(settings.kv['寄出日'] || '').split(/[,，\s]+/).filter(String)[0] || '';
+  var yr = Number(settings.year) || new Date().getFullYear();
   var values = rows.map(function (r, i) {
     return defs.map(function (d) {
       if (d.type === 'trackLink') {
-        var c = '$' + trackCol + (i + 2);
+        var c = L('trackNo', i);
         return '=IF(' + c + '="","",HYPERLINK("https://www.t-cat.com.tw/inquire/trace.aspx?no="&REGEXREPLACE(TO_TEXT(' + c + '),"[^0-9]",""),"查詢"))';
+      }
+      if (d.type === 'status') {
+        var cancel = 'ISNUMBER(SEARCH("已取消",' + L('note', i) + '))';
+        return kind === 'delivery'
+          ? '=IF(' + cancel + ',"已取消",IF(' + L('paid', i) + '<>TRUE,"待付款",IF(' + L('shipDate', i) + '="","待出貨","已出貨")))'
+          : '=IF(' + cancel + ',"已取消",IF(' + L('picked', i) + '=TRUE,"已取貨",IF(' + L('paid', i) + '<>TRUE,"待付款","待取貨")))';
+      }
+      if (d.type === 'sortDate') {
+        if (kind === 'pickup') {
+          var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(nfIsoDate_(r.pickupDate));
+          return m ? '=DATE(' + (+m[1]) + ',' + (+m[2]) + ',' + (+m[3]) + ')' : '';
+        }
+        var fm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(firstShip);
+        var dflt = fm ? 'DATE(' + (+fm[1]) + ',' + (+fm[2]) + ',' + (+fm[3]) + ')' : '""';
+        var sd = L('shipDate', i);
+        return '=IF(' + sd + '="",' + dflt + ',IFERROR(DATE(' + yr + ',VALUE(REGEXEXTRACT(' + sd + ',"^(\\d+)/")),VALUE(REGEXEXTRACT(' + sd + ',"/(\\d+)"))),' + dflt + '))';
       }
       var v = r[d.key];
       if (d.type === 'check') return v === true || String(v).toUpperCase() === 'TRUE';
@@ -269,66 +291,78 @@ function nfWriteOrderSheet_(ss, kind, defs, rows, settings, rebuild) {
   return sh;
 }
 
-/** 建立（或清空重建）一張表的版面：標題、格式、欄寬、品項欄收合、顏色規則 */
+/** 建立（或清空重建）一張表的版面：標題、字體、欄寬列高、對齊、群組、狀態顏色 */
 function nfSetupOrderSheet_(ss, kind, defs, settings) {
   var sh = nfGetOrCreateSheet_(ss, nfOrderSheetName_(kind));
   if (sh.getMaxRows() < NF_DATA_ROWS + 1) sh.insertRowsAfter(sh.getMaxRows(), NF_DATA_ROWS + 1 - sh.getMaxRows());
   if (sh.getMaxColumns() < defs.length) sh.insertColumnsAfter(sh.getMaxColumns(), defs.length - sh.getMaxColumns());
+  if (sh.getMaxColumns() > defs.length) sh.deleteColumns(defs.length + 1, sh.getMaxColumns() - defs.length);
   var ncol = defs.length;
-  sh.getRange(1, 1, 1, ncol).setValues([defs.map(function (d) { return d.header; })])
-    .setFontWeight('bold').setBackground('#f3f4f6').setVerticalAlignment('middle');
+  var data = sh.getRange(2, 1, NF_DATA_ROWS, ncol);
+  // 清掉舊版面留下的格式（例如舊的純文字欄會讓勾選框變成 true/false 文字）
+  sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).clearFormat();
+  // 全表：字大一點、垂直置中、不換行（列高一致）
+  sh.getRange(1, 1, NF_DATA_ROWS + 1, ncol).setFontSize(11).setVerticalAlignment('middle')
+    .setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP).setFontFamily('Arial');
+  sh.setRowHeight(1, 40);
+  sh.setRowHeights(2, NF_DATA_ROWS, 30);
+  // 標題列：深灰底白字；可以填的欄（手動欄）橘底
+  var head = sh.getRange(1, 1, 1, ncol);
+  head.setValues([defs.map(function (d) { return d.header; })]).setFontWeight('bold').setFontColor('#ffffff')
+    .setBackground('#374151').setHorizontalAlignment('center');
   defs.forEach(function (d, j) {
     var col = j + 1;
-    if (d.manual) sh.getRange(1, col).setBackground('#fef3c7'); // 手動欄標題黃底
-    if (d.text) sh.getRange(2, col, NF_DATA_ROWS, 1).setNumberFormat('@');
-    if (d.type === 'money') sh.getRange(2, col, NF_DATA_ROWS, 1).setNumberFormat('#,##0');
+    if (d.manual) sh.getRange(1, col).setBackground('#f59e0b').setFontColor('#1f2937');
+    if (d.group) sh.getRange(1, col).setBackground('#6b7280');
+    if (d.note) sh.getRange(1, col).setNote(d.note + (d.manual ? '\n（這一欄可以填寫）' : ''));
+    // 每一欄都明確設定格式（清除分頁不會重設數字格式，舊版面的純文字格式會讓勾選框變成 true/false 文字）
+    sh.getRange(2, col, NF_DATA_ROWS, 1).setNumberFormat(
+      d.text ? '@' : d.type === 'money' ? '#,##0' : d.type === 'sortDate' ? 'm/d' : 'General');
+    if (d.align) sh.getRange(2, col, NF_DATA_ROWS, 1).setHorizontalAlignment(d.align);
     if (d.width) sh.setColumnWidth(col, d.width);
+    if (d.type === 'status' || d.type === 'mail') sh.getRange(2, col, NF_DATA_ROWS, 1).setFontWeight('bold');
   });
   sh.setFrozenRows(1);
-  sh.setFrozenColumns(2);
-  // 各品項數量收合成一組（點欄位上方的「+」展開）
-  var q0 = nfColIndex_(defs, 'qty_0');
-  if (q0) {
+  sh.setFrozenColumns(kind === 'delivery' ? 2 : 3); // 狀態＋（取貨日）＋訂購人
+  // 其他欄位收進群組（預設收合）
+  var g0 = 0;
+  defs.forEach(function (d, j) { if (d.group && !g0) g0 = j + 1; });
+  if (g0) {
     try {
-      sh.getRange(1, q0, 1, settings.items.length).shiftColumnGroupDepth(1);
-      sh.getColumnGroup(q0, 1).collapse();
+      sh.getRange(1, g0, 1, ncol - g0 + 1).shiftColumnGroupDepth(1);
+      sh.getColumnGroup(g0, 1).collapse();
     } catch (e) { /* 群組失敗不影響資料 */ }
   }
-  var all = sh.getRange(2, 1, NF_DATA_ROWS, ncol);
   var L = function (key) { return '$' + nfColL_(defs, key) + '2'; };
-  var cancelled = 'ISNUMBER(SEARCH("已取消",' + L('note') + '))';
+  var colRange = function (key) { return sh.getRange(2, nfColIndex_(defs, key), NF_DATA_ROWS, 1); };
+  var rule = function () { return SpreadsheetApp.newConditionalFormatRule(); };
   var rules = [
-    SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=' + cancelled)
-      .setBackground('#eeeeee').setFontColor('#9ca3af').setStrikethrough(true).setRanges([all]).build(),
-    SpreadsheetApp.newConditionalFormatRule()
-      .whenFormulaSatisfied('=AND(' + L('id') + '<>"",' + L('paid') + '=FALSE,NOT(' + cancelled + '))')
-      .setBackground('#fde2e2').setRanges([sh.getRange(2, nfColIndex_(defs, 'paid'), NF_DATA_ROWS, 1)]).build(),
+    // 已取消：整列灰、刪除線
+    rule().whenFormulaSatisfied('=ISNUMBER(SEARCH("已取消",' + L('note') + '))')
+      .setBackground('#f3f4f6').setFontColor('#9ca3af').setStrikethrough(true).setRanges([data]).build(),
   ];
-  var done = kind === 'delivery' ? L('shipDate') + '<>""' : L('picked') + '=TRUE';
-  rules.push(SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=AND(' + L('id') + '<>"",' + done + ')')
-    .setBackground('#e8f5e9').setRanges([all]).build());
-  // 託運單號：格式不對（不是 10 或 12 碼數字）標紅底、和別筆重複標橘底
+  // 狀態欄
+  [['待付款', '#fee2e2', '#b91c1c'], ['待出貨', '#fef3c7', '#92400e'], ['待取貨', '#fef3c7', '#92400e'],
+    ['已出貨', '#dcfce7', '#166534'], ['已取貨', '#dcfce7', '#166534']].forEach(function (x) {
+    rules.push(rule().whenTextEqualTo(x[0]).setBackground(x[1]).setFontColor(x[2]).setRanges([colRange('status')]).build());
+  });
+  // 付款沒勾：付款格淡紅
+  rules.push(rule().whenFormulaSatisfied('=AND(' + L('id') + '<>"",' + L('paid') + '<>TRUE,NOT(ISNUMBER(SEARCH("已取消",' + L('note') + '))))')
+    .setBackground('#fee2e2').setRanges([colRange('paid')]).build());
+  // 託運單號：格式不對（不是 10 或 12 碼數字）標紅、和別筆重複標橘
   if (kind === 'delivery') {
     var T = '$' + nfColL_(defs, 'trackNo');
-    var tr = sh.getRange(2, nfColIndex_(defs, 'trackNo'), NF_DATA_ROWS, 1);
     rules.unshift(
-      SpreadsheetApp.newConditionalFormatRule()
-        .whenFormulaSatisfied('=AND(' + T + '2<>"",NOT(REGEXMATCH(REGEXREPLACE(TO_TEXT(' + T + '2),"[\\s-]",""),"^([0-9]{10}|[0-9]{12})$")))')
-        .setBackground('#fecaca').setFontColor('#b91c1c').setBold(true).setRanges([tr]).build(),
-      SpreadsheetApp.newConditionalFormatRule()
-        .whenFormulaSatisfied('=AND(' + T + '2<>"",COUNTIF(' + T + '$2:' + T + '$' + (NF_DATA_ROWS + 1) + ',' + T + '2)>1)')
-        .setBackground('#fed7aa').setRanges([tr]).build());
+      rule().whenFormulaSatisfied('=AND(' + T + '2<>"",NOT(REGEXMATCH(REGEXREPLACE(TO_TEXT(' + T + '2),"[\\s-]",""),"^([0-9]{10}|[0-9]{12})$")))')
+        .setBackground('#fecaca').setFontColor('#b91c1c').setBold(true).setRanges([colRange('trackNo')]).build(),
+      rule().whenFormulaSatisfied('=AND(' + T + '2<>"",COUNTIF(' + T + '$2:' + T + '$' + (NF_DATA_ROWS + 1) + ',' + T + '2)>1)')
+        .setBackground('#fed7aa').setRanges([colRange('trackNo')]).build());
   }
-  // 寄信失敗標紅字
-  defs.forEach(function (d, j) {
-    if (d.type === 'mail' && /Status$/.test(d.key)) {
-      rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextStartsWith('失敗').setFontColor('#dc2626').setBold(true)
-        .setRanges([sh.getRange(2, j + 1, NF_DATA_ROWS, 1)]).build());
-      rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextStartsWith('客人已確認').setBackground('#dcfce7').setFontColor('#15803d').setBold(true)
-        .setRanges([sh.getRange(2, j + 1, NF_DATA_ROWS, 1)]).build());
-      rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextStartsWith('已開信').setFontColor('#1d4ed8')
-        .setRanges([sh.getRange(2, j + 1, NF_DATA_ROWS, 1)]).build());
-    }
+  // 信件狀態：網底顏色區分
+  defs.forEach(function (d) {
+    if (d.type !== 'mail') return;
+    [['客人已確認', '#dcfce7', '#166534'], ['已開信', '#ede9fe', '#5b21b6'], ['已寄出', '#dbeafe', '#1e40af'], ['失敗', '#fee2e2', '#b91c1c']]
+      .forEach(function (x) { rules.push(rule().whenTextStartsWith(x[0]).setBackground(x[1]).setFontColor(x[2]).setRanges([colRange(d.key)]).build()); });
   });
   sh.setConditionalFormatRules(rules);
   return sh;
@@ -367,7 +401,7 @@ function nfOrderSheetEdit_(e, kind) {
       if (d.key === 'picked') {
         var atCol = nfColIndex_(defs, 'pickedAt');
         for (var r = Math.max(r0, 2); r < r0 + nr; r++) {
-          if (!sh.getRange(r, 1).getValue()) continue;
+          if (!sh.getRange(r, nfColIndex_(defs, 'id')).getValue()) continue;
           var on = sh.getRange(r, c).getValue() === true;
           var at = sh.getRange(r, atCol);
           if (on && !at.getValue()) at.setValue(nfFormatTimestamp_(new Date()));
@@ -404,12 +438,14 @@ function nfTrackNoProblem_(row, allRows) {
   return '';
 }
 
-/** 工作表顯示用：客人已確認 ＞ 已開信（參考）＞ 已寄出 ／ 失敗：原因 */
+/** 工作表顯示用（只顯示最新狀態與時間）：客人已確認 ＞ 已開信 ＞ 已寄出 ／ 失敗 */
 function nfMailStatusText_(ms) {
   if (!ms) return '';
-  if (ms.ackAt) return '客人已確認 ' + String(ms.ackAt).slice(5, 16);
-  if (ms.openedAt) return '已開信 ' + String(ms.openedAt).slice(5, 16);
-  return ms.status;
+  var t = function (v) { return String(v || '').slice(5, 16); }; // MM/dd HH:mm
+  if (ms.ackAt) return '客人已確認 ' + t(ms.ackAt);
+  if (ms.openedAt) return '已開信 ' + t(ms.openedAt);
+  if (ms.status === '已寄出') return '已寄出 ' + t(ms.at);
+  return '失敗 ' + t(ms.at) + ' ' + String(ms.status || '').replace(/^失敗：/, '');
 }
 
 // ── 寄信狀態（指令碼屬性，一張訂單一筆）──

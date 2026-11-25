@@ -37,10 +37,11 @@ function nfMenuSend(type) {
     return;
   }
   var ids = [];
+  var idCol = nfColIndex_(nfOrderCols_(T.kind, nfReadSettings_()), 'id');
   sh.getActiveRangeList().getRanges().forEach(function (rg) {
     var r0 = Math.max(rg.getRow(), 2), r1 = rg.getRow() + rg.getNumRows() - 1;
     if (r1 < r0) return;
-    sh.getRange(r0, 1, r1 - r0 + 1, 1).getValues().forEach(function (v) { if (v[0] && ids.indexOf(String(v[0])) < 0) ids.push(String(v[0])); });
+    sh.getRange(r0, idCol, r1 - r0 + 1, 1).getValues().forEach(function (v) { if (v[0] && ids.indexOf(String(v[0])) < 0) ids.push(String(v[0])); });
   });
   if (!ids.length) {
     ui.alert(T.label, '請先選取要寄的訂單列（點列號可以選整列，按住 ⌘ 可以多選）。', ui.ButtonSet.OK);

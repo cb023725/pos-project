@@ -180,7 +180,7 @@ run('ping live flag', () => { const p = ctx.nfPing_('dev', 2027); return { live:
 run('正式上線後第一筆從第 2 列開始', () => { ctx.NF_CTX.form.setAcceptingResponses(true); ctx.nfSubmitWebposOrder_({ orderId: 404, seqLabel: '27001', customerName: '正式', customerPhone: '1', email: 'goodgoodeatrestaurant@gmail.com', deliveryMethod: 'pickup', pickupDate: '2027-01-29', items: [{ name: '花雕雞', qty: 1 }] }); return respSheet.getRange(2, 1, 1, 1).getValues()[0][0] ? 'row 2 filled' : 'row 2 empty (bad)'; });
 // ── 宅配／自取／寄信 ──
 const ss = () => ctx.NF_CTX.ss;
-const colOf = (name, h) => ss().getSheetByName(name).getRange(1, 1, 1, 40).getValues()[0].indexOf(h) + 1;
+const colOf = (name, h) => ss().getSheetByName(name).getRange(1, 1, 1, 60).getValues()[0].indexOf(h) + 1;
 const sheetObj = (name) => { const sh = ss().getSheetByName(name); const lr = sh.getLastRow(), lc = sh.getLastColumn(); const v = sh.getRange(1, 1, lr, lc).getValues();
   return v.slice(1).map(r => Object.fromEntries(v[0].map((h, i) => [h, r[i]]))); };
 run('設定寄出日', () => { ctx.nfSetKv_('寄出日', '2027-01-25,2027-01-26,2027-01-27'); return ctx.nfReadSettings_().kv['寄出日']; });
@@ -203,27 +203,27 @@ run('再送 3 筆（線上宅配、線上自取明天、現場宅配）', () => 
   ctx.nfOnFormSubmit({ range: respSheet.getRange(respSheet.getLastRow(), 1), source: ss() });
   return { delivery: sheetObj('宅配').length, pickup: sheetObj('自取').length };
 });
-run('宅配／自取內容', () => ({ delivery: sheetObj('宅配').map(r => [r['訂單編號'], r['付款'], r['訂購姓名'], r['金額'], r['狀態'], r['品項']]),
-  pickup: sheetObj('自取').map(r => [r['訂購姓名'], r['取貨日'], r['金額'], r['保冷袋'], r['付款'], r['狀態']]) }));
+run('宅配／自取內容', () => ({ delivery: sheetObj('宅配').map(r => [r['訂單編號'], r['付款'], r['訂購人'], r['金額'], r['備註'], r['品項']]),
+  pickup: sheetObj('自取').map(r => [r['訂購人'], r['取貨日'], r['金額'], r['保冷袋'], r['付款'], r['備註']]) }));
 run('手動欄跟著訂單：付款打勾＋新訂單插進來後仍在同一筆', () => {
-  const sh = ss().getSheetByName('宅配'); const r = sheetObj('宅配').findIndex(x => x['訂購姓名'] === '宅配客') + 2;
+  const sh = ss().getSheetByName('宅配'); const r = sheetObj('宅配').findIndex(x => x['訂購人'] === '宅配客') + 2;
   sh.getRange(r, colOf('宅配', '付款')).setValue(true); sh.getRange(r, colOf('宅配', '託運單號')).setValue('1234567890'); ctx.nfOnEdit({ range: sh.getRange(r, 2), source: ss() });
   ctx.nfSyncOrderSheets_({ rebuild: true });
-  const me = sheetObj('宅配').find(x => x['訂購姓名'] === '宅配客'); return { paid: me['付款'], trackNo: me['託運單號'] };
+  const me = sheetObj('宅配').find(x => x['訂購人'] === '宅配客'); return { paid: me['付款'], trackNo: me['託運單號'] };
 });
-run('改非手動欄 → 還原', () => { const sh = ss().getSheetByName('宅配'); const old = sh.getRange(2, 3).getValue(); sh.getRange(2, 3).setValue('亂改');
-  ctx.nfOnEdit({ range: sh.getRange(2, 3), source: ss(), oldValue: old }); return sh.getRange(2, 3).getValue() === old; });
-run('已取貨打勾 → 自動記時間', () => { const sh = ss().getSheetByName('自取'); sh.getRange(2, 3).setValue(true); ctx.nfOnEdit({ range: sh.getRange(2, 3), source: ss() }); return { at: sh.getRange(2, 4).getValue() }; });
+run('改非手動欄 → 還原', () => { const sh = ss().getSheetByName('宅配'); const c = colOf('宅配', '訂購人'); const old = sh.getRange(2, c).getValue(); sh.getRange(2, c).setValue('亂改');
+  ctx.nfOnEdit({ range: sh.getRange(2, c), source: ss(), oldValue: old }); return sh.getRange(2, c).getValue() === old; });
+run('已取貨打勾 → 自動記時間', () => { const sh = ss().getSheetByName('自取'); const c = colOf('自取', '已取貨'); sh.getRange(2, c).setValue(true); ctx.nfOnEdit({ range: sh.getRange(2, c), source: ss() }); return { at: sh.getRange(2, colOf('自取', '取貨時間')).getValue() }; });
 run('寄出前確認預覽', () => { const p = ctx.nfMailPreview_('preShip'); return { eligible: p.eligible.map(x => x.name), skipped: p.skipped.map(x => x.name + ':' + x.reason), quota: p.quota }; });
 run('寄出前確認寄出（再寄一次不會重寄）', () => { ctx._mails = []; const r1 = ctx.nfMailSend_('preShip'); const r2 = ctx.nfMailSend_('preShip');
   const m = ctx._mails.find(x => x.html); return { sent1: r1.sent.length, sent2: r2.sent.length, htmlOk: !!m && m.html.includes('收件人') && m.html.includes('1/25') && !m.html.includes('<?'), status: sheetObj('宅配').map(x => x['寄出前確認']) }; });
 run('出貨通知：缺出貨日的跳過', () => { const p = ctx.nfMailPreview_('shipped'); return p.skipped.map(x => x.name + ':' + x.reason); });
-run('出貨通知：填出貨日後寄出', () => { const sh = ss().getSheetByName('宅配'); const rows = sheetObj('宅配'); const r = rows.findIndex(x => x['訂購姓名'] === '宅配客') + 2;
+run('出貨通知：填出貨日後寄出', () => { const sh = ss().getSheetByName('宅配'); const rows = sheetObj('宅配'); const r = rows.findIndex(x => x['訂購人'] === '宅配客') + 2;
   sh.getRange(r, colOf('宅配', '出貨日')).setValue('1/26 (二)'); ctx._mails = []; const res = ctx.nfMailSend_('shipped'); const m = ctx._mails.find(x => x.html);
   return { sent: res.sent.map(x => x.name), html: !!m && m.html.includes('1234567890') && m.html.includes('1/26') && m.html.includes('鮑魚人蔘雞湯') }; });
 run('託運單號：格式不對、重複 → 不寄', () => {
   const sh = ss().getSheetByName('宅配'); const rows = sheetObj('宅配'); const tc = colOf('宅配', '託運單號');
-  const me = rows.findIndex(x => x['訂購姓名'] === '宅配客') + 2; const other = rows.findIndex(x => x['訂購姓名'] === '現場宅配') + 2;
+  const me = rows.findIndex(x => x['訂購人'] === '宅配客') + 2; const other = rows.findIndex(x => x['訂購人'] === '現場宅配') + 2;
   const keep = sh.getRange(me, tc).getValue();
   const rowsNow = () => ctx.nfReadOrderSheets_(ss(), ctx.nfReadSettings_()).rows.delivery;
   sh.getRange(me, tc).setValue('12345'); const bad = ctx.nfTrackNoProblem_(rowsNow()[me - 2], rowsNow());
@@ -234,7 +234,7 @@ run('託運單號：格式不對、重複 → 不寄', () => {
 });
 run('開信追蹤：簽章正確才記錄，工作表顯示已開信', () => {
   ctx._props.WEB_APP_URL = 'https://script.google.com/macros/s/TEST/exec';
-  const id = sheetObj('宅配').find(x => x['訂購姓名'] === '宅配客')['訂單編號'];
+  const id = sheetObj('宅配').find(x => x['訂購人'] === '宅配客')['訂單編號'];
   const key = 'dev|2027|preShip|' + id; const good = ctx.nfOpenToken_(key);
   ctx.nfRecordOpen_(key, good); const tooSoon = sheetObj('宅配').find(x => x['訂單編號'] === id)['寄出前確認']; // 寄出 3 分鐘內＝信箱掃描
   const mk = ctx.nfMailKey_(id); const st = JSON.parse(ctx._props[mk]); st.preShip.at = '2026/11/25 00:00:00'; ctx._props[mk] = JSON.stringify(st);
@@ -242,7 +242,7 @@ run('開信追蹤：簽章正確才記錄，工作表顯示已開信', () => {
   return { tooSoon, forged, ok, status: sheetObj('宅配').find(x => x['訂單編號'] === id)['寄出前確認'] };
 });
 run('客人確認：確認頁不記錄、按按鈕才記錄、假簽章無效', () => {
-  const id = sheetObj('宅配').find(x => x['訂購姓名'] === '宅配客')['訂單編號'];
+  const id = sheetObj('宅配').find(x => x['訂購人'] === '宅配客')['訂單編號'];
   const key = 'dev|2027|preShip|' + id; const sig = ctx.nfOpenToken_(key);
   const page = ctx.nfAckGet_(key, sig).html; const before = sheetObj('宅配').find(x => x['訂單編號'] === id)['寄出前確認'];
   const bad = ctx.nfAckPost_(key, 'x').html.includes('連結無效'); ctx.nfAckPost_(key, sig);
@@ -254,14 +254,14 @@ run('取貨提醒（明天）＋失敗重試一次', () => { ctx._mails = []; ct
 run('取貨提醒失敗後可補寄', () => { ctx._mails = []; const r = ctx.nfMailSend_('pickupReminder'); const m = ctx._mails.find(x => x.html); return { sent: r.sent.map(x => x.name), hours: m && /12:00 ~ (20|16):00/.test(m.html) }; });
 run('每日 08:00 觸發已安裝', () => ctx._triggers.includes('nfDailyPickupReminder'));
 run('取消訂單（清除表單回應整列）→ 標已取消、統計不計入', () => {
-  const rows = sheetObj('宅配'); const id = rows.find(x => x['訂購姓名'] === '現場宅配')['訂單編號'];
+  const rows = sheetObj('宅配'); const id = rows.find(x => x['訂購人'] === '現場宅配')['訂單編號'];
   const lc = respSheet.getLastColumn(); const all = respSheet.getRange(1, 1, respSheet.getLastRow(), lc).getValues();
   const r = all.findIndex((x, i) => i > 0 && ctx.nfFormatTimestamp_(x[0]) === id) + 1; const ed = all[0].indexOf('已修改');
   respSheet.getRange(r, 1, 1, ed - 1).clearContent(); ctx.nfOnEdit({ range: respSheet.getRange(r, 1, 1, ed - 1), source: ss() });
-  const me = sheetObj('宅配').find(x => x['訂單編號'] === id); return { note: me['狀態'], stillThere: !!me };
+  const me = sheetObj('宅配').find(x => x['訂單編號'] === id); return { note: me['備註'], stillThere: !!me };
 });
 run('改取貨方式 → 搬到另一張表、付款跟著走', () => {
-  const id = sheetObj('宅配').find(x => x['訂購姓名'] === '宅配客')['訂單編號'];
+  const id = sheetObj('宅配').find(x => x['訂購人'] === '宅配客')['訂單編號'];
   const lc = respSheet.getLastColumn(); const all = respSheet.getRange(1, 1, respSheet.getLastRow(), lc).getValues();
   const r = all.findIndex((x, i) => i > 0 && ctx.nfFormatTimestamp_(x[0]) === id) + 1; const mc = all[0].findIndex(h => String(h).includes('取貨方式')) + 1; const dc = all[0].findIndex(h => String(h).includes('取貨日')) + 1;
   respSheet.getRange(r, mc).setValue('來店自取'); respSheet.getRange(r, dc).setValue('2027/2/1 (一)'); ctx.nfOnEdit({ range: respSheet.getRange(r, mc), source: ss(), oldValue: '宅配' });

@@ -73,6 +73,10 @@ function doPost(e) {
         return nfJson_({ ok: true, result: nfTestFollowUp_(body.id, body.ship) });
       case 'testClearOpened':
         return nfJson_({ ok: true, result: nfTestClearOpened_() });
+      case 'testFormat':
+        return nfJson_({ ok: true, result: nfTestFormat_(body.sheet, body.a1, body.fmt) });
+      case 'testCell':
+        return nfJson_({ ok: true, result: nfTestCell_(body.sheet, body.a1) });
       case 'fixFormTimeTexts':
         return nfJson_({ ok: true, result: nfFixFormTimeTexts_() });
       case 'mailSample':
