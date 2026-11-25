@@ -23,7 +23,10 @@ function nfMapColumns_(headers, settings) {
   var form = nfForm_();
   var hdr = headers.map(function (h) { return String(h || '').trim(); });
   var idxOf = function (title) { return hdr.indexOf(String(title || '').trim()); };
-  var titleOf = function (id) { try { var it = form.getItemById(id); return it ? it.getTitle() : null; } catch (e) { return null; } };
+  // 一次讀出所有題目（逐題 getItemById 每題都要一次往返，很慢）
+  var itemById = {};
+  form.getItems().forEach(function (it) { itemById[it.getId()] = it; });
+  var titleOf = function (id) { var it = itemById[id]; return it ? it.getTitle() : null; };
   ['method', 'name', 'phone', 'email', 'recipientName', 'recipientPhone', 'recipientAddress', 'pickupDate', 'last5'].forEach(function (k) {
     if (!meta.ids[k]) return;
     var i = idxOf(titleOf(meta.ids[k]));
@@ -36,7 +39,7 @@ function nfMapColumns_(headers, settings) {
     if (it && i >= 0) itemCols.push({ col: i, item: it });
   });
   if (meta.ids.grid) {
-    var gi = form.getItemById(meta.ids.grid);
+    var gi = itemById[meta.ids.grid];
     if (gi) {
       var gridTitle = gi.getTitle();
       gi.asGridItem().getRows().forEach(function (rowTitle, r) {

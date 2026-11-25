@@ -40,11 +40,14 @@ const NianfaiAdminPage = () => {
         setActiveYear(activeYearNum);
         setNewYearInput(String((activeYearNum || new Date().getFullYear()) + 1));
         if (activeYearNum) {
-            const s = await getSettingValue(`nianfai_${activeYearNum}_status`, 'preparing');
+            // 同時讀（以前一個接一個等）
+            const [s, closed, nfItems] = await Promise.all([
+                getSettingValue(`nianfai_${activeYearNum}_status`, 'preparing'),
+                getSettingValue(`nianfai_${activeYearNum}_form_closed`, 'false'),
+                getNianfaiItems(activeYearNum).catch(() => []),
+            ]);
             setStatus(STATUS_ORDER.includes(s) ? s : 'preparing');
-            const closed = await getSettingValue(`nianfai_${activeYearNum}_form_closed`, 'false');
             setFormClosed(closed === 'true');
-            const nfItems = await getNianfaiItems(activeYearNum).catch(() => []);
             setInventoryItems(nfItems);
             getNianfaiDemand(activeYearNum).then(d => setDemandInfo({ source: d.source, updatedAt: d.updatedAt, error: d.error })).catch(() => setDemandInfo(null));
         } else {

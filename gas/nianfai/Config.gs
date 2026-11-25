@@ -55,12 +55,19 @@ function nfUseYear_(env, year) {
   var raw = nfProps_().getProperty(key);
   if (!raw) throw new Error(year + ' 年的 Google 試算表與表單尚未建立（請到 WebPOS 年菜管理頁建立）');
   var meta = JSON.parse(raw);
-  NF_CTX = {
-    key: key, env: env, year: String(year), meta: meta,
-    ss: SpreadsheetApp.openById(meta.ssId),
-    form: FormApp.openById(meta.formId),
-  };
+  NF_CTX = nfMakeCtx_(key, env, String(year), meta, SpreadsheetApp.openById(meta.ssId));
   return NF_CTX;
+}
+
+/** 年度內容；表單用到時才打開（FormApp.openById 要一秒多，很多操作只需要試算表） */
+function nfMakeCtx_(key, env, year, meta, ss) {
+  var ctx = { key: key, env: env, year: year, meta: meta, ss: ss, _form: null };
+  Object.defineProperty(ctx, 'form', {
+    get: function () { if (!this._form) this._form = FormApp.openById(this.meta.formId); return this._form; },
+    set: function (f) { this._form = f; },
+    enumerable: true,
+  });
+  return ctx;
 }
 
 /** 觸發條件（提交表單時、編輯時）用：依事件的試算表找出是哪一個年度 */
@@ -72,7 +79,7 @@ function nfUseSpreadsheet_(ss) {
     var meta = JSON.parse(all[k]);
     if (meta.ssId === id) {
       var envYear = k.slice(5).split(':');
-      NF_CTX = { key: k, env: envYear[0], year: envYear[1], meta: meta, ss: ss, form: FormApp.openById(meta.formId) };
+      NF_CTX = nfMakeCtx_(k, envYear[0], envYear[1], meta, ss);
       return NF_CTX;
     }
   }

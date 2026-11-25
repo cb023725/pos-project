@@ -2546,7 +2546,7 @@ async function submitToNianfaiForm(orderId) {
                 items: (order?.items || []).map(it => ({ id: it.id, name: it.name, qty: it.quantity || 1 })),
             },
         });
-        nianfaiDemandCache.clear();
+        refreshNianfaiDemand(nf.year).catch(() => {}); // 背景更新需求（頁面照常用舊快取＋WebPOS 未送出的單，不會少算）
         await supabase.from('nianfai_orders').update({
             form_submission_status: 'sent', form_submission_error: null, submitted_at: new Date().toISOString(),
         }).eq('order_id', orderId);
@@ -2602,20 +2602,32 @@ async function computeWebposNianfaiDemand(year, excludeSeqLabels = new Set(), or
 
 // 修正單 #01 第 7 節：需求 = Sheet 總訂購量（線上＋已送出的現場單）＋ WebPOS 尚未送出的現場單。
 // GAS 未設定或讀取失敗時，暫時全部用 WebPOS 現場單計算（source = webpos_onsite_only，畫面註明「僅含現場單」）。
-// Sheet 結果快取 60 秒，避免點單頁每次載入都等 GAS。
+// Sheet 結果快取：有快取就直接用（頁面不等 GAS），超過 60 秒在背景更新；只有完全沒有快取時才等 GAS（約 5 秒）。
+// 用舊快取不會少算：剛送出、Sheet 快取還沒包含的現場單，流水號不在 onsiteSeqs 裡，會由 WebPOS 這邊計入。
 const nianfaiDemandCache = new Map(); // year -> { at, sheet }
+const nianfaiDemandInflight = new Map(); // year -> Promise（同時只更新一次）
+function refreshNianfaiDemand(year) {
+    if (nianfaiDemandInflight.has(year)) return nianfaiDemandInflight.get(year);
+    const p = (async () => {
+        const sheet = await callNianfaiGas('demand', { year }, { method: 'GET', timeoutMs: 30000 });
+        const cached = { at: Date.now(), sheet };
+        nianfaiDemandCache.set(year, cached);
+        // 表單開關以 Google 表單實際狀態為準（停售由 GAS 關閉表單）
+        await supabase.from('app_settings').upsert({
+            key: `nianfai_${year}_form_closed`, value: sheet.formAccepting ? 'false' : 'true', updated_at: new Date().toISOString(),
+        });
+        return cached;
+    })().finally(() => nianfaiDemandInflight.delete(year));
+    nianfaiDemandInflight.set(year, p);
+    return p;
+}
 async function computeNianfaiDemandDetail(year) {
     if (nianfaiGasConfigured()) {
         try {
             let cached = nianfaiDemandCache.get(year);
-            if (!cached || Date.now() - cached.at > 60 * 1000) {
-                const sheet = await callNianfaiGas('demand', { year }, { method: 'GET', timeoutMs: 15000 });
-                cached = { at: Date.now(), sheet };
-                nianfaiDemandCache.set(year, cached);
-                // 表單開關以 Google 表單實際狀態為準（停售由 GAS 關閉表單）
-                await supabase.from('app_settings').upsert({
-                    key: `nianfai_${year}_form_closed`, value: sheet.formAccepting ? 'false' : 'true', updated_at: new Date().toISOString(),
-                });
+            if (!cached) cached = await refreshNianfaiDemand(year);
+            else if (Date.now() - cached.at > 60 * 1000) {
+                refreshNianfaiDemand(year).catch(e => console.error('[年菜] 背景更新 Sheet 需求失敗：', e.message));
             }
             const sheetDemand = cached.sheet.demandById || {};
             const sent = new Set(cached.sheet.onsiteSeqs || []);
@@ -2708,7 +2720,9 @@ const nianfaiGasRoute = (handler) => async (req, res) => {
     if (!year) return res.status(400).json({ error: '缺少年度' });
     if (!nianfaiGasConfigured()) return res.status(400).json({ error: 'GAS 網址或密鑰尚未設定' });
     try {
-        res.json(await handler(year, req));
+        const out = await handler(year, req);
+        nianfaiStatusCache.delete(year); // 狀態可能變了（建立、上線、表單開關、提醒開關…），下次重新讀
+        res.json(out);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -2718,19 +2732,31 @@ const nianfaiGasRoute = (handler) => async (req, res) => {
 const invalidateNianfaiFormCheck = (year) => supabase.from('app_settings').delete().eq('key', `nianfai_${year}_form_check`);
 
 // 年菜管理頁：GAS 連線狀態＋該年度試算表／表單（沒建立也算連線成功）
+// 「Google 表單／Sheet」狀態：快取 30 秒、過期時先回舊的並在背景更新；任何 Google 操作（POST）後清掉，下次重新讀
+const nianfaiStatusCache = new Map(); // year -> { at, body }
+async function fetchNianfaiGasStatus(year) {
+    const r = await callNianfaiGas('ping', year ? { year } : {}, { method: 'GET', timeoutMs: 20000 });
+    const { data: chk } = await supabase.from('app_settings').select('value').eq('key', `nianfai_${year}_form_check`).maybeSingle();
+    let formCheck = null;
+    try { formCheck = chk ? JSON.parse(chk.value) : null; } catch { formCheck = null; }
+    // 測試中／已正式上線：以 GAS 記錄為準，同步一份到 app_settings
+    if (year && r.created) {
+        await supabase.from('app_settings').upsert({ key: `nianfai_${year}_phase`, value: r.live ? 'live' : 'testing', updated_at: new Date().toISOString() });
+    }
+    return { configured: true, ok: true, env: NIANFAI_GAS_ENV, ...r, phase: r.created ? (r.live ? 'live' : 'testing') : null, formCheck };
+}
 app.get('/api/nianfai/gas/status', async (req, res) => {
     if (!nianfaiGasConfigured()) return res.json({ configured: false });
     const year = parseInt(req.query.year, 10) || null;
+    const key = year || 0;
+    const cached = nianfaiStatusCache.get(key);
+    const refresh = () => fetchNianfaiGasStatus(year).then(body => { nianfaiStatusCache.set(key, { at: Date.now(), body }); return body; });
     try {
-        const r = await callNianfaiGas('ping', year ? { year } : {}, { method: 'GET', timeoutMs: 20000 });
-        const { data: chk } = await supabase.from('app_settings').select('value').eq('key', `nianfai_${year}_form_check`).maybeSingle();
-        let formCheck = null;
-        try { formCheck = chk ? JSON.parse(chk.value) : null; } catch { formCheck = null; }
-        // 測試中／已正式上線：以 GAS 記錄為準，同步一份到 app_settings
-        if (year && r.created) {
-            await supabase.from('app_settings').upsert({ key: `nianfai_${year}_phase`, value: r.live ? 'live' : 'testing', updated_at: new Date().toISOString() });
+        if (cached && req.query.fresh !== '1') {
+            if (Date.now() - cached.at > 30 * 1000) refresh().catch(() => {});
+            return res.json(cached.body);
         }
-        res.json({ configured: true, ok: true, env: NIANFAI_GAS_ENV, ...r, phase: r.created ? (r.live ? 'live' : 'testing') : null, formCheck });
+        res.json(await refresh());
     } catch (error) {
         res.json({ configured: true, ok: false, error: error.message });
     }
@@ -3692,6 +3718,22 @@ app.get(/.*/, (req, res) => {
 // ----------------------------------------------------
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Node server running on http://localhost:${PORT}`);
+
+    // 年菜：啟動時先把 Google 狀態與訂購需求讀進快取，第一次打開年菜頁面不用等 GAS
+    if (nianfaiGasConfigured()) {
+        setTimeout(async () => {
+            try {
+                const { data } = await supabase.from('app_settings').select('value').eq('key', 'nianfai_active_year').maybeSingle();
+                const year = data?.value ? parseInt(data.value, 10) : null;
+                if (!year) return;
+                await Promise.allSettled([
+                    refreshNianfaiDemand(year),
+                    fetchNianfaiGasStatus(year).then(body => nianfaiStatusCache.set(year, { at: Date.now(), body })),
+                ]);
+                console.log(`[年菜] ${year} 快取已預先載入`);
+            } catch (e) { console.warn('[年菜] 預先載入快取失敗：', e.message); }
+        }, 1000);
+    }
     console.log(`CUPS Printer: ${CUPS_PRINTER}`);
 
     // 啟動時清空 CUPS 佇列，避免藍牙重連後印出積壓的舊工作
