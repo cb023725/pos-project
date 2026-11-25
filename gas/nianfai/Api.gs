@@ -80,12 +80,8 @@ function doPost(e) {
         return nfJson_({ ok: true, result: nfTestFormat_(body.sheet, body.a1, body.fmt) });
       case 'testCell':
         return nfJson_({ ok: true, result: nfTestCell_(body.sheet, body.a1) });
-      case 'formTextData':
-        return nfJson_({ ok: true, result: nfFormTextData_() });
-      case 'setDescImage':
-        return nfJson_({ ok: true, result: nfSetDescImage_(body.png) });
-      case 'setFormImages':
-        return nfJson_({ ok: true, result: nfSetFormImages_(body.bundle, body.singles) });
+      case 'removeFormImages':
+        return nfJson_({ ok: true, result: nfRemoveFormImages_() });
       case 'formLinks':
         return nfJson_({ ok: true, result: nfFormLinks_() });
       case 'fixFormTimeTexts':

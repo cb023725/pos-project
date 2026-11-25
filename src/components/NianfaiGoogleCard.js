@@ -6,7 +6,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
     getNianfaiGasStatus, createNianfaiSheet, syncNianfaiSettingsToSheet,
     nianfaiFormSync, checkNianfaiForm, protectNianfaiSheet, rebuildNianfaiTabs,
-    goLiveNianfai, backToTestingNianfai, generateNianfaiFormImage, getNianfaiFormLinks,
+    goLiveNianfai, backToTestingNianfai, getNianfaiFormLinks,
 } from '../db';
 
 const Step = ({ n, title, done, active, children }) => (
@@ -47,11 +47,6 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
         })) return;
         await createNianfaiSheet(year);
         await showAlert('請進行第 ② 步：打開表單檢查文案、上傳圖片', { title: '已建立', icon: 'success' });
-    });
-
-    const handleFormImage = () => run('image', async () => {
-        await generateNianfaiFormImage(year);
-        await showAlert('套餐與單點圖片已放到題目上方、說明已更新，請打開「預覽表單」確認', { title: '表單已更新', icon: 'success' });
     });
 
     // 海報用短網址與 QR code
@@ -173,16 +168,6 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
                                 <a href={gas.spreadsheetUrl} target="_blank" rel="noreferrer" className={link}>開啟試算表</a>
                             </p>
                             <p>可以改：說明文字、段落說明、圖片、主題顏色。<span className="text-red-600 font-bold">不要改：題目名稱、選項、單點品名</span>（改了第 ③ 步會擋下）。</p>
-                            <div className="bg-gray-50 rounded-lg p-3 space-y-2">
-                                <p className="font-bold text-gray-700">菜單圖片</p>
-                                <p>表單說明只能放純文字，所以套餐與單點菜單畫成圖片（大字、重點標色，手機上也看得清楚），分別放在「套餐」題目和「單點」表格上方；品項、價格改了再按一次會替換同一張。表單說明會換成文字版的優惠、宅配、自取與諮詢（LINE 連結可以點）。</p>
-                                <p>
-                                    <a href={`/api/nianfai/form-image.png?year=${year}&part=bundle`} target="_blank" rel="noreferrer" className={link}>預覽套餐圖</a>
-                                    <span className="mx-2 text-gray-300">｜</span>
-                                    <a href={`/api/nianfai/form-image.png?year=${year}&part=singles`} target="_blank" rel="noreferrer" className={link}>預覽單點圖</a>
-                                    <button onClick={handleFormImage} disabled={!!busy || !created} className={`${btn} ml-3 bg-gray-700 text-white`}>{busy === 'image' ? '產生中...' : '產生並更新表單'}</button>
-                                </p>
-                            </div>
                         </Step>
 
                         <Step n={3} title="檢查表單對應" done={checked} active={created}>
