@@ -64,6 +64,8 @@ function doPost(e) {
         return nfJson_({ ok: true, result: built });
       case 'syncOrders':
         return nfJson_({ ok: true, result: nfSyncOrderSheets_() });
+      case 'mailOverview':
+        return nfJson_({ ok: true, result: nfMailOverview_() });
       case 'mailPreview':
         return nfJson_({ ok: true, result: nfMailPreview_(body.type, body.date) });
       case 'mailSend':

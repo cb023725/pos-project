@@ -2897,6 +2897,10 @@ app.post('/api/nianfai/gas/mail-preview', nianfaiGasRoute(async (year, req) => {
     const r = await callNianfaiGas('mailPreview', { year, type, date: date || null }, { timeoutMs: 120000 });
     return { ok: true, result: r.result };
 }));
+app.get('/api/nianfai/gas/mail-overview', nianfaiGasRoute(async (year) => {
+    const r = await callNianfaiGas('mailOverview', { year }, { timeoutMs: 120000 });
+    return { ok: true, ...r.result };
+}));
 app.post('/api/nianfai/gas/mail-send', nianfaiGasRoute(async (year, req) => {
     const { type, date, ids } = req.body || {};
     if (!NIANFAI_MAIL_TYPES.includes(type)) throw new Error('未知的信件類型');

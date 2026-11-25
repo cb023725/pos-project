@@ -361,6 +361,9 @@ export async function checkNianfaiForm(year) {
 export async function rebuildNianfaiTabs(year) {
     return api('POST', '/api/nianfai/gas/rebuild-tabs', { year });
 }
+export async function getNianfaiMailOverview(year) {
+    return api('GET', `/api/nianfai/gas/mail-overview?year=${year}`);
+}
 export async function previewNianfaiMail(year, type, date) {
     return api('POST', '/api/nianfai/gas/mail-preview', { year, type, date });
 }

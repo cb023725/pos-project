@@ -53,6 +53,45 @@ function nfMailPreview_(type, dateIso) {
   };
 }
 
+/**
+ * 寄信總覽（WebPOS 寄信頁）：三種信每位客人的狀態，一次回傳
+ *   status：ready 可寄｜sent 已寄出｜opened 已開信（參考）｜acked 客人已確認｜failed 寄送失敗｜skip 不寄（reason）
+ *   取貨提醒另外附各取貨日人數
+ */
+function nfMailOverview_() {
+  nfSyncOrderSheets_();
+  var settings = nfReadSettings_();
+  var prev = nfReadOrderSheets_(nfSpreadsheet_(), settings);
+  var out = { quota: nfMailQuota_(), types: {} };
+  Object.keys(NF_MAIL_TYPES).forEach(function (type) {
+    var T = NF_MAIL_TYPES[type];
+    var rows = [];
+    prev.rows[T.kind].forEach(function (r) {
+      if (nfIsCancelled_(r)) return;
+      var ms = nfMailState_(r.id)[type];
+      var email = String(r.email || '').trim();
+      var status, reason = '', at = '';
+      if (ms && ms.status === '已寄出') {
+        status = ms.ackAt ? 'acked' : ms.openedAt ? 'opened' : 'sent';
+        at = ms.ackAt || ms.openedAt || ms.at;
+      } else {
+        if (!email || email.toLowerCase() === NF.STORE_EMAIL.toLowerCase()) reason = '沒有 email';
+        else if (type === 'shipped' && !r.shipDate) reason = '缺出貨日';
+        else if (type === 'shipped') reason = nfTrackNoProblem_(r, prev.rows.delivery);
+        status = reason ? 'skip' : (ms ? 'failed' : 'ready');
+        if (ms) { at = ms.at; if (!reason) reason = String(ms.status).replace(/^失敗：/, ''); }
+      }
+      rows.push({
+        id: r.id, name: String(r.name || ''), phone: String(r.phone || ''), email: email,
+        pickupDate: r.pickupDate ? nfIsoDate_(r.pickupDate) : '', status: status, reason: reason, at: at,
+        onsite: String(r.note || '').indexOf('現場單') >= 0,
+      });
+    });
+    out.types[type] = { label: T.label, rows: rows };
+  });
+  return out;
+}
+
 function nfMailQuota_() {
   try { return MailApp.getRemainingDailyQuota(); } catch (e) { return null; }
 }
