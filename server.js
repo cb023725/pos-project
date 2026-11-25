@@ -1904,7 +1904,8 @@ app.post('/api/dev/reset-test-data', async (req, res) => {
             await supabase.from('orders').delete().in('id', orderIds);
         }
         await supabase.from('tables').update({ status: 'idle', order_id: null, updated_at: new Date().toISOString() }).not('table_number', 'is', null);
-        await supabase.from('menu_items').update({ stock: 10 }).ilike('category', '%庫存%');
+        // 庫存：只有年菜限定（年菜庫存）歸 0；平常也有在賣的品項（冷凍包等其他庫存）保持原本數量，不變動
+        await supabase.from('menu_items').update({ stock: 0 }).eq('category', NIANFAI_STOCK_CATEGORY);
 
         // 年菜：所有年菜訂單（含作廢、已歸檔）與發票；nianfai_orders 會跟著 orders 一起刪（on delete cascade）
         const { data: nfOrders, error: nfErr } = await supabase.from('orders').select('id').eq('is_nianfai', true);
@@ -1924,13 +1925,21 @@ app.post('/api/dev/reset-test-data', async (req, res) => {
         if ((resvRows || []).length > 0) {
             await supabase.from('nianfai_seq_reservations').delete().in('id', resvRows.map(r => r.id));
         }
-        // 所有年度的流水號計數器歸 1、表單關閉狀態重設
+        // 年菜回到「從未開賣」：流水號歸 1、表單關閉狀態重設、開賣狀態回到準備中、測試中（尚未正式上線）、停售上限清空
         const { data: nfSettings } = await supabase.from('app_settings').select('key')
-            .or('key.like.nianfai_%_next_seq,key.like.nianfai_%_form_closed');
+            .or('key.like.nianfai_%_next_seq,key.like.nianfai_%_form_closed,key.like.nianfai_%_status,key.like.nianfai_%_phase');
         const nowIso = new Date().toISOString();
+        const resetValue = (key) => key.endsWith('_next_seq') ? '1' : key.endsWith('_form_closed') ? 'false' : key.endsWith('_status') ? 'preparing' : 'testing';
         for (const { key } of (nfSettings || [])) {
-            const value = key.endsWith('_next_seq') ? '1' : 'false';
-            await supabase.from('app_settings').upsert({ key, value, updated_at: nowIso });
+            if (!/^nianfai_\d{4}_/.test(key)) continue;
+            await supabase.from('app_settings').upsert({ key, value: resetValue(key), updated_at: nowIso });
+        }
+        await supabase.from('menu_items').update({ nianfai_sellout_cap: null }).not('nianfai_year', 'is', null);
+
+        // 列印沙盒的預覽 PDF 一起清掉
+        let clearedPreviews = 0;
+        if (PRINT_SANDBOX) {
+            for (const f of fs.readdirSync(PREVIEW_DIR)) { if (f.endsWith('.pdf')) { fs.unlinkSync(path.join(PREVIEW_DIR, f)); clearedPreviews++; } }
         }
 
         // 測試試算表一起清空，不然流水號重新開始後會跟表單回應裡的舊測試單撞號
@@ -1941,13 +1950,16 @@ app.post('/api/dev/reset-test-data', async (req, res) => {
             if (year) {
                 try {
                     gasReset = (await callNianfaiGas('resetTestData', { year }, { timeoutMs: 330000 })).result;
+                    // 回到測試中（尚未正式上線），可以重新測試「測試完畢正式上線」流程
+                    await callNianfaiGas('backToTesting', { year }).catch(() => null);
                     nianfaiDemandCache.delete(year);
+                    nianfaiStatusCache.delete(year);
                 } catch (e) {
                     gasReset = { error: e.message };
                 }
             }
         }
-        res.json({ ok: true, clearedOrders: orderIds.length, clearedNianfaiOrders: nfOrderIds.length, clearedReservations: (resvRows || []).length, gasReset });
+        res.json({ ok: true, clearedOrders: orderIds.length, clearedNianfaiOrders: nfOrderIds.length, clearedReservations: (resvRows || []).length, clearedPreviews, gasReset });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -2904,6 +2916,141 @@ app.post('/api/nianfai/gas/sync-orders', nianfaiGasRoute(async (year) => {
     const r = await callNianfaiGas('syncOrders', { year }, { timeoutMs: 120000 });
     return { ok: true, result: r.result };
 }));
+
+// ── 表單說明圖片：Google 表單說明只能純文字，依同一份資料畫成有標題、顏色的圖片放在表單最上方 ──
+// 文案沿用表單說明（問候語、套餐組成、不含牛腩提醒、單點、優惠、宅配、自取、諮詢），數字與品項跟著設定變
+const execFileP = (cmd, args) => new Promise((resolve, reject) => execFile(cmd, args, (e, out, err) => e ? reject(new Error(err || e.message)) : resolve(out)));
+async function buildNianfaiFormImage(t) {
+    const RED = '#C1032F', DARK = '#1f2937', GREY = '#6b7280', W = 740, M = 36, CW = W - M * 2;
+    const draw = (doc) => {
+        // 只用微軟正黑體；粗體用描邊（黑體的數字、英文字距很怪：「$3, 500」）
+        let strokeOn = false;
+        const reg = (sz, c = DARK) => { strokeOn = false; return doc.font('Reg').fontSize(sz).fillColor(c).lineWidth(0); };
+        const bold = (sz, c = DARK) => { strokeOn = true; return doc.font('Reg').fontSize(sz).fillColor(c).strokeColor(c).lineWidth(sz > 18 ? 0.9 : 0.6); };
+        const put = (txt, x, yy) => doc.text(txt, x, yy, { lineBreak: false, fill: true, stroke: strokeOn });
+        // 一行多段（不同顏色／粗細），置中或靠左
+        const runs = (segs, y, { center = false, x = M } = {}) => {
+            const width = segs.reduce((w, g) => w + (g.b ? bold(g.s) : reg(g.s)).widthOfString(g.t), 0);
+            let cx = center ? (W - width) / 2 : x;
+            const h = Math.max(...segs.map(g => g.s));
+            for (const g of segs) {
+                (g.b ? bold(g.s, g.c || DARK) : reg(g.s, g.c || DARK));
+                put(g.t, cx, y + (h - g.s) * 0.75);
+                cx += doc.widthOfString(g.t);
+            }
+            return y + h + 8;
+        };
+        const heading = (title, y) => {
+            doc.rect(M, y, 6, 24).fill(RED);
+            bold(19); put(title, M + 16, y + 1);
+            return y + 38;
+        };
+        const dot = (x, y, c = RED) => doc.circle(x, y, 3.2).fill(c);
+        let y = 34;
+        // 問候語
+        String(t.greeting || '').split('\n').filter(Boolean).forEach(l => { y = runs([{ t: l, s: 22, b: true, c: RED }], y, { center: true }); });
+        y += 14;
+        doc.moveTo(M, y).lineTo(W - M, y).lineWidth(1).strokeColor('#e5c7cd').stroke();
+        y += 22;
+        // 套餐
+        if (t.bundle) {
+            y = heading(`${t.bundle.name}　六人份`, y);
+            y = runs([{ t: '五菜一湯　', s: 16 }, { t: '優惠價 ', s: 16, c: RED, b: true }, { t: `$${Number(t.bundle.price).toLocaleString('en-US')}`, s: 26, c: RED, b: true }], y, { x: M + 16 }) + 4;
+            const comp = t.bundle.composition, half = Math.ceil(comp.length / 2), colW = CW / 2;
+            comp.forEach((c, i) => {
+                const cx = M + 22 + (i >= half ? colW : 0), cy = y + (i % half) * 30;
+                dot(cx, cy + 10);
+                reg(16).text(c.name + (c.qty > 1 ? ` ×${c.qty}` : ''), cx + 12, cy, { lineBreak: false });
+            });
+            y += half * 30 + 12;
+            // 不含牛腩提醒（醒目框）
+            const boxH = 92;
+            doc.roundedRect(M, y, CW, boxH, 8).fillAndStroke('#fff7e0', '#f59e0b');
+            let by = y + 14;
+            by = runs([{ t: '因應部分顧客不吃牛肉或年節不拜牛', s: 15 }], by, { center: true });
+            by = runs([{ t: '年菜套餐內容 ', s: 17, b: true }, { t: '不包含', s: 19, b: true, c: RED }, { t: ' 紅燒牛腩筋', s: 17, b: true }], by, { center: true });
+            runs([{ t: '若需加購紅燒牛腩筋請至單點區選擇', s: 15, c: GREY }], by, { center: true });
+            y += boxH + 26;
+        }
+        // 單點
+        y = heading('單點菜單', y);
+        reg(15, GREY).text('以下菜色可單點：', M + 16, y, { lineBreak: false });
+        y += 28;
+        const sg = t.singles || [], sh = Math.ceil(sg.length / 2), sw = CW / 2;
+        sg.forEach((it, i) => {
+            const cx = M + 22 + (i >= sh ? sw : 0), cy = y + (i % sh) * 30;
+            dot(cx, cy + 10);
+            reg(16).text(it.name + (it.inBundle ? '' : '*'), cx + 12, cy, { lineBreak: false });
+        });
+        y += sh * 30 + 18;
+        // 優惠、宅配、自取、諮詢
+        const money = (n) => Number(n).toLocaleString('en-US');
+        const block = (title, lines) => {
+            y = heading(title, y);
+            for (const segs of lines) { dot(M + 22, y + 10, '#f59e0b'); y = runs(segs, y, { x: M + 34 }) + 2; }
+            y += 12;
+        };
+        block('優惠活動', [[{ t: '訂購套餐或單筆訂購滿', s: 16 }, { t: `${money(t.freeThreshold)}元`, s: 16, b: true, c: RED }, { t: '，加贈保冷袋一只', s: 16 }, { t: '（限來店自取）', s: 14, c: GREY }]]);
+        block('冷凍宅配', [
+            [{ t: '低溫運費：', s: 16 }, { t: `${money(t.shippingFee)}元`, s: 16, b: true, c: RED }],
+            [{ t: '訂購套餐 或 同地址消費滿', s: 16 }, { t: `${money(t.freeThreshold)}元`, s: 16, b: true, c: RED }, { t: '享免運', s: 16, b: true }, { t: '（限台灣本島）', s: 14, c: GREY }],
+        ]);
+        block('來店自取', [[{ t: '店取地址：', s: 16 }, { t: t.address || '', s: 16, b: true }]]);
+        block('訂購諮詢', [[{ t: '聯絡電話：', s: 16 }, { t: t.phone || '', s: 16, b: true }], [{ t: 'LINE 官方：', s: 16 }, { t: t.line || '', s: 16, b: true }]]);
+        return y + 10;
+    };
+    const tmp = path.join(os.tmpdir(), `nf_form_${Date.now()}`);
+    const m = new PDFDocument({ size: [W, 4000], margin: 0 }); m.registerFont('Bold', FONT_BOLD).registerFont('Reg', FONT_REG);
+    const H = Math.ceil(draw(m));
+    await new Promise((resolve, reject) => {
+        const doc = new PDFDocument({ size: [W, H], margin: 0 });
+        doc.registerFont('Bold', FONT_BOLD).registerFont('Reg', FONT_REG);
+        const out = fs.createWriteStream(tmp + '.pdf');
+        out.on('finish', resolve); out.on('error', reject);
+        doc.pipe(out);
+        doc.rect(0, 0, W, H).fill('#ffffff');
+        draw(doc);
+        doc.end();
+    });
+    await execFileP('sips', ['-s', 'format', 'png', '--resampleWidth', String(W * 2), tmp + '.pdf', '--out', tmp + '.png']);
+    const png = fs.readFileSync(tmp + '.png');
+    fs.unlink(tmp + '.pdf', () => {}); fs.unlink(tmp + '.png', () => {});
+    return png;
+}
+// 預覽（回傳 PNG）／套用到表單
+app.get('/api/nianfai/form-image.png', async (req, res) => {
+    const year = parseInt(req.query.year, 10);
+    if (!year || !nianfaiGasConfigured()) return res.status(400).send('缺少年度或 GAS 未設定');
+    try {
+        const t = (await callNianfaiGas('formTextData', { year }, { timeoutMs: 60000 })).result;
+        res.set('Content-Type', 'image/png').set('Cache-Control', 'no-store').send(await buildNianfaiFormImage(t));
+    } catch (e) { res.status(500).send(e.message); }
+});
+app.post('/api/nianfai/gas/form-image', nianfaiGasRoute(async (year) => {
+    const t = (await callNianfaiGas('formTextData', { year }, { timeoutMs: 60000 })).result;
+    const png = await buildNianfaiFormImage(t);
+    const r = await callNianfaiGas('setDescImage', { year, png: png.toString('base64') }, { timeoutMs: 120000 });
+    return { ok: true, result: r.result };
+}));
+// 表單網址、短網址（forms.gle）、海報用 QR code
+app.get('/api/nianfai/gas/form-links', nianfaiGasRoute(async (year) => {
+    const r = await callNianfaiGas('formLinks', { year }, { timeoutMs: 60000 });
+    return { ok: true, ...r.result };
+}));
+app.get('/api/nianfai/form-qr.png', async (req, res) => {
+    const year = parseInt(req.query.year, 10);
+    if (!year || !nianfaiGasConfigured()) return res.status(400).send('缺少年度或 GAS 未設定');
+    try {
+        const r = (await callNianfaiGas('formLinks', { year }, { timeoutMs: 60000 })).result;
+        const qr = require('qr-image');
+        if (req.query.format === 'svg') { // 向量檔：海報放大也清楚
+            return res.set('Content-Type', 'image/svg+xml').set('Content-Disposition', `attachment; filename="nianfai-${year}-qr.svg"`)
+                .send(qr.imageSync(r.short || r.url, { type: 'svg', margin: 2, ec_level: 'M' }));
+        }
+        const png = qr.imageSync(r.short || r.url, { type: 'png', size: 30, margin: 2, ec_level: 'M' }); // 海報用：大尺寸
+        res.set('Content-Type', 'image/png').set('Content-Disposition', `inline; filename="nianfai-${year}-qr.png"; filename*=UTF-8''${encodeURIComponent(`${year}-年菜表單-QR.png`)}`).send(png);
+    } catch (e) { res.status(500).send(e.message); }
+});
 
 // 排查用：回應分頁、觸發條件、各分頁前幾列的顯示值
 app.post('/api/nianfai/gas/diagnose', nianfaiGasRoute(async (year) => {

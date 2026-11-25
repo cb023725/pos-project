@@ -169,7 +169,7 @@ ORDER_REF = f'''      <div style="padding: 8px 5px 10px; font-size: 12px; color:
 
 
 def items_amount(with_shipping):
-    """確認信：品項（單價）＋數量＋金額，運費、總金額"""
+    """確認信：品項＋數量＋金額（不列單價），運費、總金額"""
     # 運費為 0（滿額免運）時不顯示這一列
     ship = f'''          <? if (data.shippingText && data.shippingText !== '0') {{ ?>
           <tr>
@@ -191,7 +191,7 @@ def items_amount(with_shipping):
           <? for (var i = 0; i < data.items.length; i++) {{ var it = data.items[i]; ?>
           <tr style="border-bottom: 1px solid #f6f6f6;">
             <td style="{TD}">
-              <div style="font-size: 12px; color: #333; font-weight: bold; line-height: 1.3;"><?= it.label ?><span style="font-size: 10px; color: #aaa; font-weight: normal; margin-left: 4px;">$<?= it.priceText ?></span></div>
+              <div style="font-size: 12px; color: #333; font-weight: bold; line-height: 1.3;"><?= it.label ?></div>
 {SUBS.format(subs='it.subs')}
             </td>
             <td style="{TD} text-align: center; font-size: 12px; color: #333; font-weight: bold;"><?= it.qty ?></td>
