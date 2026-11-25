@@ -7,6 +7,7 @@
 //   畫面上要渲染 {dialog}
 // icon：'success' | 'warning' | 'danger' | 'info'（預設 confirm 用 info、alert 用 info）
 // note：紅色重點框（例如「此操作無法復原」）
+// detail：灰色說明框（靠左、可捲動，放一般資訊清單）
 import React, { useState, useCallback, useRef } from 'react';
 
 const ICONS = {
@@ -64,6 +65,11 @@ export default function useDialog() {
                         {state.note && (
                             <div className="mt-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3 w-full text-center">
                                 <span className="text-sm text-red-500 font-bold whitespace-pre-line">{state.note}</span>
+                            </div>
+                        )}
+                        {state.detail && (
+                            <div className="mt-3 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 w-full text-left max-h-48 overflow-y-auto">
+                                <span className="text-sm text-gray-600 whitespace-pre-line">{state.detail}</span>
                             </div>
                         )}
                     </div>

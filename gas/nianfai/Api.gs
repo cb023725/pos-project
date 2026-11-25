@@ -53,6 +53,8 @@ function doPost(e) {
         return nfJson_({ ok: true, changes: plan.changes, warnings: plan.warnings, hasResponses: plan.hasResponses });
       case 'applyFormSync':
         return nfJson_({ ok: true, changes: nfApplyFormSync_().changes });
+      case 'checkFormText':
+        return nfJson_({ ok: true, result: nfCheckFormText_() });
       case 'checkForm':
         var chk = nfCheckForm_();
         return nfJson_({ ok: true, passed: chk.ok, problems: chk.problems });

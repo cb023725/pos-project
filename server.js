@@ -2875,6 +2875,12 @@ app.post('/api/nianfai/gas/form-sync', nianfaiGasRoute(async (year, req) => {
     return { ok: true, changes: r.changes || [], warnings: r.warnings || [], hasResponses: !!r.hasResponses };
 }));
 
+// 檢查表單說明：「設定」的值有沒有出現在表單說明裡（只檢查，不修改）
+app.post('/api/nianfai/gas/check-form-text', nianfaiGasRoute(async (year) => {
+    const r = await callNianfaiGas('checkFormText', { year }, { timeoutMs: 60000 });
+    return { ok: true, ...r.result };
+}));
+
 // 檢查表單對應：開賣前必須通過，結果記在 app_settings
 app.post('/api/nianfai/gas/check-form', nianfaiGasRoute(async (year) => {
     const r = await callNianfaiGas('checkForm', { year }, { timeoutMs: 60000 });

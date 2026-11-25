@@ -5,7 +5,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
     getNianfaiGasStatus, createNianfaiSheet, syncNianfaiSettingsToSheet,
-    nianfaiFormSync, checkNianfaiForm, protectNianfaiSheet, rebuildNianfaiTabs,
+    nianfaiFormSync, checkNianfaiForm, checkNianfaiFormText, protectNianfaiSheet, rebuildNianfaiTabs,
     goLiveNianfai, backToTestingNianfai, getNianfaiFormLinks,
 } from '../db';
 
@@ -60,6 +60,16 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
         const r = await checkNianfaiForm(year);
         if (r.passed) await showAlert('每個品項與欄位都對應正確', { title: '檢查通過', icon: 'success' });
         else await showAlert('請修正以下問題後再檢查一次', { title: '檢查未通過', icon: 'warning', note: r.problems.join('\n') });
+    });
+
+    // 檢查表單說明：改了「設定」之後，說明文字要自己改，這裡列出對不上的地方
+    const handleCheckText = () => run('text', async () => {
+        const r = await checkNianfaiFormText(year);
+        const mail = '寄信用的設定（改了下一封信就生效）：\n' + r.mail.map(x => '・' + x).join('\n');
+        if (!r.problems.length) await showAlert(`「設定」的 ${r.ok.length} 個項目都有出現在表單說明`, { title: '表單說明一致', icon: 'success', detail: mail });
+        else await showAlert(`有 ${r.problems.length} 個地方和「設定」對不上，請到「編輯表單」修改說明文字`, {
+            title: '請修改表單說明', icon: 'warning', note: r.problems.map(x => '・' + x).join('\n'), detail: mail,
+        });
     });
 
     const handleGoLive = () => run('golive', async () => {
@@ -147,7 +157,7 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
                     <div className="space-y-4">
                         <Step n={1} title="建立試算表與表單" done={created} active={!created}>
                             {created ? (
-                                <p>已建立「{gas.spreadsheet}」（雲端硬碟「咕咕義年菜{gas.env === 'dev' ? '（測試）' : ''}」資料夾）</p>
+                                <p>已建立「{gas.spreadsheet}」</p>
                             ) : (
                                 <>
                                     <p>依 WebPOS 的品項、價格、日期，照 2026 年的格式建立預購表單與訂單試算表（約 1 分鐘）。</p>
@@ -168,6 +178,8 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
                                 <a href={gas.spreadsheetUrl} target="_blank" rel="noreferrer" className={link}>開啟試算表</a>
                             </p>
                             <p>可以改：說明文字、段落說明、圖片、主題顏色。<span className="text-red-600 font-bold">不要改：題目名稱、選項、單點品名</span>（改了第 ③ 步會擋下）。</p>
+                            <p>「設定」改了日期、運費、取貨時間、LINE 等，<b>表單說明不會自動更新</b>，請自己改，改完按這裡比對：</p>
+                            <button onClick={handleCheckText} disabled={!!busy || !created} className={`${btn} border border-[#4A9A7A] text-[#4A9A7A]`}>{busy === 'text' ? '檢查中...' : '檢查表單說明'}</button>
                         </Step>
 
                         <Step n={3} title="檢查表單對應" done={checked} active={created}>

@@ -156,3 +156,58 @@ function nfFixFormTimeTexts_() {
   });
   return { fixed: fixed };
 }
+
+/**
+ * 檢查表單說明：「設定」改了之後，表單上的說明文字不會自動更新（避免蓋掉 Yw 手動排的格式），
+ * 這裡比對「設定」的值有沒有出現在表單文字裡，列出對不上的地方。只檢查、不修改。
+ * 也順便檢查寄信時才讀取的設定（加熱說明小卡、匯款資訊）。
+ *   回傳 { problems: [對不上的說明], ok: [有對上的項目], mail: [寄信設定的提醒] }
+ */
+function nfCheckFormText_() {
+  var s = nfReadSettings_();
+  var kv = s.kv;
+  var form = nfForm_();
+  var norm = function (t) { return String(t || '').replace(/[\s,，​]/g, ''); };
+  var texts = [form.getTitle(), form.getDescription()];
+  var images = 0;
+  form.getItems().forEach(function (it) {
+    texts.push(it.getTitle(), it.getHelpText());
+    if (it.getType() === FormApp.ItemType.IMAGE) images++;
+  });
+  var all = norm(texts.join('\n'));
+  var problems = [], ok = [], mail = [];
+  var need = function (label, value) {
+    var v = String(value === null || value === undefined ? '' : value).trim();
+    if (!v) return;
+    if (all.indexOf(norm(v)) >= 0) ok.push(label);
+    else problems.push('表單說明找不到' + label + '「' + v + '」');
+  };
+  var bundle = s.items.filter(function (it) { return it.isBundle; })[0];
+  need('問候語', kv['表單問候語'] ? String(kv['表單問候語']).split('\n').filter(String).join('') : '');
+  if (bundle) need('套餐價格', bundle.price);
+  s.items.forEach(function (it) { need('品項', it.name); });
+  need('運費', s.shippingFee);
+  need('免運門檻', s.freeThreshold);
+  need('寄出期間', kv['寄出期間']);
+  need('每日取貨時間', kv['每日取貨時間']);
+  if (s.pickupDates.length) {
+    need('第一個取貨日', nfFormDateLabel_(s.pickupDates[0]));
+    need('最後取貨日', nfFormDateLabel_(s.pickupDates[s.pickupDates.length - 1]));
+  }
+  need('最後一天取貨結束時間', kv['最後取貨結束時間']);
+  if (kv['預購截止日']) need('預購截止日', nfFormDateLabel_(nfIsoDate_(kv['預購截止日'])));
+  need('店址', kv['店址']);
+  need('電話', kv['電話']);
+  need('LINE', kv['LINE']);
+  // 圖片：只在建立表單時插入，之後改 ID 不會更新表單
+  var imgIds = ['套餐圖片ID', '單點圖片ID'].filter(function (k) { return String(kv[k] || '').trim(); });
+  if (imgIds.length && !images) problems.push('「設定」有填' + imgIds.join('、') + '，但表單上沒有圖片（建立表單後才填的 ID 不會自動加入，請到表單手動插入圖片）');
+  else if (imgIds.length) ok.push('表單圖片 ' + images + ' 張');
+  // 寄信時才讀的設定：改了之後下一封信就生效
+  var card = String(kv['加熱說明小卡ID'] || '').trim();
+  if (!card) mail.push('加熱說明小卡ID 沒填：出貨通知、取貨提醒不會附小卡');
+  else { try { DriveApp.getFileById(card).getName(); mail.push('加熱說明小卡讀取正常'); } catch (e) { mail.push('加熱說明小卡ID 讀不到檔案：出貨通知、取貨提醒會沒有附件，請檢查 ID 或共用權限'); } }
+  var bankEmpty = ['匯款戶名', '匯款銀行', '匯款分行', '匯款帳號'].filter(function (k) { return !String(kv[k] || '').trim(); });
+  mail.push(bankEmpty.length ? '匯款資訊沒填：' + bankEmpty.join('、') + '（線上訂單確認信的「匯款資訊」會是空白）' : '匯款資訊已填寫');
+  return { problems: problems, ok: ok, mail: mail };
+}

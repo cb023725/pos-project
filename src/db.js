@@ -355,6 +355,9 @@ export async function createNianfaiSheet(year) {
 export async function nianfaiFormSync(year, apply) {
     return api('POST', '/api/nianfai/gas/form-sync', { year, apply });
 }
+export async function checkNianfaiFormText(year) {
+    return api('POST', '/api/nianfai/gas/check-form-text', { year });
+}
 export async function checkNianfaiForm(year) {
     return api('POST', '/api/nianfai/gas/check-form', { year });
 }
