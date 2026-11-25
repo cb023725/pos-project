@@ -9,7 +9,7 @@
  */
 var NF_MAIL_SHEET = { typeCell: 'B3', dateCell: 'B4', prepareCell: 'B5', confirmCell: 'B6', refreshCell: 'D3', msgPrepare: 'C5', msgResult: 'C6', head: 8, first: 9 };
 var NF_MAIL_TYPE_BY_LABEL = { '寄出前確認': 'preShip', '出貨通知': 'shipped', '取貨提醒': 'pickupReminder' };
-var NF_MAIL_STATUS_TEXT = { ready: '可寄', failed: '寄送失敗', sent: '已寄出', opened: '已開信', acked: '客人已確認', skip: '不寄' };
+var NF_MAIL_STATUS_TEXT = { ready: '可寄', failed: '寄送失敗', sent: '已寄出', opened: '已開信', acked: '已確認', skip: '不寄' };
 
 function nfBuildMailSheet_(ss, s) {
   var sh = nfGetOrCreateSheet_(ss, NF.SHEET_MAIL);
@@ -40,7 +40,7 @@ function nfBuildMailSheet_(ss, s) {
   var st = sh.getRange(C.first, 5, 300, 1);
   var rule = function (t, bg, fg) { return SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo(t).setBackground(bg).setFontColor(fg).setRanges([st]).build(); };
   sh.setConditionalFormatRules([rule('可寄', '#dbeafe', '#1e40af'), rule('寄送失敗', '#fee2e2', '#b91c1c'), rule('已寄出', '#e0f2fe', '#075985'),
-    rule('已開信', '#ede9fe', '#5b21b6'), rule('客人已確認', '#dcfce7', '#166534'), rule('不寄', '#f3f4f6', '#6b7280')]);
+    rule('已開信', '#ede9fe', '#5b21b6'), rule('已確認', '#dcfce7', '#166534'), rule('不寄', '#f3f4f6', '#6b7280')]);
   try { sh.hideColumns(8); } catch (e) { /* 略過 */ }
   nfMailSheetRefresh_(sh);
   return sh;

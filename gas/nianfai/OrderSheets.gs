@@ -39,7 +39,7 @@ function nfOrderCols_(kind, settings) {
   var NOTE_STATUS = kind === 'delivery'
     ? '顏色：紅＝待付款｜黃＝待出貨（已付款、還沒填出貨日）｜綠＝已出貨｜灰＝已取消'
     : '顏色：紅＝待付款｜黃＝待取貨（已付款）｜綠＝已取貨｜灰＝已取消';
-  var NOTE_MAIL = '只顯示最新狀態與時間。顏色：藍＝已寄出｜紫＝已開信（僅供參考）｜綠＝客人已按確認｜紅＝寄送失敗。\n沒有變綠的客人可以電話提醒。';
+  var NOTE_MAIL = '只顯示最新狀態與時間。顏色：藍＝已寄出｜紫＝已開信（僅供參考）｜綠＝已確認（客人按了信裡的確認）｜紅＝寄送失敗。\n沒有變綠的客人可以電話提醒。';
   add('status', '狀態', { type: 'status', width: 70, align: 'center', note: NOTE_STATUS });
   if (kind === 'pickup') add('pickupDate', '取貨日', { text: true, width: 110, align: 'center' });
   add('name', '訂購人', { width: 100 });
@@ -384,7 +384,7 @@ function nfSetupOrderSheet_(ss, kind, defs, settings) {
   // 信件狀態：網底顏色區分
   defs.forEach(function (d) {
     if (d.type !== 'mail') return;
-    [['客人已確認', '#dcfce7', '#166534'], ['已開信', '#ede9fe', '#5b21b6'], ['已寄出', '#dbeafe', '#1e40af'], ['失敗', '#fee2e2', '#b91c1c']]
+    [['已確認', '#dcfce7', '#166534'], ['已開信', '#ede9fe', '#5b21b6'], ['已寄出', '#dbeafe', '#1e40af'], ['失敗', '#fee2e2', '#b91c1c']]
       .forEach(function (x) { rules.push(rule().whenTextStartsWith(x[0]).setBackground(x[1]).setFontColor(x[2]).setRanges([colRange(d.key)]).build()); });
   });
   sh.setConditionalFormatRules(rules);
@@ -461,11 +461,11 @@ function nfTrackNoProblem_(row, allRows) {
   return '';
 }
 
-/** 工作表顯示用（只顯示最新狀態與時間）：客人已確認 ＞ 已開信 ＞ 已寄出 ／ 失敗 */
+/** 工作表顯示用（只顯示最新狀態與時間）：已確認（客人按了確認）＞ 已開信 ＞ 已寄出 ／ 失敗 */
 function nfMailStatusText_(ms) {
   if (!ms) return '';
   var t = function (v) { return String(v || '').slice(5, 16); }; // MM/dd HH:mm
-  if (ms.ackAt) return '客人已確認 ' + t(ms.ackAt) + (ms.ackFast ? '（1 分鐘內，可能是信箱自動檢查）' : '');
+  if (ms.ackAt) return '已確認 ' + t(ms.ackAt) + (ms.ackFast ? '（1 分鐘內，可能是信箱自動檢查）' : '');
   if (ms.openedAt) return '已開信 ' + t(ms.openedAt);
   if (ms.status === '已寄出') return '已寄出 ' + t(ms.at);
   return '失敗 ' + t(ms.at) + ' ' + String(ms.status || '').replace(/^失敗：/, '');
