@@ -155,6 +155,9 @@ function nfDiagnose_() {
     triggers: ScriptApp.getProjectTriggers()
       .filter(function (t) { return t.getTriggerSourceId && t.getTriggerSourceId() === ss.getId(); })
       .map(function (t) { return t.getHandlerFunction() + ':' + t.getEventType(); }),
+    projectTriggers: ScriptApp.getProjectTriggers() // 整個專案（含每天 08:00 取貨提醒）
+      .filter(function (t) { return !t.getTriggerSourceId || !t.getTriggerSourceId() || t.getEventType() === ScriptApp.EventType.CLOCK; })
+      .map(function (t) { return t.getHandlerFunction() + ':' + t.getEventType(); }),
   };
   var dump = function (name, fromRow, nRows, nCols) {
     var sh = ss.getSheetByName(name);

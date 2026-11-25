@@ -30,7 +30,7 @@
 | `appsscript.json` | 時區、網頁應用程式設定 |
 
 測試工具（不用貼到 Apps Script）：`gas/tools/gas_mock_test.js`（模擬 Google 服務跑主要流程）、
-`gas_mock_server.js`（本機假 GAS 伺服器）、`build_email_templates.py`（產生 5 封信的 HTML 範本，統一 2026 年出貨通知樣式）。
+`gas_mock_server.js`（本機假 GAS 伺服器）、`deploy_gas.sh`（用 clasp 上傳並更新現用部署，網址不變）、`build_email_templates.py`（產生 5 封信的 HTML 範本，統一 2026 年出貨通知樣式）。
 
 ## 第一次設定（只做一次；測試與正式各建一個專案）
 
