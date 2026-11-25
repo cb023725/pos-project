@@ -285,7 +285,7 @@ def pre_ship():
         f'年菜將於 {blue("<?= data.shipPeriodShort ?>")} 寄出',
         '寄出前請確認以下收件資訊是否正確',
     )
-    body = (section('收件資訊', BLUE, info_rows([
+    body = (section('訂購明細', RED, ITEMS_QTY) + section('收件資訊', BLUE, info_rows([
         ('收件姓名', '<?= data.receiverName ?>'),
         ('收件電話', '<?= data.receiverPhone ?>'),
         ('收件地址', '<?= data.receiverAddress ?>'),
