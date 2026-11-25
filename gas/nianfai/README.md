@@ -18,6 +18,7 @@
 | `FormBuild.gs` | 建立試算表＋表單＋各分頁＋保護範圍＋觸發條件；表單文案 |
 | `OrderSheets.gs` | 「宅配」「自取」：GAS 依表單回應寫入，手動欄跟著訂單編號保存、取消列保留、改到非手動欄自動還原 |
 | `Tabs.gs` | 查詢、統計、備料表、修改紀錄的公式與格式 |
+| `Menu.gs` | 試算表「📧 年菜寄信」選單的動作（試算表的小程式透過程式庫 NianfaiLib 呼叫） |
 | `Mail.gs` | 寄出前確認、出貨通知、取貨提醒（每天 08:00 自動）；寄信狀態存在指令碼屬性 |
 | `Settings.gs` | 「設定」分頁讀寫（品項唯一來源是 WebPOS） |
 | `Responses.gs` | 「表單回應」對應：優先用建立表單時記下的題目 ID，再用題目名稱 |
@@ -30,7 +31,7 @@
 | `appsscript.json` | 時區、網頁應用程式設定 |
 
 測試工具（不用貼到 Apps Script）：`gas/tools/gas_mock_test.js`（模擬 Google 服務跑主要流程）、
-`gas_mock_server.js`（本機假 GAS 伺服器）、`deploy_gas.sh`（用 clasp 上傳並更新現用部署，網址不變）、`build_email_templates.py`（產生 5 封信的 HTML 範本，統一 2026 年出貨通知樣式）。
+`gas_mock_server.js`（本機假 GAS 伺服器）、`deploy_gas.sh`（用 clasp 上傳並更新現用部署，網址不變）、`setup_sheet_menu.sh`（在年度試算表裝「📧 年菜寄信」選單，每年一次；程式在 `gas/sheet-menu/`）、`build_email_templates.py`（產生 5 封信的 HTML 範本，統一 2026 年出貨通知樣式）。
 
 ## 第一次設定（只做一次；測試與正式各建一個專案）
 
