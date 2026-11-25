@@ -88,7 +88,9 @@ function makeForm(title) {
       sh.getRange(1, 1, 1, headers.length).setValues([headers]); form._respSheet = sh; return form;
     },
     createResponse: () => {
-      const answers = []; const resp = chain({ withItemResponse: (r) => { answers.push(r); return resp; }, submit: () => {
+      const answers = []; const resp = chain({ withItemResponse: (r) => { answers.push(r); return resp; },
+        toPrefilledUrl: () => form.getPublishedUrl() + '?usp=pp_url&' + answers.map(a => 'entry.' + a.item.id + '=' + encodeURIComponent(a.v)).join('&'),
+        submit: () => {
         if (!accepting) throw new Error('表單未開放');
         const sh = form._respSheet; const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
         const row = new Array(headers.length).fill(''); row[0] = new ctx._Date(Date.parse('2026-11-25T10:00:00+08:00') + (ctx._tick++) * 1000); // 用 vm 內的 Date，instanceof Date 才成立
@@ -248,6 +250,20 @@ run('客人確認：確認頁不記錄、按按鈕才記錄、假簽章無效', 
   const page = ctx.nfAckGet_(key, sig).html; const before = sheetObj('宅配').find(x => x['訂單編號'] === id)['寄出前確認'];
   const bad = ctx.nfAckPost_(key, 'x').html.includes('連結無效'); const first = ctx.nfAckPost_(key, sig).html;
   return { pageHasButton: page.includes('action=ackdo'), done: first.includes('確認完成'), clickAgain: ctx.nfAckPost_(key, sig).html.includes('已經確認過'), openAgain: ctx.nfAckGet_(key, sig).html.includes('已經確認過'), before, after: sheetObj('宅配').find(x => x['訂單編號'] === id)['寄出前確認'], bad };
+});
+run('確認表單：預填連結→提交→客人已確認；改過的確認碼無效', () => {
+  const rows = ctx.nfReadOrderSheets_(ss(), ctx.nfReadSettings_()).rows.delivery; const row = rows.find(r => r.name === '宅配客') || rows[0];
+  ctx.nfSetMailState_(row.id, 'shipped', '已寄出');
+  const url = ctx.nfConfirmUrl_(row, 'shipped'); const ids = ctx.NF_CTX.meta.confirmIds;
+  const oneClick = url.includes('/formResponse?') && url.endsWith('&submit=Submit');
+  const param = (id) => decodeURIComponent((new RegExp('entry\\.' + id + '=([^&]*)').exec(url) || [])[1] || '');
+  const ev = (code) => ({ response: { getItemResponses: () => [{ getItem: () => ({ getTitle: () => '確認碼（請勿修改）' }), getResponse: () => code }] } });
+  const code = param(ids.code);
+  ctx.nfOnConfirmForm(ev(code)); const tooSoon = !ctx.nfMailState_(row.id).shipped.ackAt; // 剛寄出：當作掃描
+  const mk = ctx.nfMailKey_(row.id); const s0 = JSON.parse(ctx._props[mk]); s0.shipped.at = '2026/11/25 00:00:00'; ctx._props[mk] = JSON.stringify(s0);
+  ctx.nfOnConfirmForm(ev(code.replace(/~.*/, '~forged'))); const forged = !!ctx.nfMailState_(row.id).shipped.ackAt;
+  ctx.nfOnConfirmForm(ev(code)); const st = ctx.nfMailState_(row.id).shipped;
+  return { oneClick, order: param(ids.order), what: param(ids.what), ignoredWithin3min: tooSoon, forged, acked: !!st.ackAt };
 });
 run('Sheet 選單模式：只寄選取的列、取貨提醒不限日期', () => { const p = ctx.nfMailPlan_('pickupReminder', null, [sheetObj('自取')[1]['訂單編號']]); return p.list.map(x => x.name + ':' + (x.reason || '可寄')); });
 run('取貨提醒（明天）＋失敗重試一次', () => { ctx._mails = []; ctx._failTo = 'b@example.com'; const r = ctx.nfMailSend_('pickupReminder', null, null, { retry: true, auto: true }); ctx._failTo = null;

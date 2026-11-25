@@ -81,3 +81,13 @@ function nfTestFormat_(sheet, a1, fmt) {
   try { rg.setNumberFormat(fmt); SpreadsheetApp.flush(); out.after = rg.getNumberFormat(); } catch (e) { out.error = String(e); }
   return out;
 }
+
+/** 測試用：某筆訂單某種信的確認連結（和信裡的一樣） */
+function nfTestConfirmUrl_(id, type) {
+  nfTestGuard_();
+  nfSyncOrderSheets_();
+  var all = nfReadOrderSheets_(nfSpreadsheet_(), nfReadSettings_());
+  var row = all.rows.delivery.concat(all.rows.pickup).filter(function (r) { return r.id === id; })[0];
+  if (!row) throw new Error('找不到訂單 ' + id);
+  return nfConfirmUrl_(row, type);
+}

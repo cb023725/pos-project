@@ -80,6 +80,8 @@ function doPost(e) {
         return nfJson_({ ok: true, result: nfTestClearOpened_() });
       case 'testFormat':
         return nfJson_({ ok: true, result: nfTestFormat_(body.sheet, body.a1, body.fmt) });
+      case 'testConfirmUrl':
+        return nfJson_({ ok: true, result: nfTestConfirmUrl_(body.id, body.type) });
       case 'testCell':
         return nfJson_({ ok: true, result: nfTestCell_(body.sheet, body.a1) });
       case 'removeFormImages':

@@ -222,7 +222,7 @@ function nfSendNotice_(type, row, settings, attachment, subjectPrefix) {
   }
   data.shipPeriodShort = data.shipPeriod.replace(/^\d{4}\//, '');
   var tpl, html;
-  data.ackUrl = row.id ? nfAckUrl_(row.id, type) : '#';
+  data.ackUrl = row.id ? nfConfirmUrl_(row, type) : '#'; // 確認按鈕：預先填好的「年菜確認」Google 表單（ConfirmForm.gs）
   tpl = HtmlService.createTemplateFromFile(file);
   tpl.data = data;
   html = tpl.evaluate().getContent();
