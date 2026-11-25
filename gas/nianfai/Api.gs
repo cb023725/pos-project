@@ -61,6 +61,12 @@ function doPost(e) {
         return nfJson_({ ok: true, result: nfMailPreview_(body.type, body.date) });
       case 'mailSend':
         return nfJson_({ ok: true, result: nfMailSend_(body.type, body.ids, body.date) });
+      case 'testSubmit':
+        return nfJson_({ ok: true, result: nfTestSubmit_(body.order) });
+      case 'testStatus':
+        return nfJson_({ ok: true, result: nfTestStatus_(body.id) });
+      case 'testFollowUp':
+        return nfJson_({ ok: true, result: nfTestFollowUp_(body.id, body.ship) });
       case 'fixFormTimeTexts':
         return nfJson_({ ok: true, result: nfFixFormTimeTexts_() });
       case 'mailSample':

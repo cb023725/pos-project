@@ -14,15 +14,16 @@
  *          items: [{ id, name, qty }] }
  */
 function nfSubmitWebposOrder_(order) {
-  if (!order || !order.seqLabel) throw new Error('缺少流水號');
+  // order.onlineLast5：只限測試（TestScenario.gs），模擬客人在表單上填寫的線上單
+  if (!order || (!order.seqLabel && !order.onlineLast5)) throw new Error('缺少流水號');
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    var last5 = NF.ONSITE_PREFIX + order.seqLabel;
+    var last5 = order.onlineLast5 ? String(order.onlineLast5) : NF.ONSITE_PREFIX + order.seqLabel;
     var subKey = order.orderId ? 'SUB_' + NF_CTX.env + ':' + NF_CTX.year + ':' + order.orderId : null;
     var prev = subKey ? nfProps_().getProperty(subKey) : null;
     if (prev) return { ok: true, duplicate: true, timestamp: prev };
-    var dup = nfFindOnsiteRow_(last5);
+    var dup = order.onlineLast5 ? null : nfFindOnsiteRow_(last5);
     if (dup) {
       if (!subKey) return { ok: true, duplicate: true, timestamp: dup.timestampText }; // 舊版 WebPOS 沒帶訂單編號
       throw new Error('表單回應第 ' + dup.rowNumber + ' 列已經有「' + last5 + '」，但不是這張訂單（可能是測試資料清空後流水號重新開始），請先處理那一列');
