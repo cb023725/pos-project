@@ -75,6 +75,8 @@ function nfBuildOrderData_(order, settings) {
     lastPickupText: lastPickup,
     lastPickupEnd: String(kv['最後取貨結束時間'] || '16:00'),
     formUrl: formUrl,
+    pickupHours: nfPickupHours_(settings, nfIsoDate_(order.pickupDateRaw)).hours,
+    isLastDay: nfPickupHours_(settings, nfIsoDate_(order.pickupDateRaw)).isLastDay,
     isOnsite: order.isOnsite,
     seqLabel: order.seqLabel, // 現場單：WebPOS 流水號（例 27001）
     mapUrl: String(kv['地圖連結'] || ''),

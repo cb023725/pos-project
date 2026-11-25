@@ -174,9 +174,9 @@ function nfSendNotice_(type, row, settings, attachment, subjectPrefix) {
     file = 'PickupReminder'; subject = '冷凍年菜取貨提醒';
     var iso = nfIsoDate_(row.pickupDate);
     data.shipDate = nfFormDateLabel_(iso).replace(/^\d{4}\//, '');
-    var last = settings.pickupDates[settings.pickupDates.length - 1];
-    var hours = String(kv['每日取貨時間'] || '12:00 ~ 20:00');
-    data.pickupHours = iso === last ? hours.split(/\s*[~～-]\s*/)[0] + ' ~ ' + String(kv['最後取貨結束時間'] || '16:00') : hours;
+    var ph = nfPickupHours_(settings, iso);
+    data.pickupHours = ph.hours;
+    data.isLastDay = ph.isLastDay;
   }
   data.shipPeriodShort = data.shipPeriod.replace(/^\d{4}\//, '');
   var tpl = HtmlService.createTemplateFromFile(file);
@@ -216,7 +216,7 @@ function nfMailSample_(to, types) {
   var confirms = {
     confirmPickup: { label: '確認信（線上自取）', o: { method: '來店自取', isDelivery: false, isOnsite: false, pickupDateRaw: row.pickupDate, shipping: 0 } },
     confirmDelivery: { label: '確認信（線上宅配）', o: { method: '宅配', isDelivery: true, isOnsite: false, shipping: subtotal < settings.freeThreshold ? settings.shippingFee : 0 } },
-    confirmOnsite: { label: '確認信（現場單自取）', o: { method: '來店自取', isDelivery: false, isOnsite: true, seqLabel: settings.year.slice(-2) + '001', last5: '現結', pickupDateRaw: row.pickupDate, shipping: 0 } },
+    confirmOnsite: { label: '確認信（現場單自取）', o: { method: '來店自取', isDelivery: false, isOnsite: true, seqLabel: settings.year.slice(-2) + '001', last5: '現結', pickupDateRaw: settings.pickupDates.length ? nfFormDateLabel_(settings.pickupDates[settings.pickupDates.length - 1]) : '', shipping: 0 } }, // 訂在最後一天，看提早結束的取貨時間
   };
   (types || ['preShip', 'shipped', 'pickupReminder', 'confirmPickup', 'confirmDelivery', 'confirmOnsite']).forEach(function (t) {
     if (confirms[t]) {
@@ -266,6 +266,22 @@ function nfRecordOpen_(key, sig) {
   } finally { lock.releaseLock(); }
   try { nfUseYear_(p[0], p[1]); nfSyncOrderSheets_(); } catch (e) { /* 下次同步時會顯示 */ }
   return true;
+}
+
+/** 取貨時段：最後一天（除夕前一天）用「最後取貨結束時間」，其他天用「每日取貨時間」，格式 12:00 - 20:00 */
+function nfPickupHours_(settings, iso) {
+  var kv = settings.kv;
+  var parts = String(kv['每日取貨時間'] || '12:00 ~ 20:00').split(/\s*[~～-]\s*/);
+  var start = parts[0] || '12:00', end = parts[1] || '20:00';
+  var last = settings.pickupDates[settings.pickupDates.length - 1];
+  var isLastDay = !!iso && iso === last;
+  return {
+    isLastDay: isLastDay,
+    hours: start + ' - ' + (isLastDay ? String(kv['最後取貨結束時間'] || '16:00') : end),
+    daily: start + ' - ' + end,
+    lastEnd: String(kv['最後取貨結束時間'] || '16:00'),
+    lastLabel: last ? nfFormDateLabel_(last).replace(/^\d{4}\//, '') : '',
+  };
 }
 
 function nfTomorrowIso_() {

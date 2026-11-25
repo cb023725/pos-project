@@ -61,6 +61,8 @@ function doPost(e) {
         return nfJson_({ ok: true, result: nfMailPreview_(body.type, body.date) });
       case 'mailSend':
         return nfJson_({ ok: true, result: nfMailSend_(body.type, body.ids, body.date) });
+      case 'fixFormTimeTexts':
+        return nfJson_({ ok: true, result: nfFixFormTimeTexts_() });
       case 'mailSample':
         return nfJson_({ ok: true, result: nfMailSample_(body.to, body.types) });
       case 'setReminder':
@@ -161,6 +163,9 @@ function nfDiagnose_() {
     formDestinationId: (function () { try { return form.getDestinationId(); } catch (e) { return 'ERR ' + e; } })(),
     formResponses: form.getResponses().length,
     formAccepting: form.isAcceptingResponses(),
+    formDescription: form.getDescription(),
+    formTimeTexts: form.getItems().map(function (it) { return it.getHelpText(); }) // 表單各段說明裡和取貨時間有關的行
+      .join('\n').split('\n').filter(function (l) { return /取貨時間|GMT|1899/.test(l); }),
     triggers: ScriptApp.getProjectTriggers()
       .filter(function (t) { return t.getTriggerSourceId && t.getTriggerSourceId() === ss.getId(); })
       .map(function (t) { return t.getHandlerFunction() + ':' + t.getEventType(); }),

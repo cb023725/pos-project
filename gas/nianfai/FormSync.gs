@@ -137,3 +137,22 @@ function nfCheckForm_() {
   if (plan.changes.length) problems.push('表單與「設定」不一致，請按「同步到表單」：' + plan.changes.join('；'));
   return { ok: problems.length === 0, problems: problems };
 }
+
+/**
+ * 修正表單說明裡被試算表轉成日期字串的時間（例「Sat Dec 30 1899 16:00:00 GMT+0800 (台北標準時間)」→「16:00」）。
+ * 只替換這種錯誤字串，Yw 改過的其他文案不動。
+ */
+function nfFixFormTimeTexts_() {
+  var form = nfForm_();
+  var re = /[A-Z][a-z]{2} [A-Z][a-z]{2} \d{2} 1899 (\d{2}:\d{2}):\d{2} GMT[+-]\d{4}(?: \([^)]*\))?/g;
+  var fixed = 0;
+  var d = form.getDescription();
+  if (re.test(d)) { form.setDescription(d.replace(re, '$1')); fixed++; }
+  form.getItems().forEach(function (it) {
+    var h = it.getHelpText();
+    re.lastIndex = 0;
+    if (h && re.test(h)) { re.lastIndex = 0; it.setHelpText(h.replace(re, '$1')); fixed++; }
+    re.lastIndex = 0;
+  });
+  return { fixed: fixed };
+}

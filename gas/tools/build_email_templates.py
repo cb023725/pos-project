@@ -98,25 +98,34 @@ def info_rows(rows):
     return '      <table style="width: 100%; border-collapse: collapse; border: none; margin: 0;">\n' + '\n'.join(out) + '\n      </table>'
 
 
+def nb(text):
+    """不讓這段文字中間斷行（句尾用，避免換行後一行只剩一兩個字或標點）"""
+    return f'<span style="white-space: nowrap;">{text}</span>'
+
+
 def notes(items):
-    """編號與文字分兩欄，文字換行時對齊文字開頭（不會跑到編號下面）。
-    items 可以是字串，或 (條件, 字串)：條件是範本 JS 運算式，成立才顯示（編號照順序重排）"""
+    """條列（・）：符號與文字分兩欄，文字換行時對齊文字開頭。
+    items 可以是字串，或 (條件, 字串)：條件是範本 JS 運算式，成立才顯示。
+    每點的句尾自己用 nb() 包起來，換行時不會只剩一兩個字。"""
     rows = []
     for it in items:
         cond, text = (it if isinstance(it, tuple) else (None, it))
-        row = ('        <tr><td style="width: 20px; padding: 5px 0 5px 4px; vertical-align: top; font-size: 12px; color: #999;"><?= ++__n ?>.</td>'
-               f'<td style="padding: 5px 4px 5px 0; vertical-align: top; font-size: 12px; color: #444; line-height: 1.6;">{text}</td></tr>')
+        # 逗號處才斷行：每個子句不拆開，放不下就整句換到下一行
+        parts = text.split('，')
+        text = '，'.join(nb(p) for p in parts[:-1]) + ('，' if len(parts) > 1 else '') + nb(parts[-1])
+        row = ('        <tr><td style="width: 14px; padding: 5px 0 5px 4px; vertical-align: top; font-size: 12px; color: #999; line-height: 1.7;">・</td>'
+               f'<td style="padding: 5px 4px 5px 0; vertical-align: top; font-size: 12px; color: #444; line-height: 1.7;">{text}</td></tr>')
         rows.append(f'        <? if ({cond}) {{ ?>\n{row}\n        <? }} ?>' if cond else row)
-    return ('      <? var __n = 0; ?>\n      <table style="width: 100%; border-collapse: collapse; border: none;">\n'
+    return ('      <table style="width: 100%; border-collapse: collapse; border: none;">\n'
             + '\n'.join(rows) + '\n      </table>')
 
 
 TH = 'padding: 8px 5px; font-size: 12px; color: #666; font-weight: bold; letter-spacing: 1px; border: none;'
 TD = 'padding: 8px 5px; vertical-align: top; border: none;'
 SUBS = '''              <? if ({subs}) {{ ?>
-                <div style="border-left: 0.5px solid #ddd; margin-left: 8px; padding-left: 10px; margin-top: 4px;">
+                <div style="border-left: 1px solid #e5e5e5; margin-left: 1px; padding-left: 6px; margin-top: 4px;">
                   <? var subItems = {subs}.split('、'); for (var k = 0; k < subItems.length; k++) {{ ?>
-                    <div style="font-size: 11px; color: #999; margin-bottom: 2px; line-height: 1.3;"><?= subItems[k] ?></div>
+                    <div style="font-size: 11px; color: #999; margin-bottom: 2px; line-height: 1.3; white-space: nowrap;"><?= subItems[k] ?></div>
                   <? }} ?>
                 </div>
               <? }} ?>'''
@@ -161,10 +170,13 @@ ORDER_REF = f'''      <div style="padding: 8px 5px 10px; font-size: 12px; color:
 
 def items_amount(with_shipping):
     """確認信：品項（單價）＋數量＋金額，運費、總金額"""
-    ship = f'''          <tr>
+    # 運費為 0（滿額免運）時不顯示這一列
+    ship = f'''          <? if (data.shippingText && data.shippingText !== '0') {{ ?>
+          <tr>
             <td colspan="2" style="padding: 8px 5px; text-align: right; font-size: 12px; color: #999; border: none;">運費</td>
             <td style="padding: 8px 5px; text-align: right; font-size: 12px; color: #333; border: none;">$<?= data.shippingText ?></td>
           </tr>
+          <? }} ?>
 ''' if with_shipping else ''
     return ORDER_REF + f'''
       <table style="width: 100%; border-collapse: collapse; border: none;">
@@ -179,8 +191,7 @@ def items_amount(with_shipping):
           <? for (var i = 0; i < data.items.length; i++) {{ var it = data.items[i]; ?>
           <tr style="border-bottom: 1px solid #f6f6f6;">
             <td style="{TD}">
-              <div style="font-size: 12px; color: #333; font-weight: bold; line-height: 1.2;"><?= it.label ?></div>
-              <div style="font-size: 11px; color: #999; margin-top: 2px;">$<?= it.priceText ?></div>
+              <div style="font-size: 12px; color: #333; font-weight: bold; line-height: 1.3;"><?= it.label ?><span style="font-size: 10px; color: #aaa; font-weight: normal; margin-left: 4px;">$<?= it.priceText ?></span></div>
 {SUBS.format(subs='it.subs')}
             </td>
             <td style="{TD} text-align: center; font-size: 12px; color: #333; font-weight: bold;"><?= it.qty ?></td>
@@ -221,16 +232,16 @@ BANK = '\n    <? if (!data.isOnsite) { ?>' + section('匯款資訊', GREEN, info
 
 LINE_LINK = f'<a href="<?= data.line ?>" target="_blank" style="color: {BLUE}; font-weight: bold;">官方 LINE</a>'
 PAY_NOTES = [
-    ('!data.isOnsite', '預購商品需付款完成才算訂購成功'),
-    ('!data.isOnsite', '尚未付款請轉帳至下方匯款帳號'),
-    f'變更訂單或確認匯款請洽{LINE_LINK}',
+    ('!data.isOnsite', f'預購商品需付款完成才算訂購成功，尚未付款請轉帳至下方{nb("匯款帳號。")}'),
+    ('!data.isOnsite', f'如需變更訂單或確認匯款，{nb("請洽" + LINE_LINK + "。")}'),
+    ('data.isOnsite', f'如需變更訂單，{nb("請洽" + LINE_LINK + "。")}'),
 ]
 
 
 def confirm(delivery):
     greeting = lines(
-        '我們已收到您的 <?= data.year ?> 新春年菜訂單',
-        '訂單內容如下，取貨或查詢時請出示',
+        '感謝您訂購咕咕義 <strong style="font-weight: 700; color: #000;"><?= data.year ?> 新春年菜</strong>',
+        '這封信是您的訂購證明，請妥善保存',
     )
     if delivery:
         info = section('配送資訊', BLUE, info_rows([
@@ -240,14 +251,20 @@ def confirm(delivery):
             ('收件電話', '<?= data.recipientPhone ?>'),
             ('收件地址', '<?= data.recipientAddress ?>'),
         ]), boxed=True)
-        first = ['宅配統一 <?= data.shipPeriodShort ?> 寄出', '年節物流繁忙，恕無法指定到貨日期']
+        first = [f'宅配統一於 <?= data.shipPeriodShort ?> 寄出，年節物流繁忙，{nb("恕無法指定到貨日期。")}']
     else:
         info = section('取貨資訊', BLUE, info_rows([
             ('取貨方式', '<?= data.method ?>'),
             ('取貨日期', '<?= data.pickupDate ?>'),
+            ('取貨時段', '<?= data.pickupHours ?>'),
             ('取貨地點', map_link('<?= data.storeAddress ?>')),
         ]), boxed=True)
-        first = ["除夕前一天 <?= String(data.lastPickupText).replace(/^\\d{4}\\//, '') ?> 取貨只到 <?= data.lastPickupEnd ?>"]
+        # 取貨時間：訂在最後一天（除夕前一天）的提早結束，其他天是每日取貨時間
+        first = [
+            f'請依指定的取貨日期前往取貨，如需變更取貨日請{nb("提前通知我們備貨。")}',
+            ('data.isLastDay', f'您的取貨日為除夕前一天，取貨時間為 {nb("<?= data.pickupHours ?>。")}'),
+            ('!data.isLastDay', f'每日取貨時間為 {nb("<?= data.pickupHours ?>。")}'),
+        ]
     body = (section('訂購明細', RED, items_amount(delivery)) + info
             + section('注意事項', AMBER, notes(first + PAY_NOTES)) + ADD_BUTTON + BANK)
     return page('<?= data.year ?> 新春年菜訂單', greeting, body)
@@ -265,10 +282,9 @@ def pre_ship():
         ('收件地址', '<?= data.receiverAddress ?>'),
     ]), boxed=True)
         + section('物流小叮嚀', AMBER, notes([
-            '年菜由黑貓低溫宅配，寄出後約 <strong>1~3</strong> 天送達',
-            '春節物流繁忙，無法指定到貨日期與時段',
-            '實際送達時間仍以物流配送為準',
-            '近期<strong>出國</strong>或<strong>不便收貨</strong>，請盡快告知調整',
+            f'年菜由黑貓低溫宅配，寄出後約 <strong>1~3</strong> 天送達，實際仍以{nb("物流配送為準。")}',
+            f'春節期間物流較繁忙，無法指定{nb("到貨日期與時段。")}',
+            f'若近期有<strong>出國計畫</strong>或<strong>不便收貨</strong>，請盡快告知我們{nb("調整出貨日期。")}',
         ]))
         + '''
     <p style="color: #d9534f; font-weight: bold; font-size: 14px; text-align: center; margin: 24px 0 0;">預祝 新年快樂，<?= data.greeting ?>！</p>

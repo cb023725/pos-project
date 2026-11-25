@@ -61,7 +61,10 @@ function nfReadSettings_() {
   var kv = {};
   sh.getRange(1, 1, last, 2).getValues().forEach(function (r, i) {
     if (i === 0 || !r[0]) return;
-    kv[String(r[0]).trim()] = r[1];
+    var v = r[1];
+    // 「16:00」「2027/2/4」這類值會被試算表自動轉成時間／日期，讀回文字
+    if (v instanceof Date) v = Utilities.formatDate(v, NF.TZ, v.getFullYear() < 1901 ? 'HH:mm' : 'yyyy/M/d');
+    kv[String(r[0]).trim()] = v;
   });
   var items = [];
   if (last > 1) {
@@ -133,10 +136,11 @@ function nfWriteSettingsFromWebpos_(p) {
     if (v === undefined || v === null) return;
     var idx = keys.indexOf(k);
     if (idx >= 0) {
-      sh.getRange(idx + 1, 2).setValue(v);
+      sh.getRange(idx + 1, 2).setNumberFormat('@').setValue(String(v));
     } else {
       var row = keys.length + 1;
-      sh.getRange(row, 1, 1, 2).setValues([[k, v]]);
+      sh.getRange(row, 2).setNumberFormat('@');
+      sh.getRange(row, 1, 1, 2).setValues([[k, String(v)]]);
       keys.push(k);
     }
   });
