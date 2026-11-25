@@ -246,8 +246,8 @@ run('客人確認：確認頁不記錄、按按鈕才記錄、假簽章無效', 
   const id = sheetObj('宅配').find(x => x['訂購人'] === '宅配客')['訂單編號'];
   const key = 'dev|2027|preShip|' + id; const sig = ctx.nfOpenToken_(key);
   const page = ctx.nfAckGet_(key, sig).html; const before = sheetObj('宅配').find(x => x['訂單編號'] === id)['寄出前確認'];
-  const bad = ctx.nfAckPost_(key, 'x').html.includes('連結無效'); ctx.nfAckPost_(key, sig);
-  return { pageHasButton: page.includes('action=ackdo'), before, after: sheetObj('宅配').find(x => x['訂單編號'] === id)['寄出前確認'], bad };
+  const bad = ctx.nfAckPost_(key, 'x').html.includes('連結無效'); const first = ctx.nfAckPost_(key, sig).html;
+  return { pageHasButton: page.includes('action=ackdo'), done: first.includes('確認完成'), clickAgain: ctx.nfAckPost_(key, sig).html.includes('已經確認過'), openAgain: ctx.nfAckGet_(key, sig).html.includes('已經確認過'), before, after: sheetObj('宅配').find(x => x['訂單編號'] === id)['寄出前確認'], bad };
 });
 run('Sheet 選單模式：只寄選取的列、取貨提醒不限日期', () => { const p = ctx.nfMailPlan_('pickupReminder', null, [sheetObj('自取')[1]['訂單編號']]); return p.list.map(x => x.name + ':' + (x.reason || '可寄')); });
 run('取貨提醒（明天）＋失敗重試一次', () => { ctx._mails = []; ctx._failTo = 'b@example.com'; const r = ctx.nfMailSend_('pickupReminder', null, null, { retry: true, auto: true }); ctx._failTo = null;

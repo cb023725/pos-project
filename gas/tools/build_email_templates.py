@@ -130,8 +130,20 @@ SUBS = '''              <? if ({subs}) {{ ?>
                 </div>
               <? }} ?>'''
 
-# 出貨通知／取貨提醒：品項＋數量，共計 N 件
-ITEMS_QTY = f'''      <table style="width: 100%; border-collapse: collapse; border: none;">
+# 訂購明細最上方：現場單顯示訂購編號，線上單顯示訂單時間（每封信的訂購明細都一定有其中一個）
+def order_ref(time_field):
+    return f'''      <div style="padding: 8px 5px 10px; font-size: 12px; color: #666; border-bottom: 1px solid #f0f0f0; margin-bottom: 4px;">
+        <? if (data.isOnsite && data.seqLabel) {{ ?>
+        訂購編號：<span style="color: {BLUE}; font-weight: bold;"><?= data.seqLabel ?></span>
+        <? }} else {{ ?>
+        訂單時間：<span style="color: {BLUE}; font-weight: bold;"><?= {time_field} ?></span>
+        <? }} ?>
+      </div>
+'''
+
+
+# 出貨通知／取貨提醒／寄出前確認：品項＋數量，共計 N 件
+ITEMS_QTY = order_ref('data.orderTime') + f'''      <table style="width: 100%; border-collapse: collapse; border: none;">
         <thead>
           <tr style="background-color: #f8f8f8;">
             <th style="{TH} text-align: left; border-radius: 4px 0 0 4px;">品項名稱</th>
@@ -158,14 +170,8 @@ ITEMS_QTY = f'''      <table style="width: 100%; border-collapse: collapse; bord
         </tfoot>
       </table>'''
 
-# 確認信：訂購明細最上方顯示訂單時間（線上）或訂購編號（WebPOS 現場單）
-ORDER_REF = f'''      <div style="padding: 8px 5px 10px; font-size: 12px; color: #666; border-bottom: 1px solid #f0f0f0; margin-bottom: 4px;">
-        <? if (data.isOnsite && data.seqLabel) {{ ?>
-        訂購編號：<span style="color: {BLUE}; font-weight: bold;"><?= data.seqLabel ?></span>
-        <? }} else {{ ?>
-        訂單時間：<span style="color: {BLUE}; font-weight: bold;"><?= data.timestamp ?></span>
-        <? }} ?>
-      </div>'''
+# 確認信：同樣顯示訂單時間（線上）或訂購編號（WebPOS 現場單）
+ORDER_REF = order_ref('data.timestamp').rstrip('\n')
 
 
 def items_amount(with_shipping):

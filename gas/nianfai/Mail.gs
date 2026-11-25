@@ -186,7 +186,11 @@ function nfNoticeItems_(row, settings) {
 function nfSendNotice_(type, row, settings, attachment, subjectPrefix) {
   var kv = settings.kv;
   var its = nfNoticeItems_(row, settings);
+  var last5 = String(row.last5 || '');
   var data = {
+    orderTime: row.id ? String(row.id).replace(/#\d+$/, '') : nfFormatTimestamp_(new Date()), // 訂單編號＝表單時間戳記
+    isOnsite: last5.indexOf(NF.ONSITE_PREFIX) === 0,
+    seqLabel: last5.indexOf(NF.ONSITE_PREFIX) === 0 ? last5.slice(NF.ONSITE_PREFIX.length) : '',
     mapUrl: String(kv['地圖連結'] || ''),
     year: settings.year,
     name: String(row.name || ''),
@@ -314,44 +318,82 @@ function nfAckParse_(key, sig) {
   return { env: p[0], year: p[1], type: p[2], id: p.slice(3).join('|') };
 }
 
-function nfAckPage_(title, body, form) {
+/**
+ * 確認頁外觀。icon：'done' 綠色勾勾（確認完成／已確認過）、'warn' 連結無效；order：哪一筆訂單（讓客人知道確認的是什麼）
+ */
+function nfAckPage_(title, body, action, icon, order) {
   var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+  var mark = icon === 'done' ? '<div class="ok">✓</div>' : icon === 'warn' ? '<div class="ng">!</div>' : '';
   var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_top">' +
-    '<style>body{font-family:"PingFang TC","Microsoft JhengHei",sans-serif;background:#f9f9f9;margin:0;padding:24px;color:#333}' +
-    '.c{max-width:420px;margin:40px auto;background:#fff;border:1px solid #e0e0e0;border-radius:12px;padding:28px;text-align:center}' +
-    'h1{font-size:18px;margin:12px 0}p{font-size:14px;line-height:1.7;color:#555}button,.btn{display:inline-block;background:#C1032F;color:#fff;border:0;border-radius:28px;font-size:16px;font-weight:bold;padding:12px 32px;margin-top:12px;text-decoration:none}</style>' +
-    '</head><body><div class="c"><img src="https://mcusercontent.com/c27db4d77ffc4c29cdbe402a9/images/945a049c-4a56-d37c-288c-e12771643211.png" width="180" alt="咕咕義小餐館">' +
-    '<h1>' + esc(title) + '</h1><p>' + esc(body) + '</p>' + (form || '') + '</div></body></html>';
+    '<style>body{font-family:"PingFang TC","Microsoft JhengHei",sans-serif;background:#f9f9f9;margin:0;padding:20px;color:#333}' +
+    '.c{max-width:420px;margin:24px auto;background:#fff;border:1px solid #e0e0e0;border-radius:14px;padding:28px 24px;text-align:center}' +
+    'h1{font-size:22px;margin:14px 0 8px}p{font-size:16px;line-height:1.7;color:#555;margin:6px 0}' +
+    '.order{background:#f8f8f8;border-radius:10px;padding:12px;margin:16px 0 4px;font-size:15px;color:#333;line-height:1.7}' +
+    '.order b{color:#111}.btn{display:inline-block;background:#C1032F;color:#fff;border-radius:28px;font-size:18px;font-weight:bold;padding:14px 34px;margin-top:16px;text-decoration:none}' +
+    '.ok,.ng{width:64px;height:64px;border-radius:50%;margin:8px auto 0;color:#fff;font-size:38px;line-height:64px;font-weight:bold}.ok{background:#16a34a}.ng{background:#f59e0b}' +
+    '.hint{font-size:13px;color:#999;margin-top:18px}</style>' +
+    '</head><body><div class="c"><img src="https://mcusercontent.com/c27db4d77ffc4c29cdbe402a9/images/945a049c-4a56-d37c-288c-e12771643211.png" width="170" alt="咕咕義小餐館">' +
+    mark + '<h1>' + esc(title) + '</h1><p>' + esc(body) + '</p>' +
+    (order ? '<div class="order">' + order + '</div>' : '') + (action || '') +
+    (icon === 'done' ? '<p class="hint">可以關閉這個頁面了</p>' : '') + '</div></body></html>';
   return HtmlService.createHtmlOutput(html).setTitle('咕咕義小餐館').addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
-/** doGet action=ack：確認頁（還沒記錄） */
-function nfAckGet_(key, sig) {
+/** 確認頁上顯示的訂單：訂購人＋訂購編號（現場單）或訂單時間 */
+function nfAckOrderHtml_(id) {
+  var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+  try {
+    var all = nfReadOrderSheets_(nfSpreadsheet_(), nfReadSettings_());
+    var r = all.rows.delivery.concat(all.rows.pickup).filter(function (x) { return x.id === id; })[0];
+    if (!r) return '';
+    var last5 = String(r.last5 || '');
+    var ref = last5.indexOf(NF.ONSITE_PREFIX) === 0 ? '訂購編號 <b>' + esc(last5.slice(NF.ONSITE_PREFIX.length)) + '</b>' : '訂單時間 <b>' + esc(String(id).replace(/#\d+$/, '')) + '</b>';
+    return '訂購人 <b>' + esc(r.name || '') + '</b><br>' + ref;
+  } catch (e) { return ''; }
+}
+
+function nfAckLoad_(key, sig) {
   var a = nfAckParse_(key, sig);
-  if (!a) return nfAckPage_('連結無效', '請直接聯絡咕咕義小餐館官方 LINE。');
-  var t = NF_ACK_TEXT[a.type];
+  if (!a) return { page: nfAckPage_('連結無效', '請直接聯絡咕咕義小餐館官方 LINE。', '', 'warn') };
+  if (!nfProps_().getProperty(nfYearKey_(a.env, a.year))) return { page: nfAckPage_('連結已失效', '請直接聯絡咕咕義小餐館官方 LINE。', '', 'warn') };
+  nfUseYear_(a.env, a.year);
+  return { a: a };
+}
+
+/** doGet action=ack：確認頁。已經確認過就直接告訴客人，不用再按 */
+function nfAckGet_(key, sig) {
+  var L = nfAckLoad_(key, sig);
+  if (L.page) return L.page;
+  var a = L.a, t = NF_ACK_TEXT[a.type];
+  var st = nfMailState_(a.id)[a.type];
+  var order = nfAckOrderHtml_(a.id);
+  if (st && st.ackAt) return nfAckPage_('您已經確認過了', '已於 ' + String(st.ackAt).slice(5, 16) + ' 收到您的確認，不需要再確認。', '', 'done', order);
   var href = (nfProps_().getProperty('WEB_APP_URL') || '') + '?action=ackdo&k=' + encodeURIComponent(key) + '&s=' + encodeURIComponent(sig);
   var link = '<a href="' + href.replace(/"/g, '&quot;') + '" target="_top" class="btn">' + t.btn + '</a>';
-  return nfAckPage_(t.q, '請點下方按鈕完成確認。', link);
+  return nfAckPage_(t.q, '請點下方按鈕完成確認。', link, '', order);
 }
 
 /** 記錄客人已確認：doGet action=ackdo（確認頁上的連結），舊信件的 doPost action=ack 也走這裡 */
 function nfAckPost_(key, sig) {
-  var a = nfAckParse_(key, sig);
-  if (!a) return nfAckPage_('連結無效', '請直接聯絡咕咕義小餐館官方 LINE。');
-  if (!nfProps_().getProperty(nfYearKey_(a.env, a.year))) return nfAckPage_('連結已失效', '請直接聯絡咕咕義小餐館官方 LINE。');
-  nfUseYear_(a.env, a.year);
+  var L = nfAckLoad_(key, sig);
+  if (L.page) return L.page;
+  var a = L.a;
   var lock = LockService.getScriptLock();
   lock.waitLock(10000);
+  var already = null, at = null;
   try {
     var st = nfMailState_(a.id);
-    if (st[a.type] && !st[a.type].ackAt) {
-      st[a.type].ackAt = nfFormatTimestamp_(new Date());
+    if (st[a.type] && st[a.type].ackAt) already = st[a.type].ackAt;
+    else if (st[a.type]) {
+      at = st[a.type].ackAt = nfFormatTimestamp_(new Date());
       nfProps_().setProperty(nfMailKey_(a.id), JSON.stringify(st));
     }
   } finally { lock.releaseLock(); }
+  var order = nfAckOrderHtml_(a.id);
+  if (already) return nfAckPage_('您已經確認過了', '已於 ' + String(already).slice(5, 16) + ' 收到您的確認，不需要再確認。', '', 'done', order);
+  if (!at) return nfAckPage_('找不到這封信的紀錄', '請直接聯絡咕咕義小餐館官方 LINE。', '', 'warn', order);
   try { nfSyncOrderSheets_(); } catch (e) { /* 下次同步時會顯示 */ }
-  return nfAckPage_('感謝您的確認', NF_ACK_TEXT[a.type].done);
+  return nfAckPage_('確認完成', NF_ACK_TEXT[a.type].done + '（' + String(at).slice(5, 16) + '）', '', 'done', order);
 }
 
 /** doGet action=open（不需要密鑰，用簽章驗證）：第一次開信記下時間 */
