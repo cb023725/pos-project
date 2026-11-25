@@ -1892,7 +1892,7 @@ app.post('/api/dev/reset-test-data', async (req, res) => {
             const year = parseInt(yr?.value, 10);
             if (year) {
                 try {
-                    gasReset = (await callNianfaiGas('resetTestData', { year }, { timeoutMs: 60000 })).result;
+                    gasReset = (await callNianfaiGas('resetTestData', { year }, { timeoutMs: 330000 })).result;
                     nianfaiDemandCache.delete(year);
                 } catch (e) {
                     gasReset = { error: e.message };
@@ -2744,7 +2744,7 @@ app.post('/api/nianfai/gas/create-year', nianfaiGasRoute(async (year) => {
     }
     if (!payload.items.length) throw new Error('這個年度還沒有年菜品項');
     const folderName = process.env.NIANFAI_DRIVE_FOLDER || (IS_DEV ? '咕咕義年菜（測試）' : '咕咕義年菜');
-    const r = await callNianfaiGas('createYear', { ...payload, folderName }, { timeoutMs: 120000 });
+    const r = await callNianfaiGas('createYear', { ...payload, folderName }, { timeoutMs: 330000 });
     const now = new Date().toISOString();
     await supabase.from('app_settings').upsert([
         { key: `nianfai_${year}_sheet_url`, value: r.spreadsheetUrl, updated_at: now },
@@ -2757,7 +2757,7 @@ app.post('/api/nianfai/gas/create-year', nianfaiGasRoute(async (year) => {
 
 // WebPOS 品項／價格／日期 → 「設定」
 app.post('/api/nianfai/gas/sync-settings', nianfaiGasRoute(async (year) => {
-    const r = await callNianfaiGas('syncSettings', await buildNianfaiSheetPayload(year));
+    const r = await callNianfaiGas('syncSettings', await buildNianfaiSheetPayload(year), { timeoutMs: 330000 });
     nianfaiDemandCache.delete(year);
     await invalidateNianfaiFormCheck(year);
     return { ok: true, items: r.items };
@@ -2781,8 +2781,8 @@ app.post('/api/nianfai/gas/check-form', nianfaiGasRoute(async (year) => {
 
 // 依目前「設定」重建訂單整理／供需庫存／備料表／修改紀錄（不動表單回應）
 app.post('/api/nianfai/gas/rebuild-tabs', nianfaiGasRoute(async (year) => {
-    await callNianfaiGas('syncSettings', await buildNianfaiSheetPayload(year));
-    const r = await callNianfaiGas('rebuildTabs', { year }, { timeoutMs: 120000 });
+    await callNianfaiGas('syncSettings', await buildNianfaiSheetPayload(year), { timeoutMs: 330000 });
+    const r = await callNianfaiGas('rebuildTabs', { year }, { timeoutMs: 330000 });
     return { ok: true, result: r.result };
 }));
 
@@ -2829,7 +2829,7 @@ app.post('/api/nianfai/gas/go-live', nianfaiGasRoute(async (year) => {
     if (!formCheck?.passed) throw new Error('請先通過「檢查表單對應」');
     const { data: st } = await supabase.from('app_settings').select('value').eq('key', `nianfai_${year}_status`).maybeSingle();
     const accepting = st?.value === 'selling'; // 正式上線後表單開關跟著開賣狀態
-    const g = await callNianfaiGas('goLive', { year, accepting }, { timeoutMs: 120000 });
+    const g = await callNianfaiGas('goLive', { year, accepting }, { timeoutMs: 330000 });
     const cleared = await clearNianfaiYearOrders(year);
     await supabase.from('menu_items').update({ nianfai_sellout_cap: null }).eq('nianfai_year', year);
     const now = new Date().toISOString();
@@ -2839,7 +2839,7 @@ app.post('/api/nianfai/gas/go-live', nianfaiGasRoute(async (year) => {
         { key: `nianfai_${year}_form_closed`, value: 'false', updated_at: now },
     ]);
     nianfaiDemandCache.delete(year);
-    await callNianfaiGas('syncSettings', await buildNianfaiSheetPayload(year)).catch(() => null); // 停售上限清空同步到「設定」
+    await callNianfaiGas('syncSettings', await buildNianfaiSheetPayload(year), { timeoutMs: 330000 }).catch(() => null); // 停售上限清空同步到「設定」
     return { ok: true, sheetCleared: g.result?.cleared || 0, liveAt: g.result?.liveAt, ...cleared };
 }));
 

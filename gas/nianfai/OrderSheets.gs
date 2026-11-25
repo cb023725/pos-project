@@ -158,6 +158,22 @@ function nfIsCancelled_(r) {
  * 依「表單回應」重寫兩張表。opts.reset：不保留舊的手動欄與取消列（正式上線／測試清空）；
  * opts.rebuild：重建版面（欄位、格式、驗證）。
  */
+/** 品項清單的指紋：名稱、順序、價格、類型、套餐組成 */
+function nfItemsSig_(settings) {
+  return settings.items.map(function (it) { return [it.name, it.price, it.isBundle ? 'B' : 'S', it.compositionText].join('|'); }).join('\n');
+}
+
+/** 宅配／自取欄位變了（品項增減、改名、改順序）→ 統計、備料表、查詢跟著重建，保護範圍重新套用 */
+function nfRebuildFormulaSheets_(settings, defs) {
+  var ss = nfSpreadsheet_();
+  var keep = ss.getSheetByName(NF.SHEET_LOOKUP) ? ss.getSheetByName(NF.SHEET_LOOKUP).getRange('B1').getValue() : '';
+  nfBuildLookupSheet_(ss, settings, defs);
+  if (keep) ss.getSheetByName(NF.SHEET_LOOKUP).getRange('B1').setValue(keep);
+  nfBuildStatsSheet_(ss, settings, defs);
+  nfBuildPrepSheet_(ss, settings, defs);
+  try { nfApplyProtections_(); } catch (e) { console.error('保護範圍：' + e); }
+}
+
 /** 同一次執行裡只取一次鎖（巢狀呼叫直接執行），避免同步與寄信同時改同一張表 */
 var NF_LOCKED = false;
 function nfWithLock_(fn) {
@@ -223,6 +239,13 @@ function nfSyncOrderSheets_(opts) {
     });
     nfWriteOrderSheet_(ss, 'delivery', defs.delivery, out.delivery, settings, opts.rebuild);
     nfWriteOrderSheet_(ss, 'pickup', defs.pickup, out.pickup, settings, opts.rebuild);
+    // 品項清單（名稱、順序、價格、套餐組成）變了 → 統計、備料表、查詢的公式跟著重建
+    var sig = nfItemsSig_(settings);
+    if (NF_CTX.meta.itemsSig !== sig) {
+      if (!opts.rebuild) nfRebuildFormulaSheets_(settings, defs); // 完整重建（nfBuildTabs_）時會自己建
+      NF_CTX.meta.itemsSig = sig;
+      nfSaveMeta_(NF_CTX.env, NF_CTX.year, NF_CTX.meta);
+    }
     return { delivery: out.delivery.length, pickup: out.pickup.length };
   });
 }

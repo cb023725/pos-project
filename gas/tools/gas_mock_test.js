@@ -280,6 +280,18 @@ run('統計／備料表公式（取樣）', () => ({ stats: ss().getSheetByName(
 run('寄範本（6 封，含確認信）', () => { ctx._mails = []; const r = ctx.nfMailSample_('review@example.com');
   const dir = process.env.MAIL_DUMP; if (dir) ctx._mails.filter(m => m.html).forEach((m, i) => fs.writeFileSync(require('path').join(dir, (i + 1) + '.html'), m.html));
   return { sent: r.sent, leftovers: ctx._mails.filter(m => m.html && /<\?|undefined|NaN/.test(m.html)).map(m => m.subject), subjects: ctx._mails.map(m => m.subject) }; });
+run('品項改成 8 項（套餐＋7 單點）→ 宅配／自取欄位、統計、備料表自動跟著換', () => {
+  const p8 = { ...payload, items: payload.items.filter(it => !['糖霜腰果', '薄鹽腰果', '海味XO醬'].includes(it.name)) };
+  const before = { prepRows: ss().getSheetByName('備料表').getRange(6, 1, 12, 1).getValues().map(r => r[0]).filter(String).length };
+  ctx.nfWriteSettingsFromWebpos_(p8); ctx.nfSyncOrderSheets_();
+  const hdr = ss().getSheetByName('宅配').getRange(1, 1, 1, 60).getValues()[0].filter(String);
+  const prepNames = ss().getSheetByName('備料表').getRange(6, 1, 12, 1).getValues().map(r => r[0]).filter(String);
+  const statNames = ss().getSheetByName('統計').getRange(17, 1, 12, 1).getValues().map(r => r[0]).filter(String);
+  const statsF = String(ss().getSheetByName('統計').getRange(17, 3).getValue());
+  const qtyCol = hdr.indexOf('花雕雞') + 1;
+  return { before, itemCols: hdr.slice(hdr.indexOf('備料日') + 1), prepNames, statNames,
+    statsUsesNewColumns: statsF.includes(ctx.nfColLetter_(hdr.indexOf('富貴套餐') + 1)), noOldItems: !hdr.includes('海味XO醬') && !prepNames.join().includes('海味XO醬') };
+});
 run('測試清空 → 宅配／自取與寄信狀態歸零', () => { ctx.NF_CTX.meta.live = false; ctx.nfResetTestData_(); return { d: ss().getSheetByName('宅配').getLastRow(), p: ss().getSheetByName('自取').getLastRow(), ml: Object.keys(ctx._props).filter(k => k.startsWith('ML_')).length }; });
 if (process.argv.includes('--texts')) {
   const f = ctx.NF_CTX.form;

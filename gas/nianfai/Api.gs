@@ -44,7 +44,10 @@ function doPost(e) {
     nfUseYear_(body.env, body.year);
     switch (body.action) {
       case 'syncSettings':
-        return nfJson_({ ok: true, items: nfWriteSettingsFromWebpos_(body).items });
+        var written = nfWriteSettingsFromWebpos_(body);
+        // 品項有變（增減、改名、改順序、套餐組成）→ 宅配／自取欄位跟著換，統計／備料表／查詢一併重建
+        if (NF_CTX.ss.getSheetByName(NF.SHEET_DELIVERY)) nfSyncOrderSheets_();
+        return nfJson_({ ok: true, items: written.items });
       case 'planFormSync':
         var plan = nfPlanFormSync_();
         return nfJson_({ ok: true, changes: plan.changes, warnings: plan.warnings, hasResponses: plan.hasResponses });
