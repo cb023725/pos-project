@@ -252,7 +252,7 @@ function nfBuildPrepSheet_(ss, s, defs) {
   var ncol = Math.max(dates.length + 3, 5);
   sh.getRange(1, 1, 80, ncol).setFontSize(11).setVerticalAlignment('middle').setFontFamily('Arial');
   sh.setRowHeights(1, 80, 30);
-  sh.setColumnWidth(1, 170);
+  sh.setColumnWidth(1, 230);
   for (var c = 2; c <= ncol; c++) sh.setColumnWidth(c, 110);
   nfStyleTitle_(sh, 'A1', '🥘 ' + s.year + ' 備料表');
 
@@ -270,7 +270,12 @@ function nfBuildPrepSheet_(ss, s, defs) {
   sh.getRange('B5').setNote('需準備總數＝單點＋套餐內含＝其中宅配＋其中自取');
   var upTo = R('delivery', 'sortDate'), upToP = R('pickup', 'sortDate');
   var dateOf = function (kind) { return kind === 'delivery' ? upTo : upToP; };
-  var cumRows = s.items.map(function (it, i) {
+  // 單品排前面（要準備的重點），套餐放最後當參考（已拆入各單品）
+  var order = s.items.map(function (it, i) { return i; }).filter(function (i) { return !s.items[i].isBundle; })
+    .concat(s.items.map(function (it, i) { return i; }).filter(function (i) { return s.items[i].isBundle; }));
+  var nSingle = order.filter(function (i) { return !s.items[i].isBundle; }).length;
+  var label = function (it) { return it.isBundle ? it.name + '（份，已拆入上方單品）' : it.name; };
+  var cumRows = order.map(function (i, k) { var it = s.items[i];
     var parts = nfItemParts_(s, i);
     var sum = function (kinds, which) {
       var ps = parts.filter(function (p, pi) { return which === 'all' || (which === 'own' ? pi === 0 : pi > 0); });
@@ -281,17 +286,27 @@ function nfBuildPrepSheet_(ss, s, defs) {
         }).join('+');
       }).join('+');
     };
-    var r = 6 + i;
-    return [it.isBundle ? it.name + '（份）' : it.name, '=E' + r + '+F' + r,
+    var r = 6 + k;
+    return [label(it), '=E' + r + '+F' + r,
       '=' + sum(['delivery', 'pickup'], 'own'), it.isBundle ? '' : '=' + sum(['delivery', 'pickup'], 'bundle'),
       '=' + sum(['delivery'], 'all'), '=' + sum(['pickup'], 'all')];
   });
   var cumEnd = 6 + cumRows.length;
   if (cumRows.length) {
-    sh.getRange(6, 1, cumRows.length, cumHead.length).setValues(cumRows).applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false);
+    sh.getRange(6, 1, cumRows.length, cumHead.length).setValues(cumRows);
     sh.getRange(6, 2, cumRows.length, cumHead.length - 1).setHorizontalAlignment('center');
-    sh.getRange(6, 2, cumRows.length, 1).setFontWeight('bold').setFontSize(13).setFontColor('#b91c1c');
-    sh.getRange(6, 3, cumRows.length, 2).setFontColor('#6b7280');
+    sh.getRange(6, 3, cumRows.length, cumHead.length - 2).setFontColor('#6b7280');
+    // 重點：單品＋需準備總數 → 淡黃網底、粗橘框、大字
+    if (nSingle) {
+      sh.getRange(6, 1, nSingle, 2).setBackground('#fff7e0').setFontSize(13).setFontWeight('bold')
+        .setBorder(true, true, true, true, null, true, '#f59e0b', SpreadsheetApp.BorderStyle.SOLID_THICK);
+      sh.getRange(6, 1, nSingle, 2).setBorder(null, null, null, null, null, true, '#fde68a', SpreadsheetApp.BorderStyle.SOLID);
+      sh.getRange(6, 2, nSingle, 1).setFontSize(15).setFontColor('#b91c1c');
+      sh.getRange(5, 1, 1, 2).setBackground('#b45309');
+      sh.setRowHeights(6, nSingle, 32);
+    }
+    // 套餐：灰色小字參考列
+    if (cumRows.length > nSingle) sh.getRange(6 + nSingle, 1, cumRows.length - nSingle, cumHead.length).setFontColor('#9ca3af').setFontSize(10).setFontStyle('italic');
   }
   sh.getRange(cumEnd, 1, 2, cumHead.length).setValues([
     ['保冷提袋（自取）', '=F' + cumEnd, '', '', '', '=SUMIFS(' + R('pickup', 'bags') + ',' + R('pickup', 'id') + ',"<>",' + ok('pickup') + ',' + upToP + ',"<="&$B$3)'],
@@ -306,26 +321,28 @@ function nfBuildPrepSheet_(ss, s, defs) {
   sh.getRange(t - 1, 1).setValue('每日明細（宅配＋各取貨日）').setFontWeight('bold').setFontSize(12);
   var head = ['品項', '宅配'].concat(dates).concat(['合計']);
   nfStyleHead_(sh.getRange(t, 1, 1, head.length).setValues([head]));
-  var rows = s.items.map(function (it, i) {
+  var rows = order.map(function (i, k) { var it = s.items[i];
     var parts = nfItemParts_(s, i);
     var cell = function (kind, extra) {
       return '=' + parts.map(function (p) {
         return (p.mult === 1 ? '' : p.mult + '*') + 'SUMIFS(' + R(kind, p.key) + ',' + R(kind, 'id') + ',"<>",' + ok(kind) + (extra ? ',' + extra : '') + ')';
       }).join('+');
     };
-    var r = t + 1 + i;
-    var row = [it.isBundle ? it.name + '（份）' : it.name, cell('delivery')];
+    var r = t + 1 + k;
+    var row = [label(it), cell('delivery')];
     dates.forEach(function (d, di) { row.push(cell('pickup', R('pickup', 'pickupDate') + ',' + nfColLetter_(di + 3) + '$' + t)); });
     row.push('=SUM(B' + r + ':' + nfColLetter_(head.length - 1) + r + ')');
     return row;
   });
   if (rows.length) {
-    sh.getRange(t + 1, 1, rows.length, head.length).setValues(rows).applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false);
+    sh.getRange(t + 1, 1, rows.length, head.length).setValues(rows);
+    if (nSingle) sh.getRange(t + 1, 1, nSingle, head.length).applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false);
     sh.getRange(t + 1, 2, rows.length, head.length - 1).setHorizontalAlignment('center');
     sh.getRange(t + 1, head.length, rows.length, 1).setFontWeight('bold');
+    if (rows.length > nSingle) sh.getRange(t + 1 + nSingle, 1, rows.length - nSingle, head.length).setFontColor('#9ca3af').setFontSize(10).setFontStyle('italic');
     // 0 顯示成淡灰，數字一眼看得出來
     sh.setConditionalFormatRules([SpreadsheetApp.newConditionalFormatRule().whenNumberEqualTo(0).setFontColor('#d1d5db')
-      .setRanges([sh.getRange(t + 1, 2, rows.length, head.length - 1), sh.getRange(6, 2, cumRows.length, 5)]).build()]);
+      .setRanges([sh.getRange(t + 1, 2, nSingle, head.length - 1), sh.getRange(6, 2, nSingle, 5)]).build()]);
   }
   var b = t + 1 + rows.length;
   var bagRow = ['保冷提袋（自取）', ''];
