@@ -4,8 +4,9 @@
  * Apps Script 網頁在手機 App 內建瀏覽器、多個 Google 帳號登入時常出現「很抱歉，目前無法開啟檔案」，
  * Google 表單在任何手機、任何瀏覽器、有沒有登入都能開。流程：
  *   信裡的確認按鈕 → 直接送出已填好的表單（訂單、確認內容、確認碼）→ 客人看到表單的感謝畫面 → 記錄客人已確認
- * 點一下就完成（像取消訂閱電子報）。信箱的安全掃描可能在送達時自動打開連結，所以寄出後 3 分鐘內的確認不算
- * （掃描通常在送達當下就跑完）。確認碼含簽章，別人改不了別筆訂單。
+ * 點一下就完成（像取消訂閱電子報），立刻記錄。一般個人信箱（Gmail、Yahoo、Hotmail、iCloud）不會自動點信裡的連結；
+ * 公司信箱的資安系統可能會，所以寄出後 1 分鐘內的確認照樣記錄，但標記 ackFast（畫面註明可能是信箱自動檢查）。
+ * 確認碼含簽章，別人改不了別筆訂單。
  * 先前寄出的信（Apps Script 確認頁）仍然有效（Mail.gs nfAckGet_／nfAckPost_）。
  */
 var NF_CONFIRM_FORM_CACHE = null;
@@ -56,10 +57,10 @@ function nfConfirmUrl_(row, type) {
   return prefilled.replace('/viewform?', '/formResponse?') + '&submit=Submit';
 }
 
-var NF_ACK_MIN_DELAY = 3 * 60 * 1000; // 寄出後 3 分鐘內的確認視為信箱自動掃描，不記錄
+var NF_ACK_FAST = 60 * 1000; // 寄出後 1 分鐘內就確認：照樣記錄，但註明可能是信箱自動檢查
 
 /** 記錄客人已確認（表單提交、舊確認頁共用）：回傳 { ok, already, at } */
-function nfAckRecord_(key, sig) {
+function nfAckRecord_(key, sig, when) {
   var a = nfAckParse_(key, sig);
   if (!a || !nfProps_().getProperty(nfYearKey_(a.env, a.year))) return { ok: false };
   nfUseYear_(a.env, a.year);
@@ -71,9 +72,10 @@ function nfAckRecord_(key, sig) {
     var sentAt = st[a.type] ? new Date(String(st[a.type].at).replace(/\//g, '-').replace(' ', 'T') + '+08:00') : null;
     if (!st[a.type]) res.ok = false;
     else if (st[a.type].ackAt) res.already = st[a.type].ackAt;
-    else if (sentAt && !isNaN(sentAt) && Date.now() - sentAt.getTime() < NF_ACK_MIN_DELAY) res.tooSoon = true; // 多半是信箱掃描
     else {
-      res.at = st[a.type].ackAt = nfFormatTimestamp_(new Date());
+      var t = when instanceof Date ? when : new Date();
+      res.at = st[a.type].ackAt = nfFormatTimestamp_(t);
+      if (sentAt && !isNaN(sentAt) && t.getTime() - sentAt.getTime() < NF_ACK_FAST) st[a.type].ackFast = true;
       nfProps_().setProperty(nfMailKey_(a.id), JSON.stringify(st));
     }
   } finally { lock.releaseLock(); }
@@ -89,6 +91,21 @@ function nfOnConfirmForm(e) {
   answers.forEach(function (r) { if (String(r.getItem().getTitle()).indexOf('確認碼') === 0) code = String(r.getResponse() || ''); });
   var i = code.lastIndexOf('~');
   if (i < 0) return;
-  var res = nfAckRecord_(code.slice(0, i), code.slice(i + 1));
+  var res = nfAckRecord_(code.slice(0, i), code.slice(i + 1), e.response.getTimestamp());
   if (!res.ok) console.warn('確認碼無效或找不到寄信紀錄：' + code);
+}
+
+/** 依「年菜確認」表單的提交紀錄補記沒記到的確認（觸發沒跑到、或舊版 3 分鐘規則擋掉的），用實際提交時間 */
+function nfReprocessConfirms_() {
+  if (!NF_CTX.meta.confirmFormId) return { checked: 0, recorded: 0 };
+  var n = 0, rec = 0;
+  FormApp.openById(NF_CTX.meta.confirmFormId).getResponses().forEach(function (r) {
+    var code = '';
+    r.getItemResponses().forEach(function (x) { if (String(x.getItem().getTitle()).indexOf('確認碼') === 0) code = String(x.getResponse() || ''); });
+    var i = code.lastIndexOf('~');
+    if (i < 0) return;
+    n++;
+    if (nfAckRecord_(code.slice(0, i), code.slice(i + 1), r.getTimestamp()).at) rec++;
+  });
+  return { checked: n, recorded: rec };
 }

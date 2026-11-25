@@ -64,6 +64,8 @@ function doPost(e) {
         return nfJson_({ ok: true, result: built });
       case 'syncOrders':
         return nfJson_({ ok: true, result: nfSyncOrderSheets_() });
+      case 'reprocessConfirms':
+        return nfJson_({ ok: true, result: nfReprocessConfirms_() });
       case 'mailOverview':
         return nfJson_({ ok: true, result: nfMailOverview_() });
       case 'mailPreview':
@@ -82,6 +84,8 @@ function doPost(e) {
         return nfJson_({ ok: true, result: nfTestFormat_(body.sheet, body.a1, body.fmt) });
       case 'testConfirmUrl':
         return nfJson_({ ok: true, result: nfTestConfirmUrl_(body.id, body.type) });
+      case 'testConfirmLog':
+        return nfJson_({ ok: true, result: nfTestConfirmLog_() });
       case 'testCell':
         return nfJson_({ ok: true, result: nfTestCell_(body.sheet, body.a1) });
       case 'removeFormImages':

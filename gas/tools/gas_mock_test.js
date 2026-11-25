@@ -257,13 +257,12 @@ run('確認表單：預填連結→提交→客人已確認；改過的確認碼
   const url = ctx.nfConfirmUrl_(row, 'shipped'); const ids = ctx.NF_CTX.meta.confirmIds;
   const oneClick = url.includes('/formResponse?') && url.endsWith('&submit=Submit');
   const param = (id) => decodeURIComponent((new RegExp('entry\\.' + id + '=([^&]*)').exec(url) || [])[1] || '');
-  const ev = (code) => ({ response: { getItemResponses: () => [{ getItem: () => ({ getTitle: () => '確認碼（請勿修改）' }), getResponse: () => code }] } });
+  const ev = (code) => ({ response: { getTimestamp: () => new ctx._Date(), getItemResponses: () => [{ getItem: () => ({ getTitle: () => '確認碼（請勿修改）' }), getResponse: () => code }] } });
   const code = param(ids.code);
-  ctx.nfOnConfirmForm(ev(code)); const tooSoon = !ctx.nfMailState_(row.id).shipped.ackAt; // 剛寄出：當作掃描
-  const mk = ctx.nfMailKey_(row.id); const s0 = JSON.parse(ctx._props[mk]); s0.shipped.at = '2026/11/25 00:00:00'; ctx._props[mk] = JSON.stringify(s0);
   ctx.nfOnConfirmForm(ev(code.replace(/~.*/, '~forged'))); const forged = !!ctx.nfMailState_(row.id).shipped.ackAt;
-  ctx.nfOnConfirmForm(ev(code)); const st = ctx.nfMailState_(row.id).shipped;
-  return { oneClick, order: param(ids.order), what: param(ids.what), ignoredWithin3min: tooSoon, forged, acked: !!st.ackAt };
+  ctx.nfOnConfirmForm(ev(code)); const st = ctx.nfMailState_(row.id).shipped; // 剛寄出就確認：照樣記錄，標記 ackFast
+  return { oneClick, order: param(ids.order), what: param(ids.what), forged, acked: !!st.ackAt, markedFast: !!st.ackFast,
+    sheetText: ctx.nfMailStatusText_(st) };
 });
 run('Sheet 選單模式：只寄選取的列、取貨提醒不限日期', () => { const p = ctx.nfMailPlan_('pickupReminder', null, [sheetObj('自取')[1]['訂單編號']]); return p.list.map(x => x.name + ':' + (x.reason || '可寄')); });
 run('取貨提醒（明天）＋失敗重試一次', () => { ctx._mails = []; ctx._failTo = 'b@example.com'; const r = ctx.nfMailSend_('pickupReminder', null, null, { retry: true, auto: true }); ctx._failTo = null;

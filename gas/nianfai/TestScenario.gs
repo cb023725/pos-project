@@ -91,3 +91,20 @@ function nfTestConfirmUrl_(id, type) {
   if (!row) throw new Error('找不到訂單 ' + id);
   return nfConfirmUrl_(row, type);
 }
+
+/** 測試用：「年菜確認」表單的提交紀錄（時間、訂單）與寄信紀錄 */
+function nfTestConfirmLog_() {
+  nfTestGuard_();
+  var out = { responses: [], states: {} };
+  if (NF_CTX.meta.confirmFormId) {
+    FormApp.openById(NF_CTX.meta.confirmFormId).getResponses().forEach(function (r) {
+      var o = { at: nfFormatTimestamp_(r.getTimestamp()) };
+      r.getItemResponses().forEach(function (x) { if (x.getItem().getTitle() === '訂單') o.order = x.getResponse(); });
+      out.responses.push(o);
+    });
+  }
+  var prefix = 'ML_' + NF_CTX.env + ':' + NF_CTX.year + ':';
+  var props = nfProps_().getProperties();
+  Object.keys(props).forEach(function (k) { if (k.indexOf(prefix) === 0) out.states[k.slice(prefix.length)] = JSON.parse(props[k]); });
+  return out;
+}

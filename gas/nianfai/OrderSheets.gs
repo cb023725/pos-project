@@ -465,7 +465,7 @@ function nfTrackNoProblem_(row, allRows) {
 function nfMailStatusText_(ms) {
   if (!ms) return '';
   var t = function (v) { return String(v || '').slice(5, 16); }; // MM/dd HH:mm
-  if (ms.ackAt) return '客人已確認 ' + t(ms.ackAt);
+  if (ms.ackAt) return '客人已確認 ' + t(ms.ackAt) + (ms.ackFast ? '（1 分鐘內，可能是信箱自動檢查）' : '');
   if (ms.openedAt) return '已開信 ' + t(ms.openedAt);
   if (ms.status === '已寄出') return '已寄出 ' + t(ms.at);
   return '失敗 ' + t(ms.at) + ' ' + String(ms.status || '').replace(/^失敗：/, '');

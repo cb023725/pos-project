@@ -29,4 +29,4 @@ cp gas/nianfai/*.gs gas/nianfai/*.html "$WORK/push/"
 cp "$WORK/remote/appsscript.json" "$WORK/push/"
 (cd "$WORK/push" && $CLASP push --force | head -1 && $CLASP update-deployment "$DEPLOY_ID" -d "$DESC" | sed -E "s#$DEPLOY_ID#<現用部署>#")
 # Google 切換到新版本需要幾秒，等一下再讓後續的呼叫（重建分頁等）打到新版本
-sleep 10
+sleep 30

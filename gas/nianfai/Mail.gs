@@ -74,6 +74,7 @@ function nfMailOverview_() {
       if (ms && ms.status === '已寄出') {
         status = ms.ackAt ? 'acked' : ms.openedAt ? 'opened' : 'sent';
         at = ms.ackAt || ms.openedAt || ms.at;
+        if (ms.ackAt && ms.ackFast) reason = '寄出後 1 分鐘內就確認，可能是信箱自動檢查';
       } else {
         if (!email || email.toLowerCase() === NF.STORE_EMAIL.toLowerCase()) reason = '沒有 email';
         else if (type === 'shipped' && !r.shipDate) reason = '缺出貨日';
