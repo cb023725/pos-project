@@ -140,7 +140,7 @@ function nfNoticeItems_(row, settings) {
   return { items: items, totalCount: total };
 }
 
-function nfSendNotice_(type, row, settings, attachment) {
+function nfSendNotice_(type, row, settings, attachment, subjectPrefix) {
   var kv = settings.kv;
   var its = nfNoticeItems_(row, settings);
   var data = {
@@ -176,7 +176,32 @@ function nfSendNotice_(type, row, settings, attachment) {
   tpl.data = data;
   var opts = { htmlBody: tpl.evaluate().getContent(), name: NF.SENDER_NAME };
   if (attachment) opts.attachments = [attachment];
-  GmailApp.sendEmail(String(row.email).trim(), subject, '您的信箱不支援 HTML 顯示。', opts);
+  GmailApp.sendEmail(String(row.email).trim(), (subjectPrefix || '') + subject, '您的信箱不支援 HTML 顯示。', opts);
+}
+
+/** 寄範本給店家 review：範例訂單＋「設定」的日期／祝賀語／店家資訊，不寫入任何寄信狀態 */
+function nfMailSample_(to, types) {
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(to || ''))) throw new Error('email 格式不正確');
+  var settings = nfReadSettings_();
+  var row = {
+    name: '王小明', phone: '0911222333', email: to,
+    recipientName: '王大明', recipientPhone: '0912345678', recipientAddress: '台北市信義區範例路 1 號',
+    trackNo: '123456789012',
+    shipDate: nfShipDateLabels_(settings)[0] || '1/25 (一)',
+    pickupDate: settings.pickupDates.length ? nfFormDateLabel_(settings.pickupDates[0]) : '',
+  };
+  var bundle = -1, single = -1;
+  settings.items.forEach(function (it, i) { if (it.isBundle && bundle < 0) bundle = i; if (!it.isBundle && single < 0) single = i; });
+  if (bundle >= 0) row['qty_' + bundle] = 1;
+  if (single >= 0) row['qty_' + single] = 2;
+  var attachment = null, note = '';
+  try { attachment = nfHeatingCard_(settings); } catch (e) { note = '加熱說明小卡讀取失敗：' + e.message; }
+  var sent = [];
+  (types || ['preShip', 'shipped', 'pickupReminder']).forEach(function (t) {
+    nfSendNotice_(t, row, settings, t === 'preShip' ? null : attachment, '【範本】');
+    sent.push(NF_MAIL_TYPES[t].label);
+  });
+  return { sent: sent, attachment: !!attachment, note: note };
 }
 
 function nfTomorrowIso_() {

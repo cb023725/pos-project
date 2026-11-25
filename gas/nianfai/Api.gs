@@ -59,6 +59,8 @@ function doPost(e) {
         return nfJson_({ ok: true, result: nfMailPreview_(body.type, body.date) });
       case 'mailSend':
         return nfJson_({ ok: true, result: nfMailSend_(body.type, body.ids, body.date) });
+      case 'mailSample':
+        return nfJson_({ ok: true, result: nfMailSample_(body.to, body.types) });
       case 'setReminder':
         nfSetKv_('取貨提醒開關', body.on ? '開' : '關');
         nfEnsureDailyTrigger_();

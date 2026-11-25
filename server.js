@@ -2800,6 +2800,10 @@ app.post('/api/nianfai/gas/mail-send', nianfaiGasRoute(async (year, req) => {
     const r = await callNianfaiGas('mailSend', { year, type, date: date || null, ids }, { timeoutMs: 300000 });
     return { ok: true, result: r.result };
 }));
+app.post('/api/nianfai/gas/mail-sample', nianfaiGasRoute(async (year, req) => {
+    const r = await callNianfaiGas('mailSample', { year, to: req.body?.to, types: req.body?.types }, { timeoutMs: 120000 });
+    return { ok: true, result: r.result };
+}));
 app.post('/api/nianfai/gas/set-reminder', nianfaiGasRoute(async (year, req) => {
     const r = await callNianfaiGas('setReminder', { year, on: !!req.body?.on });
     return { ok: true, reminderOn: r.reminderOn };
