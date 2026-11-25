@@ -1295,9 +1295,12 @@ function buildCustomerReceiptPDF(data, filePath) {
 // ----------------------------------------------------
 const NF_STORE = { phone: '04-2471-5526', address: '台中市西區東興路三段13號1樓' };
 const NF_LOGO = (() => { try { return fs.readFileSync(path.join(__dirname, 'assets', 'nianfai-logo-print.png')); } catch { return null; } })();
-const NF_SZ = { title: 12, label: 10, item: 10.5, sub: 8.5, total: 14, small: 8.5 };
+// 字級：介於一般收據（品項 8、合計 10）與先前版本之間
+const NF_SZ = { label: 8.5, item: 8.5, sub: 7, section: 9, total: 11, small: 7 };
+const NF_M = 6;                     // 出血邊（左右、上方）
+const NF_W = PAGE_W - NF_M * 2;     // 內容寬度
 const WEEK = '日一二三四五六';
-// 'YYYY-MM-DD' 或時間 → 'YYYY/MM/DD (週X)'（台北時間）
+// 'YYYY-MM-DD' 或時間 → 'YYYY/MM/DD (X)'（台北時間）
 function nfDateWeek(v) {
     if (!v) return '';
     let y, m, d;
@@ -1309,133 +1312,133 @@ function nfDateWeek(v) {
         [y, m, d] = [g('year'), g('month'), g('day')];
     }
     const wd = new Date(Date.UTC(+y, +m - 1, +d)).getUTCDay();
-    return `${y}/${m}/${d} (週${WEEK[wd]})`;
+    return `${y}/${m}/${d} (${WEEK[wd]})`;
 }
 
-// 共用排版：drawFn(doc) 回傳最後的 y；先量高度再正式畫（熱感紙長度依內容）
+// 先量高度再正式畫（熱感紙長度依內容）
 function nfRenderSlip(drawFn, filePath) {
     return new Promise((resolve, reject) => {
-        const m = new PDFDocument({ size: [PAGE_W, 3000], margins: { top: 0, bottom: 0, left: CM, right: CM } });
-        m.registerFont('Bold', FONT_BOLD).registerFont('Reg', FONT_REG);
-        const h = Math.ceil(drawFn(m)) + 10;
-        const doc = new PDFDocument({ size: [PAGE_W, h], margins: { top: 0, bottom: 0, left: CM, right: CM }, compress: false });
+        const m = new PDFDocument({ size: [PAGE_W, 3000], margins: { top: 0, bottom: 0, left: 0, right: 0 } });
+        m.registerFont('Reg', FONT_REG);
+        const h = Math.ceil(drawFn(m)) + 14; // 下方出血
+        const doc = new PDFDocument({ size: [PAGE_W, h], margins: { top: 0, bottom: 0, left: 0, right: 0 }, compress: false });
         const chunks = [];
         doc.on('data', c => chunks.push(c));
         doc.on('end', () => fs.writeFile(filePath, Buffer.concat(chunks), e => e ? reject(e) : resolve(h)));
         doc.on('error', reject);
-        doc.registerFont('Bold', FONT_BOLD).registerFont('Reg', FONT_REG);
+        doc.registerFont('Reg', FONT_REG);
         drawFn(doc);
         doc.end();
     });
 }
 
+// 排版工具：整張單只用一種字型（微軟正黑體），強調用描邊加粗——同一行的中文與數字基線一致、不會上下錯開
 function nfSlipParts(doc) {
+    const X = NF_M, W = NF_W;
+    const draw = (t, x, y, size, { bold = false, width, align } = {}) => {
+        doc.font('Reg').fontSize(size).fillColor('black').strokeColor('black').lineWidth(bold ? 0.35 : 0);
+        doc.text(String(t), x, y, { lineBreak: false, width, align, fill: true, stroke: bold });
+    };
+    const wOf = (t, size) => doc.font('Reg').fontSize(size).widthOfString(String(t));
     const line = (y, lw = 0.6, dash = false) => {
         doc.save(); if (dash) doc.dash(2, { space: 1.5 });
-        doc.moveTo(CM, y).lineTo(PAGE_W - CM, y).lineWidth(lw).strokeColor('black').stroke(); doc.restore();
+        doc.moveTo(X, y).lineTo(X + W, y).lineWidth(lw).strokeColor('black').stroke(); doc.restore();
     };
-    // 一行文字，放不下時縮小字級（最小 min）
-    const fit = (text, font, size, min, opts = {}) => {
-        let sz = size;
-        doc.font(font);
-        while (sz > min && doc.fontSize(sz).widthOfString(text) > CCW) sz -= 0.5;
-        return sz;
+    // 放進一行的字級（最小 min）
+    const fitSize = (t, size, min, width = W) => { let sz = size; while (sz > min && wOf(t, sz) > width) sz -= 0.25; return sz; };
+    // 換行：只在標點（，、。）後斷，挑兩行長度最接近的位置；沒有標點才在中間斷
+    const balance = (t, size, width) => {
+        if (wOf(t, size) <= width) return [t];
+        const cuts = [];
+        for (let i = 1; i < t.length; i++) if ('，、。；'.includes(t[i - 1])) cuts.push(i);
+        const cand = (cuts.length ? cuts : [...Array(t.length - 1).keys()].map(i => i + 1))
+            .map(i => [t.slice(0, i), t.slice(i)])
+            .filter(([a, b]) => wOf(a, size) <= width && wOf(b, size) <= width)
+            .sort((p, q) => Math.abs(wOf(p[0], size) - wOf(p[1], size)) - Math.abs(wOf(q[0], size) - wOf(q[1], size)));
+        if (cand.length) return cand[0];
+        const mid = Math.ceil(t.length / 2);
+        return [t.slice(0, mid), ...balance(t.slice(mid), size, width)];
     };
-    const text = (t, x, y, font, size, opts = {}) => { doc.font(font).fontSize(size).fillColor('black').text(t, x, y, { lineBreak: false, ...opts }); };
-    // 標籤＋內容（內容可換行），回傳下一行 y
+    // 標籤：內容（同字型、同字級、同一條基線），內容描邊加粗；放不下先縮小再平均換行
     const field = (label, value, y) => {
-        doc.font('Reg').fontSize(NF_SZ.label);
-        const lw = doc.widthOfString(label);
-        text(label, CM, y, 'Reg', NF_SZ.label);
-        let sz = NF_SZ.label; // 內容放不下就縮小一點，保持一行（日期不會把「週X」擠到下一行）
-        doc.font('Bold');
-        while (sz > 8 && doc.fontSize(sz).widthOfString(value || '') > CCW - lw) sz -= 0.25;
-        if (doc.fontSize(sz).widthOfString(value || '') > CCW - lw) { // 還是太長：換行，不截斷
-            const h = doc.heightOfString(value || '', { width: CCW - lw });
-            doc.fillColor('black').text(value || '', CM + lw, y, { width: CCW - lw });
-            return y + Math.max(h, NF_SZ.label) + 5;
-        }
-        text(value || '', CM + lw, y + (NF_SZ.label - sz) / 2, 'Bold', sz);
-        return y + NF_SZ.label + 5;
+        const lw = wOf(label, NF_SZ.label);
+        draw(label, X, y, NF_SZ.label);
+        const sz = fitSize(value, NF_SZ.label, NF_SZ.label - 1.5, W - lw);
+        const lines = balance(String(value || ''), sz, W - lw);
+        lines.forEach((l, i) => draw(l, X + lw, y + i * (sz + 3), sz, { bold: true }));
+        return y + lines.length * (sz + 3) + 3;
     };
-    // 一段文字：縮字級放進一行（最小 min），還是放不下才換行
-    const para = (t, y, size = NF_SZ.label, min = 8) => {
-        doc.font('Reg');
-        let sz = size;
-        while (sz > min && doc.fontSize(sz).widthOfString(t) > CCW) sz -= 0.25;
-        doc.fontSize(sz);
-        const h = doc.heightOfString(t, { width: CCW });
-        doc.fillColor('black').text(t, CM, y, { width: CCW });
-        return y + h + 4;
-    };
-    // 手寫格：標籤＋底線（加高），可加「□同上」
+    // 手寫格：標籤＋底線（加高），可加「□同上」，地址可多行
     const blank = (label, y, { same = false, lines = 1 } = {}) => {
-        const H = 24;
-        doc.font('Reg').fontSize(NF_SZ.label);
-        const lw = doc.widthOfString(label);
-        const sameW = same ? 30 : 0;
+        const H = 22;
+        const lw = wOf(label, NF_SZ.label);
+        const sameW = same ? 26 : 0;
         for (let i = 0; i < lines; i++) {
             const by = y + H * (i + 1) - 4;
-            if (i === 0) text(label, CM, by - NF_SZ.label - 1, 'Reg', NF_SZ.label);
-            const x0 = i === 0 ? CM + lw + 1 : CM;
-            doc.moveTo(x0, by).lineTo(PAGE_W - CM - (i === 0 ? sameW : 0), by).lineWidth(0.5).strokeColor('black').stroke();
+            if (i === 0) draw(label, X, by - NF_SZ.label - 2, NF_SZ.label);
+            doc.moveTo(i === 0 ? X + lw + 1 : X, by).lineTo(X + W - (i === 0 ? sameW : 0), by).lineWidth(0.5).strokeColor('black').stroke();
         }
         if (same) {
-            const bx = PAGE_W - CM - sameW + 4, byy = y + H - 4 - 8;
-            doc.rect(bx, byy, 8, 8).lineWidth(0.7).strokeColor('black').stroke();
-            text('同上', bx + 10, byy - 0.5, 'Reg', NF_SZ.small);
+            const bx = X + W - sameW + 4, top = y + H - 4 - 7.5;
+            doc.rect(bx, top, 7, 7).lineWidth(0.6).strokeColor('black').stroke();
+            draw('同上', bx + 9, top - 0.5, NF_SZ.small);
         }
         return y + H * lines + 2;
     };
-    const section = (title, y) => {
-        line(y, 1); y += 4;
-        text(title, CM, y, 'Bold', NF_SZ.title - 1);
-        return y + NF_SZ.title + 4;
+    const section = (title, y) => { line(y, 0.9); y += 4; draw(title, X, y, NF_SZ.section, { bold: true }); return y + NF_SZ.section + 5; };
+    // 條列（・）：每點只在標點斷行、兩行長度接近，第二行對齊文字開頭
+    const bullets = (items, y) => {
+        const bw = wOf('・', NF_SZ.label);
+        for (const t of items) {
+            draw('・', X, y, NF_SZ.label);
+            // 只差一點放不下：縮小最多 1pt 保持一行；真的太長才在標點平均換行
+            const sz = fitSize(t, NF_SZ.label, NF_SZ.label - 1, W - bw);
+            const lines = wOf(t, sz) <= W - bw ? [t] : balance(t, NF_SZ.label, W - bw);
+            const lsz = lines.length === 1 ? sz : NF_SZ.label;
+            lines.forEach((l, i) => draw(l, X + bw, y + i * (lsz + 3), lsz));
+            y += lines.length * (lsz + 3) + 2;
+        }
+        return y;
     };
-    return { line, fit, text, field, blank, section, para };
+    return { X, W, draw, wOf, line, fitSize, balance, field, blank, section, bullets };
 }
 
 // 抬頭到總計（兩聯共用）
-function nfSlipOrderPart(doc, data, copyName, withLogo) {
+function nfSlipOrderPart(doc, data, withLogo) {
     const P = nfSlipParts(doc);
-    let y = 2;
+    const { X, W } = P;
+    let y = NF_M;
     if (withLogo && NF_LOGO) {
-        const w = CCW, h = w * 145 / 768;
-        doc.image(NF_LOGO, CM, y, { width: w });
-        y += h + 4;
+        doc.image(NF_LOGO, X, y, { width: W });
+        y += W * 145 / 768 + 4;
         const contact = `${NF_STORE.phone}｜${NF_STORE.address}`;
-        const csz = P.fit(contact, 'Reg', NF_SZ.small, 6);
-        P.text(contact, CM, y, 'Reg', csz, { width: CCW, align: 'center' });
-        y += csz + 4;
-        P.line(y, 1); y += 5;
+        const csz = P.fitSize(contact, NF_SZ.small, 5.5);
+        P.draw(contact, X, y, csz, { width: W, align: 'center' });
+        y += csz + 5;
+        P.line(y, 0.9); y += 5;
     }
-    const title = `年菜訂購單｜${data.seqLabel || ''}`;
-    const tsz = P.fit(title, 'Bold', NF_SZ.title, 8);
-    P.text(title, CM, y, 'Bold', tsz, { width: CCW, align: 'center' });
-    y += tsz + 4;
-    P.text(`【${copyName}】`, CM, y, 'Bold', NF_SZ.label, { width: CCW, align: 'center' });
-    y += NF_SZ.label + 6;
+    y = P.field('訂單編號：', data.seqLabel || '', y);
     y = P.field('訂購日期：', nfDateWeek(data.orderDate || Date.now()), y);
     y = P.field('出貨方式：', data.deliveryMethod === 'delivery' ? '宅配' : '來店自取', y);
 
     // 訂單明細
     y = P.section('訂單明細', y);
-    const QW = 22, AW = 40, NW = CCW - QW - AW;
-    P.text('品名', CM, y, 'Reg', NF_SZ.small);
-    P.text('數量', CM + NW, y, 'Reg', NF_SZ.small, { width: QW, align: 'center' });
-    P.text('小計', CM + NW + QW, y, 'Reg', NF_SZ.small, { width: AW, align: 'right' });
+    const QW = 20, AW = 36, NW = W - QW - AW;
+    P.draw('品名', X, y, NF_SZ.small);
+    P.draw('數量', X + NW, y, NF_SZ.small, { width: QW, align: 'center' });
+    P.draw('小計', X + NW + QW, y, NF_SZ.small, { width: AW, align: 'right' });
     y += NF_SZ.small + 3;
     P.line(y, 0.4, true); y += 4;
+    const money = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
     const rows = (data.items || []).map(it => ({ ...it, qty: it.quantity || it.qty || 1 }));
     for (const r of rows) {
-        doc.font('Bold').fontSize(NF_SZ.item);
-        const nh = doc.heightOfString(r.name || '', { width: NW });
-        doc.fillColor('black').text(r.name || '', CM, y, { width: NW });
-        P.text(String(r.qty), CM + NW, y, 'Reg', NF_SZ.item, { width: QW, align: 'center' });
-        P.text(`$${((r.price || 0) * r.qty).toLocaleString('en-US')}`, CM + NW + QW, y, 'Reg', NF_SZ.item, { width: AW, align: 'right' });
-        y += Math.max(nh, NF_SZ.item) + 3;
+        const nameLines = P.balance(r.name || '', NF_SZ.item, NW - 2);
+        nameLines.forEach((l, i) => P.draw(l, X, y + i * (NF_SZ.item + 2), NF_SZ.item, { bold: true }));
+        P.draw(String(r.qty), X + NW, y, NF_SZ.item, { width: QW, align: 'center' });
+        P.draw(money((r.price || 0) * r.qty), X + NW + QW, y, NF_SZ.item, { width: AW, align: 'right' });
+        y += nameLines.length * (NF_SZ.item + 2) + 2;
         for (const c of r.bundleComponents || []) {
-            P.text(`・${c.name}${c.qty > 1 ? ` ×${c.qty}` : ''}`, CM + 6, y, 'Reg', NF_SZ.sub, { width: CCW - 6 });
+            P.draw(`・${c.name}${c.qty > 1 ? ` ×${c.qty}` : ''}`, X + 5, y, NF_SZ.sub);
             y += NF_SZ.sub + 2.5;
         }
         if ((r.bundleComponents || []).length) y += 2;
@@ -1445,12 +1448,13 @@ function nfSlipOrderPart(doc, data, copyName, withLogo) {
     const ship = data.shippingFee || 0;
     const total = data.total != null ? data.total : subtotal + ship;
     if (ship > 0) {
-        P.text('小計', CM, y, 'Reg', NF_SZ.label); P.text(`$${subtotal.toLocaleString('en-US')}`, CM, y, 'Reg', NF_SZ.label, { width: CCW, align: 'right' }); y += NF_SZ.label + 3;
-        P.text('運費', CM, y, 'Reg', NF_SZ.label); P.text(`$${ship.toLocaleString('en-US')}`, CM, y, 'Reg', NF_SZ.label, { width: CCW, align: 'right' }); y += NF_SZ.label + 4;
+        P.draw('小計', X, y, NF_SZ.label); P.draw(money(subtotal), X, y, NF_SZ.label, { width: W, align: 'right' }); y += NF_SZ.label + 3;
+        P.draw('運費', X, y, NF_SZ.label); P.draw(money(ship), X, y, NF_SZ.label, { width: W, align: 'right' }); y += NF_SZ.label + 4;
     }
-    P.text('總計', CM, y + 2, 'Bold', NF_SZ.label + 1);
-    P.text(`$${total.toLocaleString('en-US')}`, CM, y, 'Reg', NF_SZ.total, { width: CCW, align: 'right' });
-    P.text(`$${total.toLocaleString('en-US')}`, CM + 0.3, y, 'Reg', NF_SZ.total, { width: CCW, align: 'right' }); // 疊印加粗
+    // 總計（已付清）：標籤和金額底部對齊
+    const ty = y + (NF_SZ.total - NF_SZ.label) * 0.8;
+    P.draw('總計（已付清）', X, ty, NF_SZ.label, { bold: true });
+    P.draw(money(total), X, y, NF_SZ.total, { bold: true, width: W, align: 'right' });
     y += NF_SZ.total + 6;
     return { y, P };
 }
@@ -1458,18 +1462,18 @@ function nfSlipOrderPart(doc, data, copyName, withLogo) {
 // 顧客聯：確認訂購時印，客人帶回去（取貨時出示）
 function buildNianfaiConfirmPDF(data, filePath) {
     return nfRenderSlip((doc) => {
-        let { y, P } = nfSlipOrderPart(doc, data, '顧客聯', true);
+        let { y, P } = nfSlipOrderPart(doc, data, true);
         if (data.deliveryMethod === 'delivery') {
             y = P.section('宅配資訊', y);
-            y = P.field('寄出期間：', String(data.deliveryPeriod || '').replace(/^\d{4}\//, '').replace(/\s*[~～]\s*/, '～').replace(/\s+/g, ''), y); // 年份已在訂購日期
+            y = P.field('寄出期間：', String(data.deliveryPeriod || '').replace(/^\d{4}\//, '').replace(/\s*[~～]\s*/, '～').replace(/\s+/g, ''), y);
             y = P.section('注意事項', y);
-            y = P.para('宅配統一於寄出期間寄出，恕無法指定到貨日期。', y);
+            y = P.bullets(['宅配統一於寄出期間寄出，恕無法指定到貨日期。'], y);
         } else {
             y = P.section('取貨資訊', y);
             y = P.field('取貨日期：', nfDateWeek(data.pickupDate), y);
             y = P.field('取貨時間：', data.pickupHours || '', y);
             y = P.section('注意事項', y);
-            y = P.para('取貨時請出示此單據以利作業。', y);
+            y = P.bullets(['請依照取貨日期前往取貨。', '取貨時請出示此單據以利作業。'], y);
         }
         return y;
     }, filePath);
@@ -1478,9 +1482,7 @@ function buildNianfaiConfirmPDF(data, filePath) {
 // 存根聯：結帳時印，店家留存；客人在手寫格填資料（之後到年菜訂單頁補登）
 function buildNianfaiStubPDF(data, filePath) {
     return nfRenderSlip((doc) => {
-        let { y, P } = nfSlipOrderPart(doc, data, '存根聯', false);
-        P.text('已付清', CM, y, 'Bold', NF_SZ.label, { width: CCW, align: 'center' });
-        y += NF_SZ.label + 4;
+        let { y, P } = nfSlipOrderPart(doc, data, false);
         if (data.deliveryMethod === 'delivery') {
             y = P.section('宅配資訊', y);
             y = P.blank('訂購人姓名：', y);
@@ -1492,7 +1494,7 @@ function buildNianfaiStubPDF(data, filePath) {
             y = P.section('取貨資訊', y);
             y = P.blank('訂購人姓名：', y);
             y = P.blank('訂購人電話：', y);
-            y += 2;
+            y += 3;
             y = P.field('取貨日期：', nfDateWeek(data.pickupDate), y);
             y = P.field('取貨時間：', data.pickupHours || '', y);
         }
