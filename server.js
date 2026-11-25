@@ -1286,7 +1286,7 @@ function buildCustomerReceiptPDF(data, filePath) {
 }
 
 // ----------------------------------------------------
-// 【年菜】二聯單：顧客聯（確認訂購時印，給客人）／存根聯（結帳時印，店家留存、客人手寫資料）
+// 【年菜】二聯單：存根聯（確認訂購時印，客人在手寫格填資料，店家留存）／顧客聯（結帳後印，給客人取貨時出示）
 // data: { seqLabel（訂購編號）, year, orderDate, deliveryMethod, pickupDate, deliveryPeriod,
 //         items[{ name, qty, price, bundleComponents[] }], subtotal, shippingFee, total,
 //         pickupHours（server 依年度設定算好） }
@@ -1313,6 +1313,11 @@ function nfDateWeek(v) {
     }
     const wd = new Date(Date.UTC(+y, +m - 1, +d)).getUTCDay();
     return `${y}/${m}/${d} (${WEEK[wd]})`;
+}
+
+// 時間戳記 → 'YYYY/MM/DD HH:mm:ss'（台北時間）
+function nfDateTime(v) {
+    return new Date(v).toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }).replace(/-/g, '/');
 }
 
 // 先量高度再正式畫（熱感紙長度依內容）
@@ -1385,7 +1390,8 @@ function nfSlipParts(doc) {
         }
         return y + H * lines + 2;
     };
-    const section = (title, y) => { line(y, 0.9); y += 4; draw(title, X, y, NF_SZ.section, { bold: true }); return y + NF_SZ.section + 5; };
+    // 區塊：分隔線上下都留空隙
+    const section = (title, y) => { y += 3; line(y, 0.9); y += 7; draw(title, X, y, NF_SZ.section, { bold: true }); return y + NF_SZ.section + 6; };
     // 條列（・）：每點只在標點斷行、兩行長度接近，第二行對齊文字開頭
     const bullets = (items, y) => {
         const bw = wOf('・', NF_SZ.label);
@@ -1404,7 +1410,7 @@ function nfSlipParts(doc) {
 }
 
 // 抬頭到總計（兩聯共用）
-function nfSlipOrderPart(doc, data, withLogo) {
+function nfSlipOrderPart(doc, data, withLogo, paid) {
     const P = nfSlipParts(doc);
     const { X, W } = P;
     let y = NF_M;
@@ -1414,15 +1420,15 @@ function nfSlipOrderPart(doc, data, withLogo) {
         const contact = `${NF_STORE.phone}｜${NF_STORE.address}`;
         const csz = P.fitSize(contact, NF_SZ.small, 5.5);
         P.draw(contact, X, y, csz, { width: W, align: 'center' });
-        y += csz + 5;
-        P.line(y, 0.9); y += 5;
+        y += csz + 6;
+        P.line(y, 0.9); y += 8;
     }
     y = P.field('訂單編號：', data.seqLabel || '', y);
-    y = P.field('訂購日期：', nfDateWeek(data.orderDate || Date.now()), y);
+    y = P.field('訂購日期：', nfDateTime(data.orderDate || Date.now()), y);
     y = P.field('出貨方式：', data.deliveryMethod === 'delivery' ? '宅配' : '來店自取', y);
 
     // 訂單明細
-    y = P.section('訂單明細', y);
+    y = P.section(`${data.year || ''} 年菜訂單明細`.trim(), y);
     const QW = 20, AW = 36, NW = W - QW - AW;
     P.draw('品名', X, y, NF_SZ.small);
     P.draw('數量', X + NW, y, NF_SZ.small, { width: QW, align: 'center' });
@@ -1443,7 +1449,7 @@ function nfSlipOrderPart(doc, data, withLogo) {
         }
         if ((r.bundleComponents || []).length) y += 2;
     }
-    P.line(y, 0.6); y += 5;
+    y += 2; P.line(y, 0.6); y += 7;
     const subtotal = data.subtotal != null ? data.subtotal : rows.reduce((s, r) => s + (r.price || 0) * r.qty, 0);
     const ship = data.shippingFee || 0;
     const total = data.total != null ? data.total : subtotal + ship;
@@ -1453,16 +1459,16 @@ function nfSlipOrderPart(doc, data, withLogo) {
     }
     // 總計（已付清）：標籤和金額底部對齊
     const ty = y + (NF_SZ.total - NF_SZ.label) * 0.8;
-    P.draw('總計（已付清）', X, ty, NF_SZ.label, { bold: true });
+    P.draw(paid ? '總計（已付清）' : '總計', X, ty, NF_SZ.label, { bold: true });
     P.draw(money(total), X, y, NF_SZ.total, { bold: true, width: W, align: 'right' });
     y += NF_SZ.total + 6;
     return { y, P };
 }
 
-// 顧客聯：確認訂購時印，客人帶回去（取貨時出示）
+// 顧客聯：結帳後印，客人帶回去（取貨時出示），總計標「已付清」
 function buildNianfaiConfirmPDF(data, filePath) {
     return nfRenderSlip((doc) => {
-        let { y, P } = nfSlipOrderPart(doc, data, true);
+        let { y, P } = nfSlipOrderPart(doc, data, true, true);
         if (data.deliveryMethod === 'delivery') {
             y = P.section('宅配資訊', y);
             y = P.field('寄出期間：', String(data.deliveryPeriod || '').replace(/^\d{4}\//, '').replace(/\s*[~～]\s*/, '～').replace(/\s+/g, ''), y);
@@ -1479,10 +1485,10 @@ function buildNianfaiConfirmPDF(data, filePath) {
     }, filePath);
 }
 
-// 存根聯：結帳時印，店家留存；客人在手寫格填資料（之後到年菜訂單頁補登）
+// 存根聯：確認訂購時印（尚未付款），客人在手寫格填資料，店家留存（之後到年菜訂單頁補登）
 function buildNianfaiStubPDF(data, filePath) {
     return nfRenderSlip((doc) => {
-        let { y, P } = nfSlipOrderPart(doc, data, false);
+        let { y, P } = nfSlipOrderPart(doc, data, false, false);
         if (data.deliveryMethod === 'delivery') {
             y = P.section('宅配資訊', y);
             y = P.blank('訂購人姓名：', y);
@@ -1517,7 +1523,7 @@ async function nianfaiPickupHoursFor(year, pickupDate) {
 // ----------------------------------------------------
 // 【列印】POST /print
 // printMode: 'kitchen' → 廚房聯×2, 'customer' → 顧客聯×1, 'all' → 廚房聯×2 + 顧客聯×1,
-//            'nianfai-confirm' → 年菜顧客聯（確認訂購用）, 'nianfai-stub' → 年菜存根聯（結帳用）
+//            'nianfai-stub' → 年菜存根聯（確認訂購時印，客人填資料）, 'nianfai-customer' → 年菜顧客聯（結帳後印給客人）
 // ----------------------------------------------------
 app.post('/print', printRateLimit, async (req, res) => {
     const data = req.body;
@@ -1563,15 +1569,15 @@ app.post('/print', printRateLimit, async (req, res) => {
                 console.log('顧客聯已送出（1份）');
             }
 
-            // 年菜：確認訂購印顧客聯（正式聯），結帳印存根聯，兩個時機分開印、內容不同
-            if (printMode === 'nianfai-confirm' || printMode === 'nianfai-stub') {
+            // 年菜：確認訂購印存根聯（客人填資料），結帳印顧客聯（給客人），兩個時機分開印、內容不同
+            if (printMode === 'nianfai-customer' || printMode === 'nianfai-stub') {
                 data.pickupHours = await nianfaiPickupHoursFor(data.year, data.pickupDate).catch(() => '');
             }
-            if (printMode === 'nianfai-confirm') {
-                const fc = path.join(os.tmpdir(), `nianfai_confirm_${Date.now()}.pdf`);
+            if (printMode === 'nianfai-customer') {
+                const fc = path.join(os.tmpdir(), `nianfai_customer_${Date.now()}.pdf`);
                 const hc = await buildNianfaiConfirmPDF(data, fc);
                 await printPDF(fc, hc, 1);
-                console.log('年菜顧客聯（正式聯）已送出');
+                console.log('年菜顧客聯已送出');
             }
             if (printMode === 'nianfai-stub') {
                 const fs2 = path.join(os.tmpdir(), `nianfai_stub_${Date.now()}.pdf`);
@@ -2511,7 +2517,7 @@ const NIANFAI_STOCK_CATEGORY = '年菜庫存';
 // 年菜流水號顯示：年份末兩碼＋3 位流水號，例如 2027 年第 1 號 → 27001（2028 從 28001 開始）
 const nianfaiSeqLabel = (year, seqNo) => `${Number(year) % 100}${String(seqNo).padStart(3, '0')}`; // 舊格式（27001），只剩相容用
 // 訂購編號：販售年度 2 碼＋出單日期 yymmdd＋流水號 3 碼，例 27261205001（2027 年菜、2026/12/05 確認訂購、第 1 號）。
-// 出單日期＝確認訂購（取得流水號）那天，顧客聯當下就印出，所以存根聯、表單、Sheet、確認信都用同一個。
+// 出單日期＝確認訂購（取得流水號）那天，存根聯當下就印出，所以顧客聯、表單、Sheet、確認信都用同一個。
 const taipeiYYMMDD = (d) => {
     const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: '2-digit', month: '2-digit', day: '2-digit' }).formatToParts(new Date(d || Date.now()));
     const g = (t) => p.find(x => x.type === t).value;
@@ -3722,13 +3728,13 @@ app.post('/print-preview', async (req, res) => {
         const slips = [];
 
         // 年菜單聯預覽（確認訂購/結帳分開測試）
-        if (data.printMode === 'nianfai-confirm' || data.printMode === 'nianfai-stub') {
+        if (data.printMode === 'nianfai-customer' || data.printMode === 'nianfai-stub') {
             data.pickupHours = await nianfaiPickupHoursFor(data.year, data.pickupDate).catch(() => '');
         }
-        if (data.printMode === 'nianfai-confirm') {
-            const fnameC = `preview_nf_confirm_${ts}.pdf`;
+        if (data.printMode === 'nianfai-customer') {
+            const fnameC = `preview_nf_customer_${ts}.pdf`;
             const hc = await buildNianfaiConfirmPDF(data, path.join(os.tmpdir(), fnameC));
-            slips.push({ name: '年菜顧客聯（正式聯）', url: `/print-preview/${fnameC}`, height: hc });
+            slips.push({ name: '年菜顧客聯', url: `/print-preview/${fnameC}`, height: hc });
             return res.json({ slips });
         }
         if (data.printMode === 'nianfai-stub') {

@@ -1,6 +1,6 @@
 // src/pages/NianfaiOrder.js — 年菜點單頁（修正單 #01 第 5 節）
 // 取代舊的 NianfaiModal 彈窗。版面比照一般點單頁：左側工作區、右側品項卡片。
-// 兩步流程：「確認訂購」保留流水號、印顧客聯（不含訂購人資料）；
+// 兩步流程：「確認訂購」保留訂購編號、印存根聯（客人在手寫格填資料）；結帳後印顧客聯給客人；
 // 「結帳」才真的成立訂單/發票，資料待補，結帳完回到年菜佇列頁補登。
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
@@ -203,7 +203,7 @@ const NianfaiOrderPage = () => {
         resetOrder();
     };
 
-    // 返回：已確認訂購（保留了流水號、印了顧客聯）但還沒結帳 → 提醒，確定就記為放棄；
+    // 返回：已確認訂購（保留了訂購編號、印了存根聯）但還沒結帳 → 提醒，確定就記為放棄；
     // 還沒確認訂購 → 這筆訂單視為不曾存在，直接離開
     const handleGoBack = async () => {
         if (reservationId) {
@@ -238,11 +238,11 @@ const NianfaiOrderPage = () => {
             fetch('/print', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    printMode: 'nianfai-confirm', seqLabel: label, year, orderDate: result.confirmedAt,
+                    printMode: 'nianfai-stub', seqLabel: label, year, orderDate: result.confirmedAt,
                     deliveryMethod, pickupDate, deliveryPeriod,
                     items: buildPrintItems(), subtotal, shippingFee, total,
                 }),
-            }).catch(e => console.warn('年菜顧客聯列印失敗：', e));
+            }).catch(e => console.warn('年菜存根聯列印失敗：', e));
         } catch (e) {
             setError(`確認訂購失敗：${e.message}`);
         } finally {
@@ -256,19 +256,19 @@ const NianfaiOrderPage = () => {
         fetch('/print', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                printMode: 'nianfai-stub', seqLabel: label, year, orderDate: result.confirmedAt || confirmedAtRef.current,
+                printMode: 'nianfai-customer', seqLabel: label, year, orderDate: result.confirmedAt || confirmedAtRef.current,
                 deliveryMethod, pickupDate, deliveryPeriod,
                 items: buildPrintItems(), subtotal, shippingFee, total: result.total,
             }),
-        }).catch(e => console.warn('年菜存根聯列印失敗：', e));
+        }).catch(e => console.warn('年菜顧客聯列印失敗：', e));
         resetOrder();
-        await showAlert(`訂購編號 ${label}\n請客人在存根聯填寫資料，稍後補登`, { title: '結帳完成', icon: 'success', confirmText: '前往年菜訂單' });
+        await showAlert(`訂購編號 ${label}\n顧客聯交給客人；存根聯的資料稍後到年菜訂單補登`, { title: '結帳完成', icon: 'success', confirmText: '前往年菜訂單' });
         navigate('/nianfai-queue');
     };
 
     const handleCheckout = async () => {
         setError('');
-        if (isDirty) { setError('購物車內容已變更，請重新按「確認訂購」並重印顧客聯後才能結帳'); return; }
+        if (isDirty) { setError('購物車內容已變更，請重新按「確認訂購」並重印存根聯後才能結帳'); return; }
         setCheckingOut(true);
         try {
             await doCheckout(false);
@@ -417,12 +417,12 @@ const NianfaiOrderPage = () => {
                             <button onClick={handleConfirmOrder} disabled={confirming || cartItems.length === 0}
                                 className="flex-1 py-2 rounded-xl bg-gray-700 text-white disabled:opacity-50 flex flex-col items-center leading-tight">
                                 <span className="font-black text-base">{confirming ? '處理中...' : reservationId ? '重新確認' : '確認訂購'}</span>
-                                <span className="text-[11px] font-bold opacity-80">{reservationId ? '重印顧客聯' : '印顧客聯'}</span>
+                                <span className="text-[11px] font-bold opacity-80">{reservationId ? '重印存根聯' : '印存根聯'}</span>
                             </button>
                             <button onClick={handleCheckout} disabled={checkingOut || isDirty}
                                 className="flex-1 py-2 rounded-xl bg-[#D47856] text-white disabled:opacity-50 flex flex-col items-center leading-tight">
                                 <span className="font-black text-base">{checkingOut ? '處理中...' : '結帳'}</span>
-                                <span className="text-[11px] font-bold opacity-80">印存根聯</span>
+                                <span className="text-[11px] font-bold opacity-80">印顧客聯</span>
                             </button>
                         </div>
                         {(cartItems.length > 0 || reservationId) && (
