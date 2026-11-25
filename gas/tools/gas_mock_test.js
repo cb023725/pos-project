@@ -113,9 +113,9 @@ const ctx = {
   FormApp: { create: (t) => { const f = makeForm(t); forms[f.getId()] = f; return f; }, openById: (id) => forms[id], ItemType, DestinationType: { SPREADSHEET: 'SS' },
     createTextValidation: () => chain({ build: () => ({}) }) },
   ScriptApp: { getProjectTriggers: () => ctx._triggers.map(h => ({ getHandlerFunction: () => h, getTriggerSourceId: () => null })), deleteTrigger: () => {}, newTrigger: (h) => chain({ create: () => { ctx._triggers.push(h); } }) },
-  Session: { getEffectiveUser: () => ({}) },
-  LockService: { getScriptLock: () => ({ waitLock: () => {}, releaseLock: () => {} }) },
-  Utilities: { sleep: () => {}, formatDate: (d, tz, f) => new Date(d).toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }).replace(/-/g, '/') },
+  Session: { getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' }) },
+  LockService: { getScriptLock: () => ({ waitLock: () => {}, tryLock: () => true, releaseLock: () => {} }) },
+  Utilities: { sleep: () => {}, computeHmacSha256Signature: (v, k) => Array.from(require('crypto').createHmac('sha256', k).update(v).digest()), base64EncodeWebSafe: (b) => Buffer.from(b).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'), formatDate: (d, tz, f) => new Date(d).toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }).replace(/-/g, '/') },
   MailApp: { sendEmail: (o) => { ctx._mails.push({ to: o.to, subject: o.subject, body: o.body }); if (!ctx._quiet) console.log('  [MailApp]', o.subject); }, getRemainingDailyQuota: () => ctx._quota },
   GmailApp: { sendEmail: (to, subj, b, o) => { if (ctx._failTo === to) throw new Error('模擬寄送失敗'); ctx._mails.push({ to, subject: subj, html: o.htmlBody, attachments: (o.attachments || []).length }); if (!ctx._quiet) console.log('  [Gmail] to', to, 'bcc', o.bcc || '-', subj); } },
   // 簡易 Apps Script 範本引擎（<? ?> 程式、<?= ?> 輸出），讓 HTML 範本真的跑一遍
@@ -221,6 +221,25 @@ run('出貨通知：缺出貨日的跳過', () => { const p = ctx.nfMailPreview_
 run('出貨通知：填出貨日後寄出', () => { const sh = ss().getSheetByName('宅配'); const rows = sheetObj('宅配'); const r = rows.findIndex(x => x['訂購姓名'] === '宅配客') + 2;
   sh.getRange(r, colOf('宅配', '出貨日')).setValue('1/26 (二)'); ctx._mails = []; const res = ctx.nfMailSend_('shipped'); const m = ctx._mails.find(x => x.html);
   return { sent: res.sent.map(x => x.name), html: !!m && m.html.includes('1234567890') && m.html.includes('1/26') && m.html.includes('鮑魚人蔘雞湯') }; });
+run('託運單號：格式不對、重複 → 不寄', () => {
+  const sh = ss().getSheetByName('宅配'); const rows = sheetObj('宅配'); const tc = colOf('宅配', '託運單號');
+  const me = rows.findIndex(x => x['訂購姓名'] === '宅配客') + 2; const other = rows.findIndex(x => x['訂購姓名'] === '現場宅配') + 2;
+  const keep = sh.getRange(me, tc).getValue();
+  const rowsNow = () => ctx.nfReadOrderSheets_(ss(), ctx.nfReadSettings_()).rows.delivery;
+  sh.getRange(me, tc).setValue('12345'); const bad = ctx.nfTrackNoProblem_(rowsNow()[me - 2], rowsNow());
+  sh.getRange(me, tc).setValue('123456789012'); sh.getRange(other, tc).setValue('1234-5678-9012'); const dup = ctx.nfTrackNoProblem_(rowsNow()[me - 2], rowsNow());
+  const okNo = (() => { sh.getRange(other, tc).setValue(''); return ctx.nfTrackNoProblem_(rowsNow()[me - 2], rowsNow()) || '通過'; })();
+  sh.getRange(other, tc).setValue(''); sh.getRange(me, tc).setValue(keep);
+  return { bad, dup, okNo, link: String(sh.getRange(me, colOf('宅配', '查詢')).getValue()).includes('HYPERLINK') };
+});
+run('開信追蹤：簽章正確才記錄，工作表顯示已開信', () => {
+  ctx._props.WEB_APP_URL = 'https://script.google.com/macros/s/TEST/exec';
+  const id = sheetObj('宅配').find(x => x['訂購姓名'] === '宅配客')['訂單編號'];
+  const key = 'dev|2027|preShip|' + id; const good = ctx.nfOpenToken_(key);
+  const forged = ctx.nfRecordOpen_(key, 'forged'); const ok = ctx.nfRecordOpen_(key, good);
+  return { forged, ok, status: sheetObj('宅配').find(x => x['訂單編號'] === id)['寄出前確認'] };
+});
+run('Sheet 選單模式：只寄選取的列、取貨提醒不限日期', () => { const p = ctx.nfMailPlan_('pickupReminder', null, [sheetObj('自取')[1]['訂單編號']]); return p.list.map(x => x.name + ':' + (x.reason || '可寄')); });
 run('取貨提醒（明天）＋失敗重試一次', () => { ctx._mails = []; ctx._failTo = 'b@example.com'; const r = ctx.nfMailSend_('pickupReminder', null, null, { retry: true, auto: true }); ctx._failTo = null;
   return { failed: r.failed.map(x => x.name), report: ctx._mails.filter(x => x.subject && x.subject.includes('取貨提醒')).map(x => x.subject), status: sheetObj('自取').map(x => x['取貨提醒']) }; });
 run('取貨提醒失敗後可補寄', () => { ctx._mails = []; const r = ctx.nfMailSend_('pickupReminder'); const m = ctx._mails.find(x => x.html); return { sent: r.sent.map(x => x.name), hours: m && /12:00 ~ (20|16):00/.test(m.html) }; });
@@ -242,6 +261,9 @@ run('改取貨方式 → 搬到另一張表、付款跟著走', () => {
 run('分頁', () => ss().getSheets().map(s => s.getName()).join(' | '));
 run('統計／備料表公式（取樣）', () => ({ stats: ss().getSheetByName('統計').getRange(2, 2).getValue().slice(0, 160), prepHead: ss().getSheetByName('備料表').getRange(1, 1, 1, 4).getValues()[0].join(' | '),
   lookup: ss().getSheetByName('查詢').getRange('A4').getValue().slice(0, 120) }));
+run('寄範本（6 封，含確認信）', () => { ctx._mails = []; const r = ctx.nfMailSample_('review@example.com');
+  const dir = process.env.MAIL_DUMP; if (dir) ctx._mails.filter(m => m.html).forEach((m, i) => fs.writeFileSync(require('path').join(dir, (i + 1) + '.html'), m.html));
+  return { sent: r.sent, leftovers: ctx._mails.filter(m => m.html && /<\?|undefined|NaN/.test(m.html)).map(m => m.subject), subjects: ctx._mails.map(m => m.subject) }; });
 run('測試清空 → 宅配／自取與寄信狀態歸零', () => { ctx.NF_CTX.meta.live = false; ctx.nfResetTestData_(); return { d: ss().getSheetByName('宅配').getLastRow(), p: ss().getSheetByName('自取').getLastRow(), ml: Object.keys(ctx._props).filter(k => k.startsWith('ML_')).length }; });
 if (process.argv.includes('--texts')) {
   const f = ctx.NF_CTX.form;

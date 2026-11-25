@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title><?= data.year ?> 咕咕義小餐館新春年菜訂單</title>
+  <title><?= data.year ?> 新春年菜訂單</title>
   <style>
     body { font-family: "Microsoft JhengHei", "PingFang TC", "Heiti TC", sans-serif; color: #333; line-height: 1.5; }
   </style>
@@ -14,14 +14,21 @@
 
     <div style="margin-bottom: 14px; font-size: 14px;">
       <span style="font-weight: bold; color: #000;"><?= data.name ?></span> 先生/小姐你好：<br><br>
-      <div style="font-size: 12px; color: #444; line-height: 1.6;">
-        我們確認收到【 <?= data.year ?> 咕咕義小餐館新春年菜 】訂單，您的訂單內容如下：<br>
-        訂單時間：<span style="color: #2A52BE; font-weight: bold;"><?= data.timestamp ?></span>（取貨或查詢時請出示）
+      <div style="font-size: 13px; color: #444; line-height: 1.8;">
+        我們已收到您的 <?= data.year ?> 新春年菜訂單<br>
+        訂單內容如下，取貨或查詢時請出示
       </div>
     </div>
 
     <h3 style="color: #333; font-size: 15px; margin-top: 30px; margin-bottom: 12px; letter-spacing: 1px; border-left: 8px solid #d32f2f; padding-left: 10px;">訂購明細</h3>
     <div style="border: 1px solid #f0f0f0; border-radius: 8px; padding: 5px; margin-bottom: 10px;">
+      <div style="padding: 8px 5px 10px; font-size: 12px; color: #666; border-bottom: 1px solid #f0f0f0; margin-bottom: 4px;">
+        <? if (data.isOnsite && data.seqLabel) { ?>
+        訂購編號：<span style="color: #2A52BE; font-weight: bold;"><?= data.seqLabel ?></span>
+        <? } else { ?>
+        訂單時間：<span style="color: #2A52BE; font-weight: bold;"><?= data.timestamp ?></span>
+        <? } ?>
+      </div>
       <table style="width: 100%; border-collapse: collapse; border: none;">
         <thead>
           <tr style="background-color: #f8f8f8;">
@@ -66,23 +73,23 @@
     <div style="background-color: #fcfcfc; border: 1px solid #f0f0f0; border-radius: 8px; padding: 5px 10px; margin-bottom: 10px;">
       <table style="width: 100%; border-collapse: collapse; border: none; margin: 0;">
         <tr style="border-bottom: 1px solid #f0f0f0;">
-          <td style="border: none; padding: 8px 0; width: 90px; color: #888; font-size: 12px; vertical-align: top;">取貨方式</td>
+          <td style="border: none; padding: 8px 0; width: 80px; color: #888; font-size: 12px; vertical-align: top;">取貨方式</td>
           <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><?= data.method ?></td>
         </tr>
         <tr style="border-bottom: 1px solid #f0f0f0;">
-          <td style="border: none; padding: 8px 0; width: 90px; color: #888; font-size: 12px; vertical-align: top;">寄出日期</td>
-          <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><?= data.shipPeriod ?></td>
+          <td style="border: none; padding: 8px 0; width: 80px; color: #888; font-size: 12px; vertical-align: top;">寄出日期</td>
+          <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><?= data.shipPeriodShort ?></td>
         </tr>
         <tr style="border-bottom: 1px solid #f0f0f0;">
-          <td style="border: none; padding: 8px 0; width: 90px; color: #888; font-size: 12px; vertical-align: top;">收件姓名</td>
+          <td style="border: none; padding: 8px 0; width: 80px; color: #888; font-size: 12px; vertical-align: top;">收件姓名</td>
           <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><?= data.recipientName ?></td>
         </tr>
         <tr style="border-bottom: 1px solid #f0f0f0;">
-          <td style="border: none; padding: 8px 0; width: 90px; color: #888; font-size: 12px; vertical-align: top;">收件電話</td>
+          <td style="border: none; padding: 8px 0; width: 80px; color: #888; font-size: 12px; vertical-align: top;">收件電話</td>
           <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><?= data.recipientPhone ?></td>
         </tr>
         <tr>
-          <td style="border: none; padding: 8px 0; width: 90px; color: #888; font-size: 12px; vertical-align: top;">收件地址</td>
+          <td style="border: none; padding: 8px 0; width: 80px; color: #888; font-size: 12px; vertical-align: top;">收件地址</td>
           <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><?= data.recipientAddress ?></td>
         </tr>
       </table>
@@ -90,45 +97,56 @@
 
     <h3 style="color: #333; font-size: 15px; margin-top: 30px; margin-bottom: 12px; letter-spacing: 1px; border-left: 8px solid #f59e0b; padding-left: 10px;">注意事項</h3>
     <div style="border: 1px solid #f0f0f0; border-radius: 8px; padding: 5px; margin-bottom: 10px;">
-      <div style="font-size: 12px; color: #444; line-height: 1.6; padding: 6px 4px;">・宅配統一 <?= data.shipPeriod ?> 寄出，年節物流繁忙，恕無法指定到貨日期</div>
-      <div style="font-size: 12px; color: #444; line-height: 1.6; padding: 6px 4px;">・預購商品需付款完成才算訂購成功，如尚未結帳請記得撥空轉帳至下方匯款帳號</div>
-      <div style="font-size: 12px; color: #444; line-height: 1.6; padding: 6px 4px;">・如需變更訂購數量/取貨日期/確認匯款/或其他年菜相關諮詢請加入<a href="<?= data.line ?>" target="_blank" style="color: #2A52BE; font-weight: bold;">官方LINE</a>洽詢</div>
+      <? var __n = 0; ?>
+      <table style="width: 100%; border-collapse: collapse; border: none;">
+        <tr><td style="width: 20px; padding: 5px 0 5px 4px; vertical-align: top; font-size: 12px; color: #999;"><?= ++__n ?>.</td><td style="padding: 5px 4px 5px 0; vertical-align: top; font-size: 12px; color: #444; line-height: 1.6;">宅配統一 <?= data.shipPeriodShort ?> 寄出</td></tr>
+        <tr><td style="width: 20px; padding: 5px 0 5px 4px; vertical-align: top; font-size: 12px; color: #999;"><?= ++__n ?>.</td><td style="padding: 5px 4px 5px 0; vertical-align: top; font-size: 12px; color: #444; line-height: 1.6;">年節物流繁忙，恕無法指定到貨日期</td></tr>
+        <? if (!data.isOnsite) { ?>
+        <tr><td style="width: 20px; padding: 5px 0 5px 4px; vertical-align: top; font-size: 12px; color: #999;"><?= ++__n ?>.</td><td style="padding: 5px 4px 5px 0; vertical-align: top; font-size: 12px; color: #444; line-height: 1.6;">預購商品需付款完成才算訂購成功</td></tr>
+        <? } ?>
+        <? if (!data.isOnsite) { ?>
+        <tr><td style="width: 20px; padding: 5px 0 5px 4px; vertical-align: top; font-size: 12px; color: #999;"><?= ++__n ?>.</td><td style="padding: 5px 4px 5px 0; vertical-align: top; font-size: 12px; color: #444; line-height: 1.6;">尚未付款請轉帳至下方匯款帳號</td></tr>
+        <? } ?>
+        <tr><td style="width: 20px; padding: 5px 0 5px 4px; vertical-align: top; font-size: 12px; color: #999;"><?= ++__n ?>.</td><td style="padding: 5px 4px 5px 0; vertical-align: top; font-size: 12px; color: #444; line-height: 1.6;">變更訂單或確認匯款請洽<a href="<?= data.line ?>" target="_blank" style="color: #2A52BE; font-weight: bold;">官方 LINE</a></td></tr>
+      </table>
     </div>
 
     <div style="text-align: center; margin: 20px 0 6px;">
-      <a href="<?= data.formUrl ?>" target="_blank" style="background-color: #68a0a9; border-radius: 28px; color: #ffffff; display: inline-block; font-size: 14px; font-weight: bold; padding: 8px 28px; text-decoration: none;">我要加購年菜</a>
+      <a href="<?= data.formUrl ?>" target="_blank" style="background-color: #C1032F; border-radius: 28px; color: #ffffff; display: inline-block; font-size: 14px; font-weight: bold; letter-spacing: 1px; padding: 9px 30px; text-decoration: none;">我要加購年菜</a>
     </div>
 
+    <? if (!data.isOnsite) { ?>
     <h3 style="color: #333; font-size: 15px; margin-top: 30px; margin-bottom: 12px; letter-spacing: 1px; border-left: 8px solid #4A9A7A; padding-left: 10px;">匯款資訊</h3>
     <div style="background-color: #fcfcfc; border: 1px solid #f0f0f0; border-radius: 8px; padding: 5px 10px; margin-bottom: 10px;">
       <table style="width: 100%; border-collapse: collapse; border: none; margin: 0;">
         <tr style="border-bottom: 1px solid #f0f0f0;">
-          <td style="border: none; padding: 8px 0; width: 90px; color: #888; font-size: 12px; vertical-align: top;">戶名</td>
+          <td style="border: none; padding: 8px 0; width: 80px; color: #888; font-size: 12px; vertical-align: top;">戶名</td>
           <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><?= data.bankHolder ?></td>
         </tr>
         <tr style="border-bottom: 1px solid #f0f0f0;">
-          <td style="border: none; padding: 8px 0; width: 90px; color: #888; font-size: 12px; vertical-align: top;">銀行名稱</td>
+          <td style="border: none; padding: 8px 0; width: 80px; color: #888; font-size: 12px; vertical-align: top;">銀行名稱</td>
           <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><?= data.bankName ?></td>
         </tr>
         <tr style="border-bottom: 1px solid #f0f0f0;">
-          <td style="border: none; padding: 8px 0; width: 90px; color: #888; font-size: 12px; vertical-align: top;">分行名稱</td>
+          <td style="border: none; padding: 8px 0; width: 80px; color: #888; font-size: 12px; vertical-align: top;">分行名稱</td>
           <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><?= data.bankBranch ?></td>
         </tr>
         <tr>
-          <td style="border: none; padding: 8px 0; width: 90px; color: #888; font-size: 12px; vertical-align: top;">匯款帳號</td>
+          <td style="border: none; padding: 8px 0; width: 80px; color: #888; font-size: 12px; vertical-align: top;">匯款帳號</td>
           <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><?= data.bankAccount ?></td>
         </tr>
       </table>
     </div>
+    <? } ?>
 
     <div style="margin-top: 20px; text-align: center;">
-      <div><img src="https://mcusercontent.com/c27db4d77ffc4c29cdbe402a9/images/945a049c-4a56-d37c-288c-e12771643211.png" width="200" height="auto" alt="咕咕義小餐館" style="display: inline-block; border: 0;"></div>
+      <div><a href="<?= data.mapUrl ?>" target="_blank"><img src="https://mcusercontent.com/c27db4d77ffc4c29cdbe402a9/images/945a049c-4a56-d37c-288c-e12771643211.png" width="200" height="auto" alt="咕咕義小餐館" style="display: inline-block; border: 0;"></a></div>
       <div style="display: inline-block; opacity: 0.6; margin-top: -5px;">
         <table border="0" cellpadding="0" cellspacing="0" role="presentation" style="margin: 0 auto;"><tr><td style="padding: 0 8px;"><a href="https://www.facebook.com/bistrogoodgoodeat/" target="_blank"><img src="https://app-rsrc.getbee.io/public/resources/social-networks-icon-sets/t-only-logo-default-gray/facebook@2x.png" width="24" height="auto" alt="Facebook" title="Facebook" style="display: block; height: auto; border: 0;"></a></td><td style="padding: 0 8px;"><a href="https://www.instagram.com/goodgoodeatrestaurant/" target="_blank"><img src="https://app-rsrc.getbee.io/public/resources/social-networks-icon-sets/t-only-logo-default-gray/instagram@2x.png" width="24" height="auto" alt="Instagram" title="Instagram" style="display: block; height: auto; border: 0;"></a></td><td style="padding: 0 8px;"><a href="<?= data.line ?>" target="_blank"><img src="https://app-rsrc.getbee.io/public/resources/social-networks-icon-sets/t-only-logo-default-gray/line@2x.png" width="24" height="auto" alt="LINE" title="LINE" style="display: block; height: auto; border: 0;"></a></td></tr></table>
       </div>
       <div style="color: #b2b2b2; font-size: 10px; line-height: 1.5; text-align: center; margin-top: 5px; padding: 0 22px;">
         <p style="margin: 0;">聯絡電話：<?= data.storePhone ?></p>
-        <p style="margin: 0;">地址：<a href="https://www.google.com/maps/search/?api=1&amp;query=<?= encodeURIComponent(data.storeAddress) ?>" target="_blank" style="text-decoration: none; color: #969696;"><?= data.storeAddress ?></a></p>
+        <p style="margin: 0;">地址：<a href="<?= data.mapUrl ?>" target="_blank" style="text-decoration: underline; color: #969696;"><?= data.storeAddress ?></a></p>
         <p style="margin: 0;">© Copyright <?= data.year ?>. 咕咕義小餐館. All Rights Reserved.</p>
       </div>
     </div>

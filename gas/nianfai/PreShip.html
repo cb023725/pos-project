@@ -14,10 +14,10 @@
 
     <div style="margin-bottom: 14px; font-size: 14px;">
       <span style="font-weight: bold; color: #000;"><?= data.name ?></span> 先生/小姐你好：<br><br>
-      <div style="font-size: 12px; color: #444; line-height: 1.6;">
-        感謝訂購 <strong>咕咕義小餐館-冷凍年菜料理包</strong><br>
-        年菜將於 <span style="color: #2A52BE; font-weight: bold;"><?= data.shipPeriod ?></span> 黑貓低溫宅配寄出<br>
-        請確認您的收件資訊：
+      <div style="font-size: 13px; color: #444; line-height: 1.8;">
+        感謝您訂購咕咕義冷凍年菜料理包<br>
+        年菜將於 <span style="color: #2A52BE; font-weight: bold;"><?= data.shipPeriodShort ?></span> 寄出<br>
+        寄出前請確認以下收件資訊是否正確
       </div>
     </div>
 
@@ -25,15 +25,15 @@
     <div style="background-color: #fcfcfc; border: 1px solid #f0f0f0; border-radius: 8px; padding: 5px 10px; margin-bottom: 10px;">
       <table style="width: 100%; border-collapse: collapse; border: none; margin: 0;">
         <tr style="border-bottom: 1px solid #f0f0f0;">
-          <td style="border: none; padding: 8px 0; width: 90px; color: #888; font-size: 12px; vertical-align: top;">收件姓名</td>
+          <td style="border: none; padding: 8px 0; width: 80px; color: #888; font-size: 12px; vertical-align: top;">收件姓名</td>
           <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><?= data.receiverName ?></td>
         </tr>
         <tr style="border-bottom: 1px solid #f0f0f0;">
-          <td style="border: none; padding: 8px 0; width: 90px; color: #888; font-size: 12px; vertical-align: top;">收件電話</td>
+          <td style="border: none; padding: 8px 0; width: 80px; color: #888; font-size: 12px; vertical-align: top;">收件電話</td>
           <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><?= data.receiverPhone ?></td>
         </tr>
         <tr>
-          <td style="border: none; padding: 8px 0; width: 90px; color: #888; font-size: 12px; vertical-align: top;">收件地址</td>
+          <td style="border: none; padding: 8px 0; width: 80px; color: #888; font-size: 12px; vertical-align: top;">收件地址</td>
           <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><?= data.receiverAddress ?></td>
         </tr>
       </table>
@@ -41,20 +41,25 @@
 
     <h3 style="color: #333; font-size: 15px; margin-top: 30px; margin-bottom: 12px; letter-spacing: 1px; border-left: 8px solid #f59e0b; padding-left: 10px;">物流小叮嚀</h3>
     <div style="border: 1px solid #f0f0f0; border-radius: 8px; padding: 5px; margin-bottom: 10px;">
-      <div style="font-size: 12px; color: #444; line-height: 1.6; padding: 6px 4px;">・春節期間物流較繁忙，無法指定到貨日期與時段，通常寄出後 <strong>1~3</strong> 天會送達，但實際仍以物流配送為準。</div>
-      <div style="font-size: 12px; color: #444; line-height: 1.6; padding: 6px 4px;">・若您近期有 <strong>出國計畫</strong> 或 <strong>不便收貨</strong>，請盡快告知我們調整出貨日期。</div>
+      <? var __n = 0; ?>
+      <table style="width: 100%; border-collapse: collapse; border: none;">
+        <tr><td style="width: 20px; padding: 5px 0 5px 4px; vertical-align: top; font-size: 12px; color: #999;"><?= ++__n ?>.</td><td style="padding: 5px 4px 5px 0; vertical-align: top; font-size: 12px; color: #444; line-height: 1.6;">年菜由黑貓低溫宅配，寄出後約 <strong>1~3</strong> 天送達</td></tr>
+        <tr><td style="width: 20px; padding: 5px 0 5px 4px; vertical-align: top; font-size: 12px; color: #999;"><?= ++__n ?>.</td><td style="padding: 5px 4px 5px 0; vertical-align: top; font-size: 12px; color: #444; line-height: 1.6;">春節物流繁忙，無法指定到貨日期與時段</td></tr>
+        <tr><td style="width: 20px; padding: 5px 0 5px 4px; vertical-align: top; font-size: 12px; color: #999;"><?= ++__n ?>.</td><td style="padding: 5px 4px 5px 0; vertical-align: top; font-size: 12px; color: #444; line-height: 1.6;">實際送達時間仍以物流配送為準</td></tr>
+        <tr><td style="width: 20px; padding: 5px 0 5px 4px; vertical-align: top; font-size: 12px; color: #999;"><?= ++__n ?>.</td><td style="padding: 5px 4px 5px 0; vertical-align: top; font-size: 12px; color: #444; line-height: 1.6;">近期<strong>出國</strong>或<strong>不便收貨</strong>，請盡快告知調整</td></tr>
+      </table>
     </div>
 
     <p style="color: #d9534f; font-weight: bold; font-size: 14px; text-align: center; margin: 24px 0 0;">預祝 新年快樂，<?= data.greeting ?>！</p>
 
     <div style="margin-top: 20px; text-align: center;">
-      <div><img src="https://mcusercontent.com/c27db4d77ffc4c29cdbe402a9/images/945a049c-4a56-d37c-288c-e12771643211.png" width="200" height="auto" alt="咕咕義小餐館" style="display: inline-block; border: 0;"></div>
+      <div><a href="<?= data.mapUrl ?>" target="_blank"><img src="https://mcusercontent.com/c27db4d77ffc4c29cdbe402a9/images/945a049c-4a56-d37c-288c-e12771643211.png" width="200" height="auto" alt="咕咕義小餐館" style="display: inline-block; border: 0;"></a></div>
       <div style="display: inline-block; opacity: 0.6; margin-top: -5px;">
         <table border="0" cellpadding="0" cellspacing="0" role="presentation" style="margin: 0 auto;"><tr><td style="padding: 0 8px;"><a href="https://www.facebook.com/bistrogoodgoodeat/" target="_blank"><img src="https://app-rsrc.getbee.io/public/resources/social-networks-icon-sets/t-only-logo-default-gray/facebook@2x.png" width="24" height="auto" alt="Facebook" title="Facebook" style="display: block; height: auto; border: 0;"></a></td><td style="padding: 0 8px;"><a href="https://www.instagram.com/goodgoodeatrestaurant/" target="_blank"><img src="https://app-rsrc.getbee.io/public/resources/social-networks-icon-sets/t-only-logo-default-gray/instagram@2x.png" width="24" height="auto" alt="Instagram" title="Instagram" style="display: block; height: auto; border: 0;"></a></td><td style="padding: 0 8px;"><a href="<?= data.line ?>" target="_blank"><img src="https://app-rsrc.getbee.io/public/resources/social-networks-icon-sets/t-only-logo-default-gray/line@2x.png" width="24" height="auto" alt="LINE" title="LINE" style="display: block; height: auto; border: 0;"></a></td></tr></table>
       </div>
       <div style="color: #b2b2b2; font-size: 10px; line-height: 1.5; text-align: center; margin-top: 5px; padding: 0 22px;">
         <p style="margin: 0;">聯絡電話：<?= data.storePhone ?></p>
-        <p style="margin: 0;">地址：<a href="https://www.google.com/maps/search/?api=1&amp;query=<?= encodeURIComponent(data.storeAddress) ?>" target="_blank" style="text-decoration: none; color: #969696;"><?= data.storeAddress ?></a></p>
+        <p style="margin: 0;">地址：<a href="<?= data.mapUrl ?>" target="_blank" style="text-decoration: underline; color: #969696;"><?= data.storeAddress ?></a></p>
         <p style="margin: 0;">© Copyright <?= data.year ?>. 咕咕義小餐館. All Rights Reserved.</p>
       </div>
     </div>

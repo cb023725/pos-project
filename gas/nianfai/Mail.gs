@@ -14,15 +14,18 @@
  *   - Gmail 每天可寄封數有上限（一般帳號約 100 封，含確認信）；超過的部分不寄、列出來隔天再寄
  * 出貨通知與取貨提醒附上「加熱說明小卡」（「設定」的「加熱說明小卡ID」，空白就不附）。
  */
-function nfMailPlan_(type, dateIso) {
+/** ids：只看這些訂單（Sheet 選單選取的列）；取貨提醒有指定 ids 時不限日期 */
+function nfMailPlan_(type, dateIso, ids) {
   var T = NF_MAIL_TYPES[type];
   if (!T) throw new Error('未知的信件類型：' + type);
   nfSyncOrderSheets_();
   var settings = nfReadSettings_();
   var prev = nfReadOrderSheets_(nfSpreadsheet_(), settings);
-  var target = type === 'pickupReminder' ? (dateIso || nfTomorrowIso_()) : null;
+  var only = ids && ids.length ? ids.map(String) : null;
+  var target = type === 'pickupReminder' ? (dateIso || (only ? null : nfTomorrowIso_())) : null;
   var list = [];
   prev.rows[T.kind].forEach(function (r) {
+    if (only && only.indexOf(r.id) < 0) return;
     if (nfIsCancelled_(r)) return;
     if (target && nfIsoDate_(r.pickupDate) !== target) return;
     var ms = nfMailState_(r.id)[type];
@@ -32,7 +35,7 @@ function nfMailPlan_(type, dateIso) {
     else if (String(r.note || '').indexOf('現場單') >= 0) reason = '現場單不寄';
     else if (!email || email.toLowerCase() === NF.STORE_EMAIL.toLowerCase()) reason = '沒有 email';
     else if (type === 'shipped' && !r.shipDate) reason = '缺出貨日';
-    else if (type === 'shipped' && !r.trackNo) reason = '缺託運單號';
+    else if (type === 'shipped') reason = nfTrackNoProblem_(r, prev.rows.delivery);
     list.push({ id: r.id, name: String(r.name || ''), email: email, reason: reason, failed: !!(ms && ms.status !== '已寄出'), row: r });
   });
   return { type: type, label: T.label, date: target, list: list, settings: settings };
@@ -62,7 +65,7 @@ function nfMailQuota_() {
 function nfMailSend_(type, ids, dateIso, opts) {
   opts = opts || {};
   var result = nfWithLock_(function () { // 避免兩邊同時按寄出造成重寄
-    var p = nfMailPlan_(type, dateIso);
+    var p = nfMailPlan_(type, dateIso, ids);
     var want = ids && ids.length ? ids.map(String) : null;
     var todo = p.list.filter(function (x) { return !x.reason && (!want || want.indexOf(x.id) >= 0); });
     var quota = nfMailQuota_();
@@ -71,6 +74,8 @@ function nfMailSend_(type, ids, dateIso, opts) {
     var attachment = type === 'preShip' ? null : nfHeatingCard_(p.settings);
     var sent = [], failed = [];
     todo.forEach(function (x) {
+      var cur = nfMailState_(x.id)[type]; // 寄之前再確認一次（WebPOS 與 Sheet 選單同時寄也不會重複）
+      if (cur && cur.status === '已寄出') return;
       var tries = opts.retry ? 2 : 1, err = null;
       for (var t = 0; t < tries; t++) {
         try { nfSendNotice_(type, x.row, p.settings, attachment); err = null; break; } catch (e) { err = e; Utilities.sleep(1000); }
@@ -144,6 +149,7 @@ function nfSendNotice_(type, row, settings, attachment, subjectPrefix) {
   var kv = settings.kv;
   var its = nfNoticeItems_(row, settings);
   var data = {
+    mapUrl: String(kv['地圖連結'] || ''),
     year: settings.year,
     name: String(row.name || ''),
     receiverName: String(row.recipientName || row.name || ''),
@@ -172,9 +178,12 @@ function nfSendNotice_(type, row, settings, attachment, subjectPrefix) {
     var hours = String(kv['每日取貨時間'] || '12:00 ~ 20:00');
     data.pickupHours = iso === last ? hours.split(/\s*[~～-]\s*/)[0] + ' ~ ' + String(kv['最後取貨結束時間'] || '16:00') : hours;
   }
+  data.shipPeriodShort = data.shipPeriod.replace(/^\d{4}\//, '');
   var tpl = HtmlService.createTemplateFromFile(file);
   tpl.data = data;
-  var opts = { htmlBody: tpl.evaluate().getContent(), name: NF.SENDER_NAME };
+  var html = tpl.evaluate().getContent();
+  if (row.id) html = html.replace('</body>', nfOpenPixel_(row.id, type) + '</body>');
+  var opts = { htmlBody: html, name: NF.SENDER_NAME };
   if (attachment) opts.attachments = [attachment];
   GmailApp.sendEmail(String(row.email).trim(), (subjectPrefix || '') + subject, '您的信箱不支援 HTML 顯示。', opts);
 }
@@ -197,11 +206,66 @@ function nfMailSample_(to, types) {
   var attachment = null, note = '';
   try { attachment = nfHeatingCard_(settings); } catch (e) { note = '加熱說明小卡讀取失敗：' + e.message; }
   var sent = [];
-  (types || ['preShip', 'shipped', 'pickupReminder']).forEach(function (t) {
+  // 確認信範本：線上自取、線上宅配（未滿免運）、現場單（顯示流水號、不顯示匯款）
+  var items = [];
+  if (bundle >= 0) items.push({ item: settings.items[bundle], qty: 1 });
+  if (single >= 0) items.push({ item: settings.items[single], qty: 2 });
+  var subtotal = items.reduce(function (s, x) { return s + x.item.price * x.qty; }, 0);
+  var base = { name: '王小明', phone: '0911222333', email: to, timestampText: nfFormatTimestamp_(new Date()), items: items, subtotal: subtotal,
+    recipientName: '王大明', recipientPhone: '0912345678', recipientAddress: '台北市信義區範例路 1 號' };
+  var confirms = {
+    confirmPickup: { label: '確認信（線上自取）', o: { method: '來店自取', isDelivery: false, isOnsite: false, pickupDateRaw: row.pickupDate, shipping: 0 } },
+    confirmDelivery: { label: '確認信（線上宅配）', o: { method: '宅配', isDelivery: true, isOnsite: false, shipping: subtotal < settings.freeThreshold ? settings.shippingFee : 0 } },
+    confirmOnsite: { label: '確認信（現場單自取）', o: { method: '來店自取', isDelivery: false, isOnsite: true, seqLabel: settings.year.slice(-2) + '001', last5: '現結', pickupDateRaw: row.pickupDate, shipping: 0 } },
+  };
+  (types || ['preShip', 'shipped', 'pickupReminder', 'confirmPickup', 'confirmDelivery', 'confirmOnsite']).forEach(function (t) {
+    if (confirms[t]) {
+      var o = {}; Object.keys(base).forEach(function (k) { o[k] = base[k]; });
+      Object.keys(confirms[t].o).forEach(function (k) { o[k] = confirms[t].o[k]; });
+      o.total = o.subtotal + o.shipping;
+      nfSendConfirmation_(o, settings, '【範本】');
+      sent.push(confirms[t].label);
+      return;
+    }
     nfSendNotice_(t, row, settings, t === 'preShip' ? null : attachment, '【範本】');
     sent.push(NF_MAIL_TYPES[t].label);
   });
   return { sent: sent, attachment: !!attachment, note: note };
+}
+
+// ── 開信追蹤：信裡放一張 1×1 圖片，載入時記下開信時間（Gmail 大致準確；Apple 郵件會預先載入、擋圖片的信箱不會回報）──
+function nfOpenToken_(key) {
+  var sig = Utilities.computeHmacSha256Signature(key, nfSecret_());
+  return Utilities.base64EncodeWebSafe(sig).replace(/=+$/, '').slice(0, 22);
+}
+
+function nfOpenPixel_(id, type) {
+  var base = nfProps_().getProperty('WEB_APP_URL');
+  if (!base) return '';
+  var key = NF_CTX.env + '|' + NF_CTX.year + '|' + type + '|' + id;
+  var url = base + '?action=open&k=' + encodeURIComponent(key) + '&s=' + nfOpenToken_(key);
+  return '<img src="' + url + '" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px;">';
+}
+
+/** doGet action=open（不需要密鑰，用簽章驗證）：第一次開信記下時間 */
+function nfRecordOpen_(key, sig) {
+  if (!key || !sig || sig !== nfOpenToken_(key)) return false;
+  var p = String(key).split('|');
+  if (p.length < 4) return false;
+  var raw = nfProps_().getProperty(nfYearKey_(p[0], p[1]));
+  if (!raw) return false;
+  NF_CTX = { env: p[0], year: p[1], meta: JSON.parse(raw) };
+  var id = p.slice(3).join('|'), type = p[2];
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return false;
+  try {
+    var st = nfMailState_(id);
+    if (!st[type] || st[type].status !== '已寄出' || st[type].openedAt) return true;
+    st[type].openedAt = nfFormatTimestamp_(new Date());
+    nfProps_().setProperty(nfMailKey_(id), JSON.stringify(st));
+  } finally { lock.releaseLock(); }
+  try { nfUseYear_(p[0], p[1]); nfSyncOrderSheets_(); } catch (e) { /* 下次同步時會顯示 */ }
+  return true;
 }
 
 function nfTomorrowIso_() {

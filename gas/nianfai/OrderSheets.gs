@@ -52,6 +52,7 @@ function nfOrderCols_(kind, settings) {
     add('recipientAddress', '收件地址', { width: 220 });
     add('shipDate', '出貨日', { manual: true, type: 'shipDate', text: true, width: 100 });
     add('trackNo', '託運單號', { manual: true, text: true, width: 120 });
+    add('trackLink', '查詢', { type: 'trackLink', width: 50 }); // 點擊到黑貓查件
     add('preShipStatus', '寄出前確認', { type: 'mail', width: 90 });
     add('preShipAt', '寄出前確認時間', { type: 'mail', text: true, width: 140 });
     add('shippedStatus', '出貨通知', { type: 'mail', width: 90 });
@@ -205,7 +206,7 @@ function nfSyncOrderSheets_(opts) {
         Object.keys(NF_MAIL_TYPES).forEach(function (t) {
           var T = NF_MAIL_TYPES[t];
           if (T.kind !== kind) return;
-          r[T.statusKey] = ms[t] ? ms[t].status : '';
+          r[T.statusKey] = nfMailStatusText_(ms[t]);
           r[T.atKey] = ms[t] ? ms[t].at : '';
         });
       });
@@ -242,8 +243,13 @@ function nfWriteOrderSheet_(ss, kind, defs, rows, settings, rebuild) {
     if (d.type === 'check' || d.type === 'shipDate') sh.getRange(2, j + 1, NF_DATA_ROWS, 1).setDataValidation(null);
   });
   if (!rows.length) return sh;
-  var values = rows.map(function (r) {
+  var trackCol = nfColL_(defs, 'trackNo');
+  var values = rows.map(function (r, i) {
     return defs.map(function (d) {
+      if (d.type === 'trackLink') {
+        var c = '$' + trackCol + (i + 2);
+        return '=IF(' + c + '="","",HYPERLINK("https://www.t-cat.com.tw/inquire/trace.aspx?no="&REGEXREPLACE(TO_TEXT(' + c + '),"[^0-9]",""),"查詢"))';
+      }
       var v = r[d.key];
       if (d.type === 'check') return v === true || String(v).toUpperCase() === 'TRUE';
       if (v === undefined || v === null) return '';
@@ -301,10 +307,24 @@ function nfSetupOrderSheet_(ss, kind, defs, settings) {
   var done = kind === 'delivery' ? L('shipDate') + '<>""' : L('picked') + '=TRUE';
   rules.push(SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=AND(' + L('id') + '<>"",' + done + ')')
     .setBackground('#e8f5e9').setRanges([all]).build());
+  // 託運單號：格式不對（不是 10 或 12 碼數字）標紅底、和別筆重複標橘底
+  if (kind === 'delivery') {
+    var T = '$' + nfColL_(defs, 'trackNo');
+    var tr = sh.getRange(2, nfColIndex_(defs, 'trackNo'), NF_DATA_ROWS, 1);
+    rules.unshift(
+      SpreadsheetApp.newConditionalFormatRule()
+        .whenFormulaSatisfied('=AND(' + T + '2<>"",NOT(REGEXMATCH(REGEXREPLACE(TO_TEXT(' + T + '2),"[\\s-]",""),"^([0-9]{10}|[0-9]{12})$")))')
+        .setBackground('#fecaca').setFontColor('#b91c1c').setBold(true).setRanges([tr]).build(),
+      SpreadsheetApp.newConditionalFormatRule()
+        .whenFormulaSatisfied('=AND(' + T + '2<>"",COUNTIF(' + T + '$2:' + T + '$' + (NF_DATA_ROWS + 1) + ',' + T + '2)>1)')
+        .setBackground('#fed7aa').setRanges([tr]).build());
+  }
   // 寄信失敗標紅字
   defs.forEach(function (d, j) {
     if (d.type === 'mail' && /Status$/.test(d.key)) {
       rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextStartsWith('失敗').setFontColor('#dc2626').setBold(true)
+        .setRanges([sh.getRange(2, j + 1, NF_DATA_ROWS, 1)]).build());
+      rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextStartsWith('已開信').setFontColor('#1d4ed8').setBold(true)
         .setRanges([sh.getRange(2, j + 1, NF_DATA_ROWS, 1)]).build());
     }
   });
@@ -331,6 +351,17 @@ function nfOrderSheetEdit_(e, kind) {
   for (var c = c0; c < c0 + nc; c++) {
     var d = defs[c - 1];
     if (d && d.manual) {
+      if (d.key === 'trackNo' && r0 > 1) {
+        var probs = [];
+        var rowsNow = nfReadOrderSheets_(nfSpreadsheet_(), settings).rows.delivery;
+        for (var tr2 = r0; tr2 < r0 + nr; tr2++) {
+          var me = rowsNow[tr2 - 2];
+          if (!me || !me.trackNo) continue;
+          var p = nfTrackNoProblem_(me, rowsNow);
+          if (p) probs.push(me.name + '：' + p);
+        }
+        if (probs.length) nfToast_(e, probs.join('\n') + '\n（有問題的單號不會寄出貨通知）');
+      }
       if (d.key === 'picked') {
         var atCol = nfColIndex_(defs, 'pickedAt');
         for (var r = Math.max(r0, 2); r < r0 + nr; r++) {
@@ -358,6 +389,26 @@ function nfToast_(e, msg) {
   try { e.source.toast(msg, '年菜', 8); } catch (err) { /* 沒有畫面時略過 */ }
 }
 
+/** 託運單號檢查：格式（10 或 12 碼數字，黑貓沒有公開檢查碼）、和其他訂單重複。沒問題回傳 '' */
+function nfNormTrackNo_(v) {
+  return String(v || '').replace(/[\s-]/g, '');
+}
+function nfTrackNoProblem_(row, allRows) {
+  var no = nfNormTrackNo_(row.trackNo);
+  if (!no) return '缺託運單號';
+  if (!/^(\d{10}|\d{12})$/.test(no)) return '託運單號格式不對（應為 10 或 12 碼數字，目前 ' + no.length + ' 碼）';
+  var dup = (allRows || []).filter(function (r) { return r.id !== row.id && !nfIsCancelled_(r) && nfNormTrackNo_(r.trackNo) === no; });
+  if (dup.length) return '託運單號和「' + dup.map(function (r) { return r.name; }).join('、') + '」重複';
+  return '';
+}
+
+/** 工作表顯示用：已開信 MM/dd HH:mm ＞ 已寄出 ／ 失敗：原因 */
+function nfMailStatusText_(ms) {
+  if (!ms) return '';
+  if (ms.openedAt) return '已開信 ' + String(ms.openedAt).slice(5, 16);
+  return ms.status;
+}
+
 // ── 寄信狀態（指令碼屬性，一張訂單一筆）──
 function nfMailKey_(id) {
   return 'ML_' + NF_CTX.env + ':' + NF_CTX.year + ':' + id;
@@ -370,7 +421,7 @@ function nfMailState_(id) {
 
 function nfSetMailState_(id, type, status) {
   var st = nfMailState_(id);
-  st[type] = { status: status, at: nfFormatTimestamp_(new Date()) };
+  st[type] = { status: status, at: nfFormatTimestamp_(new Date()) }; // 重寄會清掉舊的開信時間
   nfProps_().setProperty(nfMailKey_(id), JSON.stringify(st));
   return st[type];
 }

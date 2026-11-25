@@ -42,6 +42,13 @@ export default function NianfaiMailCard({ year, number, gas, showAlert, showConf
         const r = await previewNianfaiMail(year, type, type === 'pickupReminder' ? date : null);
         setPreview(r.result);
         setChecked(new Set(r.result.eligible.map(x => x.id)));
+        const trackIssues = r.result.skipped.filter(x => /託運單號/.test(x.reason));
+        if (type === 'shipped' && trackIssues.length) {
+            await showAlert(`${trackIssues.length} 筆託運單號有問題，不會寄出`, {
+                title: '請先修正託運單號', icon: 'warning',
+                note: trackIssues.map(x => `・${x.name}：${x.reason}`).join('\n') + '\n\n請到 Sheet「宅配」修正（可點「查詢」到黑貓核對）',
+            });
+        }
     });
 
     const handleSend = () => run('send', async () => {
@@ -141,7 +148,7 @@ export default function NianfaiMailCard({ year, number, gas, showAlert, showConf
                         <div>
                             <p className="font-bold text-gray-500 mb-1">不寄 {preview.skipped.length} 筆</p>
                             <div className="text-sm text-gray-500 space-y-0.5 max-h-48 overflow-y-auto">
-                                {preview.skipped.map(x => <p key={x.id}>・{x.name}：{x.reason}</p>)}
+                                {preview.skipped.map(x => <p key={x.id} className={/託運單號|出貨日/.test(x.reason) ? 'text-red-600 font-bold' : ''}>・{x.name}：{x.reason}</p>)}
                             </div>
                         </div>
                     )}

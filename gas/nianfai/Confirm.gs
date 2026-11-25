@@ -71,9 +71,13 @@ function nfBuildOrderData_(order, settings) {
     shippingText: nfMoney_(order.shipping),
     totalText: nfMoney_(order.total),
     shipPeriod: String(kv['寄出期間'] || ''),
+    shipPeriodShort: String(kv['寄出期間'] || '').replace(/^\d{4}\//, ''),
     lastPickupText: lastPickup,
     lastPickupEnd: String(kv['最後取貨結束時間'] || '16:00'),
     formUrl: formUrl,
+    isOnsite: order.isOnsite,
+    seqLabel: order.seqLabel, // 現場單：WebPOS 流水號（例 27001）
+    mapUrl: String(kv['地圖連結'] || ''),
     storePhone: String(kv['電話'] || ''),
     storeAddress: String(kv['店址'] || ''),
     line: String(kv['LINE'] || ''),
@@ -84,7 +88,7 @@ function nfBuildOrderData_(order, settings) {
   };
 }
 
-function nfSendConfirmation_(order, settings) {
+function nfSendConfirmation_(order, settings, subjectPrefix) {
   var data = nfBuildOrderData_(order, settings);
   var tpl = HtmlService.createTemplateFromFile(order.isDelivery ? 'ConfirmDelivery' : 'ConfirmPickup');
   tpl.data = data;
@@ -93,6 +97,6 @@ function nfSendConfirmation_(order, settings) {
   var isStore = to.toLowerCase() === NF.STORE_EMAIL.toLowerCase();
   var opts = { htmlBody: html, name: NF.SENDER_NAME };
   if (!isStore) opts.bcc = NF.STORE_EMAIL;
-  var subject = '【咕咕義小餐館】' + data.year + ' 新春富貴年菜訂單資料'; // 主旨沿用去年文案，只換年份
-  GmailApp.sendEmail(to, subject, '', opts);
+  var subject = data.year + ' 新春富貴年菜訂單資料'; // 寄件人已顯示「咕咕義小餐館」，主旨不再重複店名
+  GmailApp.sendEmail(to, (subjectPrefix || '') + subject, '', opts);
 }

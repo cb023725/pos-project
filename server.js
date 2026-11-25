@@ -2497,6 +2497,7 @@ async function callNianfaiGas(action, payload = {}, { method = 'POST', timeoutMs
     const secret = process.env.NIANFAI_GAS_SECRET || '';
     if (!url) throw new Error('GAS 網址尚未設定');
     payload = { env: NIANFAI_GAS_ENV, ...payload };
+    if (method !== 'GET') payload.webAppUrl = url; // GAS 記下自己的網址（開信追蹤圖片用）
     let resp;
     if (method === 'GET') {
         const qs = new URLSearchParams({ action, secret, ...payload });

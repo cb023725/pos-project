@@ -14,12 +14,12 @@
 
     <div style="margin-bottom: 14px; font-size: 14px;">
       <span style="font-weight: bold; color: #000;"><?= data.name ?></span> 先生/小姐你好：<br><br>
-      <div style="font-size: 12px; color: #444; line-height: 1.6;">
-        您的年菜已準備完成<br>
-        您預定取貨日期：<span style="color: #2A52BE; font-weight: bold;"><?= data.shipDate ?></span><br>
-        取貨請攜帶粉紅色單據或此畫面截圖<br>
+      <div style="font-size: 13px; color: #444; line-height: 1.8;">
+        您的年菜已準備完成，歡迎來店取貨<br>
+        您預定的取貨日期：<span style="color: #2A52BE; font-weight: bold;"><?= data.shipDate ?></span><br>
+        取貨請帶白色訂購單據或此畫面截圖<br>
         如需變更取貨日請提前告知我們備貨<br>
-        <strong>咕咕義小餐館</strong>感謝您的支持！
+        <strong>咕咕義小餐館</strong>感謝您的訂購與支持！
       </div>
     </div>
 
@@ -63,28 +63,28 @@
     <div style="background-color: #fcfcfc; border: 1px solid #f0f0f0; border-radius: 8px; padding: 5px 10px; margin-bottom: 10px;">
       <table style="width: 100%; border-collapse: collapse; border: none; margin: 0;">
         <tr style="border-bottom: 1px solid #f0f0f0;">
-          <td style="border: none; padding: 8px 0; width: 90px; color: #888; font-size: 12px; vertical-align: top;">自取日期</td>
+          <td style="border: none; padding: 8px 0; width: 80px; color: #888; font-size: 12px; vertical-align: top;">取貨日期</td>
           <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><?= data.shipDate ?></td>
         </tr>
         <tr style="border-bottom: 1px solid #f0f0f0;">
-          <td style="border: none; padding: 8px 0; width: 90px; color: #888; font-size: 12px; vertical-align: top;">取貨時段</td>
+          <td style="border: none; padding: 8px 0; width: 80px; color: #888; font-size: 12px; vertical-align: top;">取貨時段</td>
           <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><?= data.pickupHours ?></td>
         </tr>
         <tr>
-          <td style="border: none; padding: 8px 0; width: 90px; color: #888; font-size: 12px; vertical-align: top;">取貨地點</td>
-          <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><a href="https://www.google.com/maps/search/?api=1&amp;query=<?= encodeURIComponent(data.storeAddress) ?>" target="_blank" style="color: #333; text-decoration: none;"><?= data.storeAddress ?></a></td>
+          <td style="border: none; padding: 8px 0; width: 80px; color: #888; font-size: 12px; vertical-align: top;">取貨地點</td>
+          <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><a href="<?= data.mapUrl ?>" target="_blank" style="color: #333; text-decoration: underline;"><?= data.storeAddress ?></a></td>
         </tr>
       </table>
     </div>
 
     <div style="margin-top: 20px; text-align: center;">
-      <div><img src="https://mcusercontent.com/c27db4d77ffc4c29cdbe402a9/images/945a049c-4a56-d37c-288c-e12771643211.png" width="200" height="auto" alt="咕咕義小餐館" style="display: inline-block; border: 0;"></div>
+      <div><a href="<?= data.mapUrl ?>" target="_blank"><img src="https://mcusercontent.com/c27db4d77ffc4c29cdbe402a9/images/945a049c-4a56-d37c-288c-e12771643211.png" width="200" height="auto" alt="咕咕義小餐館" style="display: inline-block; border: 0;"></a></div>
       <div style="display: inline-block; opacity: 0.6; margin-top: -5px;">
         <table border="0" cellpadding="0" cellspacing="0" role="presentation" style="margin: 0 auto;"><tr><td style="padding: 0 8px;"><a href="https://www.facebook.com/bistrogoodgoodeat/" target="_blank"><img src="https://app-rsrc.getbee.io/public/resources/social-networks-icon-sets/t-only-logo-default-gray/facebook@2x.png" width="24" height="auto" alt="Facebook" title="Facebook" style="display: block; height: auto; border: 0;"></a></td><td style="padding: 0 8px;"><a href="https://www.instagram.com/goodgoodeatrestaurant/" target="_blank"><img src="https://app-rsrc.getbee.io/public/resources/social-networks-icon-sets/t-only-logo-default-gray/instagram@2x.png" width="24" height="auto" alt="Instagram" title="Instagram" style="display: block; height: auto; border: 0;"></a></td><td style="padding: 0 8px;"><a href="<?= data.line ?>" target="_blank"><img src="https://app-rsrc.getbee.io/public/resources/social-networks-icon-sets/t-only-logo-default-gray/line@2x.png" width="24" height="auto" alt="LINE" title="LINE" style="display: block; height: auto; border: 0;"></a></td></tr></table>
       </div>
       <div style="color: #b2b2b2; font-size: 10px; line-height: 1.5; text-align: center; margin-top: 5px; padding: 0 22px;">
         <p style="margin: 0;">聯絡電話：<?= data.storePhone ?></p>
-        <p style="margin: 0;">地址：<a href="https://www.google.com/maps/search/?api=1&amp;query=<?= encodeURIComponent(data.storeAddress) ?>" target="_blank" style="text-decoration: none; color: #969696;"><?= data.storeAddress ?></a></p>
+        <p style="margin: 0;">地址：<a href="<?= data.mapUrl ?>" target="_blank" style="text-decoration: underline; color: #969696;"><?= data.storeAddress ?></a></p>
         <p style="margin: 0;">© Copyright <?= data.year ?>. 咕咕義小餐館. All Rights Reserved.</p>
       </div>
     </div>

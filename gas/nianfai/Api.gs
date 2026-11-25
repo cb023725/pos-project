@@ -33,6 +33,8 @@ function doPost(e) {
   try {
     var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     if (!nfSecret_() || body.secret !== nfSecret_()) return nfJson_({ ok: false, error: '密鑰錯誤' });
+    // 記下網頁應用程式網址（開信追蹤圖片用；自動排程寄信時沒有請求可以參考）
+    if (body.webAppUrl && body.webAppUrl !== nfProps_().getProperty('WEB_APP_URL')) nfProps_().setProperty('WEB_APP_URL', body.webAppUrl);
     if (body.action === 'createYear') return nfJson_(nfCreateYear_(body));
     if (body.action === 'ping') return nfJson_(nfPing_(body.env, body.year));
     nfUseYear_(body.env, body.year);
@@ -95,6 +97,10 @@ function doPost(e) {
 
 function doGet(e) {
   var p = (e && e.parameter) || {};
+  if (p.action === 'open') { // 開信追蹤，不需要密鑰
+    try { nfRecordOpen_(p.k, p.s); } catch (err) { console.error(err); }
+    return ContentService.createTextOutput('');
+  }
   try {
     if (!nfSecret_() || p.secret !== nfSecret_()) return nfJson_({ ok: false, error: '密鑰錯誤' });
     if (p.action === 'ping') return nfJson_(nfPing_(p.env, p.year));
@@ -138,6 +144,7 @@ function nfPing_(env, year) {
     live: !!NF_CTX.meta.live,
     liveAt: NF_CTX.meta.liveAt || null,
     reminderOn: String(settings.kv['取貨提醒開關'] || '').trim() === '開',
+    sender: Session.getEffectiveUser().getEmail(), // 信件實際寄件帳號（顯示名稱是「咕咕義小餐館」）
     mailQuota: nfMailQuota_(),
     hasOrderSheets: !!nfSpreadsheet_().getSheetByName(NF.SHEET_DELIVERY),
   };

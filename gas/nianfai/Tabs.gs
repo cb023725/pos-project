@@ -15,7 +15,7 @@ var NF_OLD_SHEETS = ['訂單整理', '供需庫存'];
 function nfBuildTabs_(settings, opts) {
   opts = opts || {};
   var ss = nfSpreadsheet_();
-  nfEnsureKv_(['寄出日', '加熱說明小卡ID']);
+  nfEnsureKv_(['寄出日', '加熱說明小卡ID', '地圖連結']);
   settings = nfReadSettings_();
   var synced = nfSyncOrderSheets_({ rebuild: true, reset: !!opts.reset });
   var defs = { delivery: nfOrderCols_('delivery', settings), pickup: nfOrderCols_('pickup', settings) };
@@ -42,10 +42,12 @@ function nfEnsureKv_(keys) {
   var have = sh.getRange(1, 1, last, 1).getValues().map(function (r) { return String(r[0]).trim(); });
   var lastKv = 0;
   have.forEach(function (k, i) { if (k) lastKv = i + 1; });
+  var defaults = {};
+  NF_SETTINGS_DEFAULTS.forEach(function (r) { defaults[r[0]] = r[1]; });
   keys.forEach(function (k) {
     if (have.indexOf(k) >= 0) return;
     lastKv++;
-    sh.getRange(lastKv, 1, 1, 2).setValues([[k, '']]);
+    sh.getRange(lastKv, 1, 1, 2).setValues([[k, defaults[k] !== undefined ? defaults[k] : '']]);
     have[lastKv - 1] = k;
   });
 }
