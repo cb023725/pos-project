@@ -291,8 +291,10 @@ function nfOpenPixel_(id, type) {
 }
 
 /**
- * 客人確認：信裡的按鈕先開一個確認頁（doGet action=ack），客人在頁面上再按一次「確認」才記錄（doPost）。
- * 信箱的安全掃描只會打開連結、不會按頁面上的按鈕，所以「客人已確認」代表客人真的看過信。
+ * 客人確認：信裡的按鈕先開一個確認頁（doGet action=ack），客人在頁面上再點「確認」連結才記錄（doGet action=ackdo）。
+ * 信箱的安全掃描只會打開信裡的連結，不會再點確認頁裡的連結，所以「客人已確認」代表客人真的看過信。
+ * 第二步用連結而不是表單送出：多個 Google 帳號的導向、App 內建瀏覽器都不會把它弄壞。
+ * （舊信件的表單送出 doPost action=ack 仍然有效）
  */
 function nfAckUrl_(id, type) {
   var base = nfProps_().getProperty('WEB_APP_URL');
@@ -317,7 +319,7 @@ function nfAckPage_(title, body, form) {
   var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_top">' +
     '<style>body{font-family:"PingFang TC","Microsoft JhengHei",sans-serif;background:#f9f9f9;margin:0;padding:24px;color:#333}' +
     '.c{max-width:420px;margin:40px auto;background:#fff;border:1px solid #e0e0e0;border-radius:12px;padding:28px;text-align:center}' +
-    'h1{font-size:18px;margin:12px 0}p{font-size:14px;line-height:1.7;color:#555}button{background:#C1032F;color:#fff;border:0;border-radius:28px;font-size:16px;font-weight:bold;padding:12px 32px;margin-top:12px}</style>' +
+    'h1{font-size:18px;margin:12px 0}p{font-size:14px;line-height:1.7;color:#555}button,.btn{display:inline-block;background:#C1032F;color:#fff;border:0;border-radius:28px;font-size:16px;font-weight:bold;padding:12px 32px;margin-top:12px;text-decoration:none}</style>' +
     '</head><body><div class="c"><img src="https://mcusercontent.com/c27db4d77ffc4c29cdbe402a9/images/945a049c-4a56-d37c-288c-e12771643211.png" width="180" alt="咕咕義小餐館">' +
     '<h1>' + esc(title) + '</h1><p>' + esc(body) + '</p>' + (form || '') + '</div></body></html>';
   return HtmlService.createHtmlOutput(html).setTitle('咕咕義小餐館').addMetaTag('viewport', 'width=device-width, initial-scale=1');
@@ -328,14 +330,12 @@ function nfAckGet_(key, sig) {
   var a = nfAckParse_(key, sig);
   if (!a) return nfAckPage_('連結無效', '請直接聯絡咕咕義小餐館官方 LINE。');
   var t = NF_ACK_TEXT[a.type];
-  var esc = function (s) { return String(s).replace(/"/g, '&quot;'); };
-  var form = '<form method="post" action="' + esc(nfProps_().getProperty('WEB_APP_URL') || '') + '">' +
-    '<input type="hidden" name="action" value="ack"><input type="hidden" name="k" value="' + esc(key) + '"><input type="hidden" name="s" value="' + esc(sig) + '">' +
-    '<button type="submit">' + t.btn + '</button></form>';
-  return nfAckPage_(t.q, '請按下方按鈕完成確認。', form);
+  var href = (nfProps_().getProperty('WEB_APP_URL') || '') + '?action=ackdo&k=' + encodeURIComponent(key) + '&s=' + encodeURIComponent(sig);
+  var link = '<a href="' + href.replace(/"/g, '&quot;') + '" target="_top" class="btn">' + t.btn + '</a>';
+  return nfAckPage_(t.q, '請點下方按鈕完成確認。', link);
 }
 
-/** doPost（表單送出）action=ack：記錄客人已確認 */
+/** 記錄客人已確認：doGet action=ackdo（確認頁上的連結），舊信件的 doPost action=ack 也走這裡 */
 function nfAckPost_(key, sig) {
   var a = nfAckParse_(key, sig);
   if (!a) return nfAckPage_('連結無效', '請直接聯絡咕咕義小餐館官方 LINE。');

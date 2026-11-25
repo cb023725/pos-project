@@ -20,13 +20,14 @@ function nfBuildTabs_(settings, opts) {
   var synced = nfSyncOrderSheets_({ rebuild: true, reset: !!opts.reset });
   var defs = { delivery: nfOrderCols_('delivery', settings), pickup: nfOrderCols_('pickup', settings) };
   nfBuildLookupSheet_(ss, settings, defs);
+  nfBuildMailSheet_(ss, settings);
   nfBuildStatsSheet_(ss, settings, defs);
   nfBuildPrepSheet_(ss, settings, defs);
   if (opts.reset || !ss.getSheetByName(NF.SHEET_LOG)) nfBuildLogSheet_(ss);
   else nfStyleLogSheet_(ss.getSheetByName(NF.SHEET_LOG));
   NF_OLD_SHEETS.forEach(function (n) { var sh = ss.getSheetByName(n); if (sh) ss.deleteSheet(sh); });
   // 分頁順序：宅配、自取、查詢、統計、備料表、修改紀錄、設定、表單回應
-  [NF.SHEET_DELIVERY, NF.SHEET_PICKUP, NF.SHEET_LOOKUP, NF.SHEET_STATS, NF.SHEET_PREP, NF.SHEET_LOG, NF.SHEET_SETTINGS, NF.SHEET_RESPONSES]
+  [NF.SHEET_DELIVERY, NF.SHEET_PICKUP, NF.SHEET_MAIL, NF.SHEET_LOOKUP, NF.SHEET_STATS, NF.SHEET_PREP, NF.SHEET_LOG, NF.SHEET_SETTINGS, NF.SHEET_RESPONSES]
     .forEach(function (n, i) {
       var sh = ss.getSheetByName(n);
       if (!sh) return;

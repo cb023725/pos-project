@@ -125,6 +125,9 @@ function doPost(e) {
 function doGet(e) {
   var p = (e && e.parameter) || {};
   if (p.action === 'ack') return nfAckGet_(p.k, p.s); // 客人確認頁
+  if (p.action === 'ackdo') { // 確認頁上的「確認」連結：記錄客人已確認
+    try { return nfAckPost_(p.k, p.s); } catch (err) { return HtmlService.createHtmlOutput('系統忙碌，請稍後再試'); }
+  }
   if (p.action === 'open') { // 開信追蹤，不需要密鑰
     try { nfRecordOpen_(p.k, p.s); } catch (err) { console.error(err); }
     return ContentService.createTextOutput('');

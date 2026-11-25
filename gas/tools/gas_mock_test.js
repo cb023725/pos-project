@@ -30,6 +30,7 @@ function makeSheet(name) {
         setFormula: (f) => { set(0, 0, f); return rg; },
         getDisplayValue: () => String(get(0, 0) ?? ''),
         getNote: () => notes[`${r},${c}`] || '', setNote: (n) => { notes[`${r},${c}`] = n; return rg; },
+        getA1Notation: () => { let n = c, L = ''; while (n > 0) { const m = (n - 1) % 26; L = String.fromCharCode(65 + m) + L; n = Math.floor((n - 1) / 26); } return L + r; },
         getRow: () => r, getColumn: () => c, getNumRows: () => nr, getNumColumns: () => nc, getSheet: () => sh,
         clearContent: () => { for (let i = 0; i < nr; i++) for (let j = 0; j < nc; j++) set(i, j, ''); return rg; },
         protect: () => chain({ addEditor: () => {}, getEditors: () => [], removeEditors: () => {}, canDomainEdit: () => false }),
@@ -246,7 +247,7 @@ run('客人確認：確認頁不記錄、按按鈕才記錄、假簽章無效', 
   const key = 'dev|2027|preShip|' + id; const sig = ctx.nfOpenToken_(key);
   const page = ctx.nfAckGet_(key, sig).html; const before = sheetObj('宅配').find(x => x['訂單編號'] === id)['寄出前確認'];
   const bad = ctx.nfAckPost_(key, 'x').html.includes('連結無效'); ctx.nfAckPost_(key, sig);
-  return { pageHasButton: page.includes('<button'), before, after: sheetObj('宅配').find(x => x['訂單編號'] === id)['寄出前確認'], bad };
+  return { pageHasButton: page.includes('action=ackdo'), before, after: sheetObj('宅配').find(x => x['訂單編號'] === id)['寄出前確認'], bad };
 });
 run('Sheet 選單模式：只寄選取的列、取貨提醒不限日期', () => { const p = ctx.nfMailPlan_('pickupReminder', null, [sheetObj('自取')[1]['訂單編號']]); return p.list.map(x => x.name + ':' + (x.reason || '可寄')); });
 run('取貨提醒（明天）＋失敗重試一次', () => { ctx._mails = []; ctx._failTo = 'b@example.com'; const r = ctx.nfMailSend_('pickupReminder', null, null, { retry: true, auto: true }); ctx._failTo = null;
@@ -273,6 +274,15 @@ run('統計／備料表：改到自動計算區域會重建，黃色格子與空
   pr.getRange('Z50').setValue('備註'); ctx.nfOnEdit({ range: pr.getRange('Z50'), source: ss() });
   return { statsRestored: st.getRange('C4').getValue() === f, dateKept: pr.getRange('B3').getValue() === d, freeCell: pr.getRange('Z50').getValue(),
     prepHead: pr.getRange(5, 1, 1, 6).getValues()[0].join('|'), bounds: Object.keys(ctx.NF_CTX.meta.bounds || {}) };
+});
+run('寄信分頁：選種類→列名單→①準備→②確定寄出（2 分鐘內）', () => {
+  const sh = ss().getSheetByName('寄信'); ctx._mails = [];
+  sh.getRange('B4').setValue('2027/2/1 (一)'); sh.getRange('B3').setValue('取貨提醒'); ctx.nfOnEdit({ range: sh.getRange('B3'), source: ss() });
+  const list = sh.getRange(9, 1, 6, 8).getValues().filter(r => r[1]).map(r => r[1] + ':' + r[4] + ':' + r[0]);
+  const noPrep = (() => { sh.getRange('B6').setValue(true); ctx.nfOnEdit({ range: sh.getRange('B6'), source: ss() }); return sh.getRange('C6').getValue(); })();
+  sh.getRange('B5').setValue(true); ctx.nfOnEdit({ range: sh.getRange('B5'), source: ss() }); const prep = sh.getRange('C5').getValue();
+  sh.getRange('B6').setValue(true); ctx.nfOnEdit({ range: sh.getRange('B6'), source: ss() });
+  return { list, noPrep, prep: String(prep).slice(0, 40), result: String(sh.getRange('C6').getValue()).slice(12), mails: ctx._mails.filter(m => m.html).length };
 });
 run('分頁', () => ss().getSheets().map(s => s.getName()).join(' | '));
 run('統計／備料表公式（取樣）', () => ({ stats: ss().getSheetByName('統計').getRange(2, 2).getValue().slice(0, 160), prepHead: ss().getSheetByName('備料表').getRange(1, 1, 1, 4).getValues()[0].join(' | '),

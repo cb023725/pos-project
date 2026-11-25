@@ -17,6 +17,7 @@ var NF = {
   SHEET_DELIVERY: '宅配',          // GAS 寫入（OrderSheets.gs）
   SHEET_PICKUP: '自取',
   SHEET_LOOKUP: '查詢',
+  SHEET_MAIL: '寄信',               // 勾選寄信（MailSheet.gs）
   SHEET_STATS: '統計',
   SHEET_PREP: '備料表',
   SHEET_LOG: '修改紀錄',

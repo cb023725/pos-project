@@ -60,6 +60,14 @@ function nfApplyProtections_() {
     nfOrderCols_(kind, settings).forEach(function (d, i) { if (d.manual) open.push(sh.getRange(2, i + 1, NF_DATA_ROWS, 1)); });
     p0.setUnprotectedRanges(open);
   });
+  // 寄信：只開放信件種類、取貨日、①②、重新整理與勾選欄
+  var mailSh = ss.getSheetByName(NF.SHEET_MAIL);
+  if (mailSh) {
+    var pm = lockDown(mailSh.protect().setDescription(NF_PROTECT_PREFIX + '寄信（只能選信件種類、勾選客人與寄出）'));
+    var C = NF_MAIL_SHEET;
+    pm.setUnprotectedRanges([C.typeCell, C.dateCell, C.prepareCell, C.confirmCell, C.refreshCell].map(function (a) { return mailSh.getRange(a); })
+      .concat([mailSh.getRange(C.first, 1, mailSh.getMaxRows() - C.first + 1, 1)]));
+  }
   // 統計、備料表、查詢：只鎖資料用到的區域（空白處可以自由使用），黃色輸入格開放
   var bounds = (NF_CTX.meta && NF_CTX.meta.bounds) || {};
   [NF.SHEET_STATS, NF.SHEET_PREP, NF.SHEET_LOOKUP].forEach(function (n) {
@@ -102,6 +110,7 @@ function nfOnEdit(e) {
     nfLogResponseEdit_(e);
     nfSyncOrderSheets_(); // 修改／取消訂單 → 更新宅配、自取
   }
+  else if (name === NF.SHEET_MAIL) nfMailSheetEdit_(e);
   else if (name === NF.SHEET_STATS || name === NF.SHEET_PREP || name === NF.SHEET_LOOKUP) nfFormulaSheetEdit_(e, name);
   else if (name === NF.SHEET_DELIVERY) nfOrderSheetEdit_(e, 'delivery');
   else if (name === NF.SHEET_PICKUP) nfOrderSheetEdit_(e, 'pickup');
