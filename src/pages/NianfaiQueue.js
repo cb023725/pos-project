@@ -15,7 +15,7 @@ const STATUS_META = {
     sent:       { label: '已送出',   cls: 'bg-green-100 text-green-700' },
 };
 
-const seqLabel = (o) => formatNianfaiSeq(o.year, o.seqNo);
+const seqLabel = (o) => o.orderNo || formatNianfaiSeq(o.year, o.seqNo); // 訂購編號（例 27261205001）
 const fmtTime = (iso) => new Date(iso).toLocaleString('zh-TW', {
     month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
 });
@@ -255,7 +255,7 @@ const NianfaiQueuePage = () => {
             </div>
 
             <div className="flex-shrink-0 bg-gray-100 px-4 py-1.5 grid grid-cols-12 gap-2 text-[11px] font-black text-gray-500 tracking-wide border-b border-gray-300">
-                <div className="col-span-2">流水號</div>
+                <div className="col-span-2">訂購編號</div>
                 <div className="col-span-2">結帳時間</div>
                 <div className="col-span-3">品項</div>
                 <div className="col-span-3">取貨方式</div>
@@ -288,7 +288,7 @@ const NianfaiQueuePage = () => {
                                             <span className="text-lg font-black text-gray-800">{fmtMoney(r.total)}</span>
                                             <div className="flex gap-1.5">
                                                 <button onClick={async () => {
-                                                    const ok = await showConfirm(`流水號 ${seqLabel(r)} 將記為放棄`, { title: '放棄此單', icon: 'danger', confirmText: '放棄', danger: true });
+                                                    const ok = await showConfirm(`訂購編號 ${seqLabel(r)} 將記為放棄`, { title: '放棄此單', icon: 'danger', confirmText: '放棄', danger: true });
                                                     if (!ok) return;
                                                     try { await abandonNianfaiReservation(r.id); } catch (e) { await showAlert(e.message, { title: '放棄失敗', icon: 'warning' }); }
                                                     load();

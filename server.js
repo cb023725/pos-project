@@ -1286,193 +1286,230 @@ function buildCustomerReceiptPDF(data, filePath) {
 }
 
 // ----------------------------------------------------
-// 【年菜】二聯單（顧客聯／存根聯內容相同，只差標題，各印一份）
-// data: { seqLabel, customerName, customerPhone, deliveryMethod, pickupDate,
-//         recipientName, recipientAddress, items, total }
+// 【年菜】二聯單：顧客聯（確認訂購時印，給客人）／存根聯（結帳時印，店家留存、客人手寫資料）
+// data: { seqLabel（訂購編號）, year, orderDate, deliveryMethod, pickupDate, deliveryPeriod,
+//         items[{ name, qty, price, bundleComponents[] }], subtotal, shippingFee, total,
+//         pickupHours（server 依年度設定算好） }
+// 版面依 Yw 2026/11 修正：logo＋電話｜店址、年菜訂購單｜訂購編號、訂購日期、出貨方式、訂單明細、總計、
+// 取貨資訊／宅配資訊（存根聯留手寫格，加高）、注意事項；字比一般收據大；除 logo 外不放英文
 // ----------------------------------------------------
-// 修正單 #01 第 5 節：顧客聯（正式聯，確認訂購時印，不含訂購人資料）跟
-// 存根聯（結帳時印，留空格手寫）內容差很多，拆成兩個函式。共用的品項列
-// 繪製抽出成 helper：套餐要把組成展開成縮排小字列出（data.items[].bundleComponents）。
-function drawNianfaiItemRows(doc, rows, y) {
-    for (const row of rows) {
-        doc.font('Bold').fontSize(C_ITEM_SZ);
-        const nameH = doc.heightOfString(row.name || '', { width: C_NAME_W });
-        const rowH = Math.max(nameH, C_ITEM_SZ + 3);
-        doc.font('Bold').fontSize(C_ITEM_SZ).fillColor('black')
-           .text(row.name || '', C_NAME_X, y, { width: C_NAME_W, lineBreak: true });
-        doc.font('Reg').fontSize(C_ITEM_SZ).fillColor('black')
-           .text(String(row.qty), C_QTY_X, y, { width: C_QTY_W, align: 'center', lineBreak: false });
-        doc.font('Reg').fontSize(C_ITEM_SZ).fillColor('black')
-           .text(String((row.price || 0) * row.qty), C_PRI_X, y, { width: C_PRI_W, align: 'right', lineBreak: false });
-        y += rowH + 2;
-        if (row.bundleComponents && row.bundleComponents.length > 0) {
-            for (const comp of row.bundleComponents) {
-                doc.font('Reg').fontSize(C_SUB_SZ).fillColor('black')
-                   .text(`　－${comp.name} x${comp.qty}`, C_NAME_X, y, { width: C_NAME_W, lineBreak: false });
-                y += C_SUB_SZ + 2;
-            }
+const NF_STORE = { phone: '04-2471-5526', address: '台中市西區東興路三段13號1樓' };
+const NF_LOGO = (() => { try { return fs.readFileSync(path.join(__dirname, 'assets', 'nianfai-logo-print.png')); } catch { return null; } })();
+const NF_SZ = { title: 12, label: 10, item: 10.5, sub: 8.5, total: 14, small: 8.5 };
+const WEEK = '日一二三四五六';
+// 'YYYY-MM-DD' 或時間 → 'YYYY/MM/DD (週X)'（台北時間）
+function nfDateWeek(v) {
+    if (!v) return '';
+    let y, m, d;
+    const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v));
+    if (iso) { [y, m, d] = [iso[1], iso[2], iso[3]]; }
+    else {
+        const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(v));
+        const g = (t) => p.find(x => x.type === t).value;
+        [y, m, d] = [g('year'), g('month'), g('day')];
+    }
+    const wd = new Date(Date.UTC(+y, +m - 1, +d)).getUTCDay();
+    return `${y}/${m}/${d} (週${WEEK[wd]})`;
+}
+
+// 共用排版：drawFn(doc) 回傳最後的 y；先量高度再正式畫（熱感紙長度依內容）
+function nfRenderSlip(drawFn, filePath) {
+    return new Promise((resolve, reject) => {
+        const m = new PDFDocument({ size: [PAGE_W, 3000], margins: { top: 0, bottom: 0, left: CM, right: CM } });
+        m.registerFont('Bold', FONT_BOLD).registerFont('Reg', FONT_REG);
+        const h = Math.ceil(drawFn(m)) + 10;
+        const doc = new PDFDocument({ size: [PAGE_W, h], margins: { top: 0, bottom: 0, left: CM, right: CM }, compress: false });
+        const chunks = [];
+        doc.on('data', c => chunks.push(c));
+        doc.on('end', () => fs.writeFile(filePath, Buffer.concat(chunks), e => e ? reject(e) : resolve(h)));
+        doc.on('error', reject);
+        doc.registerFont('Bold', FONT_BOLD).registerFont('Reg', FONT_REG);
+        drawFn(doc);
+        doc.end();
+    });
+}
+
+function nfSlipParts(doc) {
+    const line = (y, lw = 0.6, dash = false) => {
+        doc.save(); if (dash) doc.dash(2, { space: 1.5 });
+        doc.moveTo(CM, y).lineTo(PAGE_W - CM, y).lineWidth(lw).strokeColor('black').stroke(); doc.restore();
+    };
+    // 一行文字，放不下時縮小字級（最小 min）
+    const fit = (text, font, size, min, opts = {}) => {
+        let sz = size;
+        doc.font(font);
+        while (sz > min && doc.fontSize(sz).widthOfString(text) > CCW) sz -= 0.5;
+        return sz;
+    };
+    const text = (t, x, y, font, size, opts = {}) => { doc.font(font).fontSize(size).fillColor('black').text(t, x, y, { lineBreak: false, ...opts }); };
+    // 標籤＋內容（內容可換行），回傳下一行 y
+    const field = (label, value, y) => {
+        doc.font('Reg').fontSize(NF_SZ.label);
+        const lw = doc.widthOfString(label);
+        text(label, CM, y, 'Reg', NF_SZ.label);
+        let sz = NF_SZ.label; // 內容放不下就縮小一點，保持一行（日期不會把「週X」擠到下一行）
+        doc.font('Bold');
+        while (sz > 8 && doc.fontSize(sz).widthOfString(value || '') > CCW - lw) sz -= 0.25;
+        if (doc.fontSize(sz).widthOfString(value || '') > CCW - lw) { // 還是太長：換行，不截斷
+            const h = doc.heightOfString(value || '', { width: CCW - lw });
+            doc.fillColor('black').text(value || '', CM + lw, y, { width: CCW - lw });
+            return y + Math.max(h, NF_SZ.label) + 5;
         }
-    }
-    return y;
+        text(value || '', CM + lw, y + (NF_SZ.label - sz) / 2, 'Bold', sz);
+        return y + NF_SZ.label + 5;
+    };
+    // 一段文字：縮字級放進一行（最小 min），還是放不下才換行
+    const para = (t, y, size = NF_SZ.label, min = 8) => {
+        doc.font('Reg');
+        let sz = size;
+        while (sz > min && doc.fontSize(sz).widthOfString(t) > CCW) sz -= 0.25;
+        doc.fontSize(sz);
+        const h = doc.heightOfString(t, { width: CCW });
+        doc.fillColor('black').text(t, CM, y, { width: CCW });
+        return y + h + 4;
+    };
+    // 手寫格：標籤＋底線（加高），可加「□同上」
+    const blank = (label, y, { same = false, lines = 1 } = {}) => {
+        const H = 24;
+        doc.font('Reg').fontSize(NF_SZ.label);
+        const lw = doc.widthOfString(label);
+        const sameW = same ? 30 : 0;
+        for (let i = 0; i < lines; i++) {
+            const by = y + H * (i + 1) - 4;
+            if (i === 0) text(label, CM, by - NF_SZ.label - 1, 'Reg', NF_SZ.label);
+            const x0 = i === 0 ? CM + lw + 1 : CM;
+            doc.moveTo(x0, by).lineTo(PAGE_W - CM - (i === 0 ? sameW : 0), by).lineWidth(0.5).strokeColor('black').stroke();
+        }
+        if (same) {
+            const bx = PAGE_W - CM - sameW + 4, byy = y + H - 4 - 8;
+            doc.rect(bx, byy, 8, 8).lineWidth(0.7).strokeColor('black').stroke();
+            text('同上', bx + 10, byy - 0.5, 'Reg', NF_SZ.small);
+        }
+        return y + H * lines + 2;
+    };
+    const section = (title, y) => {
+        line(y, 1); y += 4;
+        text(title, CM, y, 'Bold', NF_SZ.title - 1);
+        return y + NF_SZ.title + 4;
+    };
+    return { line, fit, text, field, blank, section, para };
 }
 
-function measureNianfaiRowsHeight(mDoc, rows) {
-    let h = 0;
-    for (const row of rows) {
-        mDoc.font('Bold').fontSize(C_ITEM_SZ);
-        const nameH = mDoc.heightOfString(row.name || '', { width: C_NAME_W });
-        h += Math.max(nameH, C_ITEM_SZ + 3) + 2;
-        if (row.bundleComponents) h += row.bundleComponents.length * (C_SUB_SZ + 2);
+// 抬頭到總計（兩聯共用）
+function nfSlipOrderPart(doc, data, copyName, withLogo) {
+    const P = nfSlipParts(doc);
+    let y = 2;
+    if (withLogo && NF_LOGO) {
+        const w = CCW, h = w * 145 / 768;
+        doc.image(NF_LOGO, CM, y, { width: w });
+        y += h + 4;
+        const contact = `${NF_STORE.phone}｜${NF_STORE.address}`;
+        const csz = P.fit(contact, 'Reg', NF_SZ.small, 6);
+        P.text(contact, CM, y, 'Reg', csz, { width: CCW, align: 'center' });
+        y += csz + 4;
+        P.line(y, 1); y += 5;
     }
-    return h;
+    const title = `年菜訂購單｜${data.seqLabel || ''}`;
+    const tsz = P.fit(title, 'Bold', NF_SZ.title, 8);
+    P.text(title, CM, y, 'Bold', tsz, { width: CCW, align: 'center' });
+    y += tsz + 4;
+    P.text(`【${copyName}】`, CM, y, 'Bold', NF_SZ.label, { width: CCW, align: 'center' });
+    y += NF_SZ.label + 6;
+    y = P.field('訂購日期：', nfDateWeek(data.orderDate || Date.now()), y);
+    y = P.field('出貨方式：', data.deliveryMethod === 'delivery' ? '宅配' : '來店自取', y);
+
+    // 訂單明細
+    y = P.section('訂單明細', y);
+    const QW = 22, AW = 40, NW = CCW - QW - AW;
+    P.text('品名', CM, y, 'Reg', NF_SZ.small);
+    P.text('數量', CM + NW, y, 'Reg', NF_SZ.small, { width: QW, align: 'center' });
+    P.text('小計', CM + NW + QW, y, 'Reg', NF_SZ.small, { width: AW, align: 'right' });
+    y += NF_SZ.small + 3;
+    P.line(y, 0.4, true); y += 4;
+    const rows = (data.items || []).map(it => ({ ...it, qty: it.quantity || it.qty || 1 }));
+    for (const r of rows) {
+        doc.font('Bold').fontSize(NF_SZ.item);
+        const nh = doc.heightOfString(r.name || '', { width: NW });
+        doc.fillColor('black').text(r.name || '', CM, y, { width: NW });
+        P.text(String(r.qty), CM + NW, y, 'Reg', NF_SZ.item, { width: QW, align: 'center' });
+        P.text(`$${((r.price || 0) * r.qty).toLocaleString('en-US')}`, CM + NW + QW, y, 'Reg', NF_SZ.item, { width: AW, align: 'right' });
+        y += Math.max(nh, NF_SZ.item) + 3;
+        for (const c of r.bundleComponents || []) {
+            P.text(`・${c.name}${c.qty > 1 ? ` ×${c.qty}` : ''}`, CM + 6, y, 'Reg', NF_SZ.sub, { width: CCW - 6 });
+            y += NF_SZ.sub + 2.5;
+        }
+        if ((r.bundleComponents || []).length) y += 2;
+    }
+    P.line(y, 0.6); y += 5;
+    const subtotal = data.subtotal != null ? data.subtotal : rows.reduce((s, r) => s + (r.price || 0) * r.qty, 0);
+    const ship = data.shippingFee || 0;
+    const total = data.total != null ? data.total : subtotal + ship;
+    if (ship > 0) {
+        P.text('小計', CM, y, 'Reg', NF_SZ.label); P.text(`$${subtotal.toLocaleString('en-US')}`, CM, y, 'Reg', NF_SZ.label, { width: CCW, align: 'right' }); y += NF_SZ.label + 3;
+        P.text('運費', CM, y, 'Reg', NF_SZ.label); P.text(`$${ship.toLocaleString('en-US')}`, CM, y, 'Reg', NF_SZ.label, { width: CCW, align: 'right' }); y += NF_SZ.label + 4;
+    }
+    P.text('總計', CM, y + 2, 'Bold', NF_SZ.label + 1);
+    P.text(`$${total.toLocaleString('en-US')}`, CM, y, 'Reg', NF_SZ.total, { width: CCW, align: 'right' });
+    P.text(`$${total.toLocaleString('en-US')}`, CM + 0.3, y, 'Reg', NF_SZ.total, { width: CCW, align: 'right' }); // 疊印加粗
+    y += NF_SZ.total + 6;
+    return { y, P };
 }
 
-// 顧客聯（正式聯）：確認訂購時印給客人核對，不含訂購人資料（姓名/電話/收件資訊都還沒填）。
+// 顧客聯：確認訂購時印，客人帶回去（取貨時出示）
 function buildNianfaiConfirmPDF(data, filePath) {
-    return new Promise((resolve, reject) => {
-        const rows = (data.items || []).map(it => ({ ...it, qty: it.quantity || it.qty || 1 }));
-        const mDoc = new PDFDocument({ size: [PAGE_W, 1000] });
-        mDoc.registerFont('Bold', FONT_BOLD).registerFont('Reg', FONT_REG);
-
-        const deliveryLine = data.deliveryMethod === 'delivery'
-            ? `取貨方式：宅配　寄出期間：${data.deliveryPeriod || ''}`
-            : `取貨方式：自取　取貨日：${fmtPickupDateWithWeekday(data.pickupDate)}`;
-
-        let h = (C_STO_SZ + 3) + (C_HDR_SZ + 3) + (C_SUB_SZ + 4) + 4
-              + (C_COL_SZ + 3) + 3 + measureNianfaiRowsHeight(mDoc, rows)
-              + 5 + (C_SUB_SZ + 2) * 2 + 4 // 小計/運費
-              + (C_TOT_SZ + 6) + (C_SUB_SZ + 10); // 合計 + 底部留白
-
-        const doc = new PDFDocument({ size: [PAGE_W, h], margins: { top: 0, bottom: 0, left: CM, right: CM }, compress: false });
-        const chunks = [];
-        doc.on('data',  c => chunks.push(c));
-        doc.on('end',   () => fs.writeFile(filePath, Buffer.concat(chunks), e => e ? reject(e) : resolve(h)));
-        doc.on('error', reject);
-        doc.registerFont('Bold', FONT_BOLD).registerFont('Reg', FONT_REG);
-
-        const hLine = (y, lw) => { doc.moveTo(CM, y).lineTo(PAGE_W - CM, y).lineWidth(lw || 0.6).strokeColor('black').stroke(); };
-
-        let y = 0;
-        doc.font('Bold').fontSize(C_STO_SZ).fillColor('black')
-           .text('咕咕義小餐館 年菜訂購單', CM, y, { width: CCW, align: 'center', lineBreak: false });
-        y += C_STO_SZ + 3;
-
-        doc.font('Bold').fontSize(C_HDR_SZ).fillColor('black')
-           .text(`顧客聯（正式聯）　流水號 ${data.seqLabel || ''}`, CM, y, { width: CCW, align: 'center', lineBreak: false });
-        y += C_HDR_SZ + 3;
-
-        doc.font('Reg').fontSize(C_SUB_SZ).fillColor('black')
-           .text(deliveryLine, CM, y, { width: CCW, lineBreak: true });
-        y += C_SUB_SZ + 4;
-
-        hLine(y, 0.8); y += 4;
-        doc.font('Reg').fontSize(C_COL_SZ).fillColor('black').text('品名', C_NAME_X, y, { lineBreak: false });
-        doc.font('Reg').fontSize(C_COL_SZ).fillColor('black').text('數量', C_QTY_X, y, { width: C_QTY_W, align: 'center', lineBreak: false });
-        doc.font('Reg').fontSize(C_COL_SZ).fillColor('black').text('金額', C_PRI_X, y, { width: C_PRI_W, align: 'right', lineBreak: false });
-        y += C_COL_SZ + 3;
-        hLine(y, 0.4); y += 3;
-
-        y = drawNianfaiItemRows(doc, rows, y);
-        hLine(y, 0.8); y += 5;
-
-        const subtotal = data.subtotal != null ? data.subtotal : rows.reduce((s, r) => s + (r.price || 0) * r.qty, 0);
-        const shippingFee = data.shippingFee || 0;
-        const total = data.total != null ? data.total : subtotal + shippingFee;
-
-        doc.font('Reg').fontSize(C_SUB_SZ).fillColor('black').text('小計', CM, y, { lineBreak: false });
-        doc.font('Reg').fontSize(C_SUB_SZ).fillColor('black').text(`$${subtotal.toLocaleString('en-US')}`, CM, y, { width: CCW, align: 'right', lineBreak: false });
-        y += C_SUB_SZ + 2;
-        if (shippingFee > 0) {
-            doc.font('Reg').fontSize(C_SUB_SZ).fillColor('black').text('運費', CM, y, { lineBreak: false });
-            doc.font('Reg').fontSize(C_SUB_SZ).fillColor('black').text(`$${shippingFee.toLocaleString('en-US')}`, CM, y, { width: CCW, align: 'right', lineBreak: false });
-            y += C_SUB_SZ + 2;
+    return nfRenderSlip((doc) => {
+        let { y, P } = nfSlipOrderPart(doc, data, '顧客聯', true);
+        if (data.deliveryMethod === 'delivery') {
+            y = P.section('宅配資訊', y);
+            y = P.field('寄出期間：', String(data.deliveryPeriod || '').replace(/^\d{4}\//, '').replace(/\s*[~～]\s*/, '～').replace(/\s+/g, ''), y); // 年份已在訂購日期
+            y = P.section('注意事項', y);
+            y = P.para('宅配統一於寄出期間寄出，恕無法指定到貨日期。', y);
+        } else {
+            y = P.section('取貨資訊', y);
+            y = P.field('取貨日期：', nfDateWeek(data.pickupDate), y);
+            y = P.field('取貨時間：', data.pickupHours || '', y);
+            y = P.section('注意事項', y);
+            y = P.para('取貨時請出示此單據以利作業。', y);
         }
-        y += 2;
-
-        const totY = y;
-        doc.font('Reg').fontSize(C_TOT_SZ - 1).fillColor('black').text('總額', CM, totY, { lineBreak: false });
-        doc.y = totY; doc.x = CM;
-        doc.font('Bold').fontSize(C_TOT_SZ).fillColor('black')
-           .text(`$${total.toLocaleString('en-US')}`, { width: CCW, align: 'right', lineBreak: false });
-
-        doc.end();
-    });
+        return y;
+    }, filePath);
 }
 
-// 存根聯：結帳時印，收現金成立發票用，留空格讓客人手寫姓名/電話（自取）或收件人/電話/地址（宅配）。
+// 存根聯：結帳時印，店家留存；客人在手寫格填資料（之後到年菜訂單頁補登）
 function buildNianfaiStubPDF(data, filePath) {
-    return new Promise((resolve, reject) => {
-        const rows = (data.items || []).map(it => ({ ...it, qty: it.quantity || it.qty || 1 }));
-        const mDoc = new PDFDocument({ size: [PAGE_W, 1000] });
-        mDoc.registerFont('Bold', FONT_BOLD).registerFont('Reg', FONT_REG);
-
-        const blankLines = data.deliveryMethod === 'delivery'
-            ? ['收件人：＿＿＿＿＿＿＿＿＿', '電話：＿＿＿＿＿＿＿＿＿', '地址：＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿']
-            : ['姓名：＿＿＿＿＿＿＿＿＿', '電話：＿＿＿＿＿＿＿＿＿'];
-
-        let h = (C_STO_SZ + 3) + (C_HDR_SZ + 3) + 4
-              + (C_COL_SZ + 3) + 3 + rows.reduce((s, r) => {
-                  mDoc.font('Bold').fontSize(C_ITEM_SZ);
-                  return s + Math.max(mDoc.heightOfString(r.name || '', { width: C_NAME_W }), C_ITEM_SZ + 3) + 2;
-              }, 0)
-              + 10 + (C_TOT_SZ + 6) + (C_SUB_SZ + 6)
-              + blankLines.length * (C_ITEM_SZ + 6) + 10;
-
-        const doc = new PDFDocument({ size: [PAGE_W, h], margins: { top: 0, bottom: 0, left: CM, right: CM }, compress: false });
-        const chunks = [];
-        doc.on('data',  c => chunks.push(c));
-        doc.on('end',   () => fs.writeFile(filePath, Buffer.concat(chunks), e => e ? reject(e) : resolve(h)));
-        doc.on('error', reject);
-        doc.registerFont('Bold', FONT_BOLD).registerFont('Reg', FONT_REG);
-
-        const hLine = (y, lw) => { doc.moveTo(CM, y).lineTo(PAGE_W - CM, y).lineWidth(lw || 0.6).strokeColor('black').stroke(); };
-
-        let y = 0;
-        doc.font('Bold').fontSize(C_STO_SZ).fillColor('black')
-           .text('咕咕義小餐館 年菜訂購單', CM, y, { width: CCW, align: 'center', lineBreak: false });
-        y += C_STO_SZ + 3;
-
-        doc.font('Bold').fontSize(C_HDR_SZ).fillColor('black')
-           .text(`存根聯　流水號 ${data.seqLabel || ''}`, CM, y, { width: CCW, align: 'center', lineBreak: false });
-        y += C_HDR_SZ + 7;
-
-        doc.font('Reg').fontSize(C_COL_SZ).fillColor('black').text('品名', C_NAME_X, y, { lineBreak: false });
-        doc.font('Reg').fontSize(C_COL_SZ).fillColor('black').text('數量', C_QTY_X, y, { width: C_QTY_W, align: 'center', lineBreak: false });
-        doc.font('Reg').fontSize(C_COL_SZ).fillColor('black').text('金額', C_PRI_X, y, { width: C_PRI_W, align: 'right', lineBreak: false });
-        y += C_COL_SZ + 3;
-        hLine(y, 0.4); y += 3;
-
-        for (const row of rows) {
-            doc.font('Bold').fontSize(C_ITEM_SZ);
-            const nameH = doc.heightOfString(row.name || '', { width: C_NAME_W });
-            const rowH = Math.max(nameH, C_ITEM_SZ + 3);
-            doc.font('Bold').fontSize(C_ITEM_SZ).fillColor('black').text(row.name || '', C_NAME_X, y, { width: C_NAME_W, lineBreak: true });
-            doc.font('Reg').fontSize(C_ITEM_SZ).fillColor('black').text(String(row.qty), C_QTY_X, y, { width: C_QTY_W, align: 'center', lineBreak: false });
-            doc.font('Reg').fontSize(C_ITEM_SZ).fillColor('black').text(String((row.price || 0) * row.qty), C_PRI_X, y, { width: C_PRI_W, align: 'right', lineBreak: false });
-            y += rowH + 2;
+    return nfRenderSlip((doc) => {
+        let { y, P } = nfSlipOrderPart(doc, data, '存根聯', false);
+        P.text('已付清', CM, y, 'Bold', NF_SZ.label, { width: CCW, align: 'center' });
+        y += NF_SZ.label + 4;
+        if (data.deliveryMethod === 'delivery') {
+            y = P.section('宅配資訊', y);
+            y = P.blank('訂購人姓名：', y);
+            y = P.blank('訂購人電話：', y);
+            y = P.blank('收件人姓名：', y, { same: true });
+            y = P.blank('收件人電話：', y, { same: true });
+            y = P.blank('宅配地址：', y, { lines: 2 });
+        } else {
+            y = P.section('取貨資訊', y);
+            y = P.blank('訂購人姓名：', y);
+            y = P.blank('訂購人電話：', y);
+            y += 2;
+            y = P.field('取貨日期：', nfDateWeek(data.pickupDate), y);
+            y = P.field('取貨時間：', data.pickupHours || '', y);
         }
-        hLine(y, 0.8); y += 5;
+        return y;
+    }, filePath);
+}
 
-        const total = data.total != null ? data.total : rows.reduce((s, r) => s + (r.price || 0) * r.qty, 0);
-        const totY = y;
-        doc.font('Reg').fontSize(C_TOT_SZ - 1).fillColor('black').text('合計', CM, totY, { lineBreak: false });
-        doc.y = totY; doc.x = CM;
-        doc.font('Bold').fontSize(C_TOT_SZ).fillColor('black')
-           .text(`$${total.toLocaleString('en-US')}`, { width: CCW, align: 'right', lineBreak: false });
-        y += C_TOT_SZ + 6;
-
-        doc.font('Bold').fontSize(C_SUB_SZ).fillColor('black')
-           .text('已付清', CM, y, { width: CCW, align: 'center', lineBreak: false });
-        y += C_SUB_SZ + 6;
-
-        hLine(y, 0.4); y += 6;
-        for (const line of blankLines) {
-            doc.font('Reg').fontSize(C_ITEM_SZ).fillColor('black').text(line, CM, y, { width: CCW, lineBreak: false });
-            y += C_ITEM_SZ + 6;
-        }
-
-        doc.end();
-    });
+// 取貨時間：最後一天（除夕前一天）提早結束，其他天用每日取貨時間（年菜管理頁的日期設定）
+async function nianfaiPickupHoursFor(year, pickupDate) {
+    if (!year || !pickupDate) return '';
+    const keys = ['pickup_hours', 'last_pickup_end', 'pickup_dates'].map(k => `nianfai_${year}_${k}`);
+    const { data } = await supabase.from('app_settings').select('key, value').in('key', keys);
+    const kv = Object.fromEntries((data || []).map(r => [r.key.replace(`nianfai_${year}_`, ''), r.value]));
+    const [start = '12:00', end = '20:00'] = String(kv.pickup_hours || '12:00 ~ 20:00').split(/\s*[~～-]\s*/);
+    let dates = []; try { dates = JSON.parse(kv.pickup_dates || '[]'); } catch { dates = []; }
+    const isLast = dates.length && pickupDate === dates[dates.length - 1];
+    return `${start} - ${isLast ? (kv.last_pickup_end || '16:00') : end}`;
 }
 
 // ----------------------------------------------------
@@ -1525,6 +1562,9 @@ app.post('/print', printRateLimit, async (req, res) => {
             }
 
             // 年菜：確認訂購印顧客聯（正式聯），結帳印存根聯，兩個時機分開印、內容不同
+            if (printMode === 'nianfai-confirm' || printMode === 'nianfai-stub') {
+                data.pickupHours = await nianfaiPickupHoursFor(data.year, data.pickupDate).catch(() => '');
+            }
             if (printMode === 'nianfai-confirm') {
                 const fc = path.join(os.tmpdir(), `nianfai_confirm_${Date.now()}.pdf`);
                 const hc = await buildNianfaiConfirmPDF(data, fc);
@@ -2467,7 +2507,22 @@ app.post('/api/orders/:id/complete', async (req, res) => {
 const NIANFAI_DEFAULT_EMAIL = 'goodgoodeatrestaurant@gmail.com'; // 客人沒填 email 時用店家信箱
 const NIANFAI_STOCK_CATEGORY = '年菜庫存';
 // 年菜流水號顯示：年份末兩碼＋3 位流水號，例如 2027 年第 1 號 → 27001（2028 從 28001 開始）
-const nianfaiSeqLabel = (year, seqNo) => `${Number(year) % 100}${String(seqNo).padStart(3, '0')}`; // 年節限定品項的製作入庫量，在庫存管理頁維護
+const nianfaiSeqLabel = (year, seqNo) => `${Number(year) % 100}${String(seqNo).padStart(3, '0')}`; // 舊格式（27001），只剩相容用
+// 訂購編號：販售年度 2 碼＋出單日期 yymmdd＋流水號 3 碼，例 27261205001（2027 年菜、2026/12/05 確認訂購、第 1 號）。
+// 出單日期＝確認訂購（取得流水號）那天，顧客聯當下就印出，所以存根聯、表單、Sheet、確認信都用同一個。
+const taipeiYYMMDD = (d) => {
+    const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: '2-digit', month: '2-digit', day: '2-digit' }).formatToParts(new Date(d || Date.now()));
+    const g = (t) => p.find(x => x.type === t).value;
+    return `${g('year')}${g('month')}${g('day')}`;
+};
+const nianfaiOrderNo = (year, seqNo, issuedAt) => `${Number(year) % 100}${taipeiYYMMDD(issuedAt)}${String(seqNo).padStart(3, '0')}`;
+// 年度內各流水號的出單日期（nianfai_seq_reservations.confirmed_at）；fallback：訂單建立時間
+async function nianfaiIssueDates(year, seqNos = null) {
+    let q = supabase.from('nianfai_seq_reservations').select('seq_no, confirmed_at').eq('year', year);
+    if (seqNos) q = q.in('seq_no', seqNos);
+    const { data } = await q;
+    return new Map((data || []).map(r => [r.seq_no, r.confirmed_at]));
+} // 年節限定品項的製作入庫量，在庫存管理頁維護
 
 // 第 6 節必填欄位：缺一不能送出。回傳缺少的欄位名稱（空陣列 = 完整）
 function nianfaiMissingFields(nf) {
@@ -2529,14 +2584,15 @@ async function submitToNianfaiForm(orderId) {
     const { data: nf } = await supabase.from('nianfai_orders').select('*').eq('order_id', orderId).single();
     if (!nf || nf.form_submission_status === 'sent') return;
     if (nianfaiMissingFields(nf).length > 0) return; // 防呆：資料不完整絕不送出
-    const { data: order } = await supabase.from('orders').select('items').eq('id', orderId).single();
+    const { data: order } = await supabase.from('orders').select('items, timestamp').eq('id', orderId).single();
+    const issued = (await nianfaiIssueDates(nf.year, [nf.seq_no])).get(nf.seq_no) || nf.created_at || order?.timestamp;
     try {
         // 表單題目依品名對應（GAS 端用「設定」的品名比對），GAS 用「現結＋流水號」防重複
         await callNianfaiGas('submitOrder', {
             year: nf.year,
             order: {
                 orderId: nf.order_id, // GAS 用訂單編號防重複（流水號在清空測試資料後會重新開始）
-                seqLabel: nianfaiSeqLabel(nf.year, nf.seq_no),
+                seqLabel: nianfaiOrderNo(nf.year, nf.seq_no, issued), // 表單「末五碼」填「現結＋訂購編號」
                 customerName: nf.customer_name, customerPhone: nf.customer_phone,
                 // 客人有填就用客人的（GAS 寄給客人並 bcc 店家）；沒填用店家信箱（只寄給店家）
                 email: (nf.customer_email && nf.customer_email.trim()) || NIANFAI_DEFAULT_EMAIL,
@@ -2572,9 +2628,10 @@ setInterval(async () => {
 // excludeSeqLabels：已經送進表單的流水號（這些從 Sheet 算，不再從 WebPOS 算，避免重複）
 // ordered（選填）：各品項被點的原始份數（套餐不拆），給年菜庫存的套餐列顯示份數
 async function computeWebposNianfaiDemand(year, excludeSeqLabels = new Set(), ordered = null) {
-    const { data: nfOrders } = await supabase.from('nianfai_orders').select('order_id, seq_no').eq('year', year);
+    const { data: nfOrders } = await supabase.from('nianfai_orders').select('order_id, seq_no, created_at').eq('year', year);
     const demand = {};
-    const seqByOrder = new Map((nfOrders || []).map(o => [o.order_id, nianfaiSeqLabel(year, o.seq_no)]));
+    const issued = await nianfaiIssueDates(year);
+    const seqByOrder = new Map((nfOrders || []).map(o => [o.order_id, nianfaiOrderNo(year, o.seq_no, issued.get(o.seq_no) || o.created_at)]));
     const orderIds = (nfOrders || []).map(o => o.order_id).filter(id => !excludeSeqLabels.has(seqByOrder.get(id)));
     if (orderIds.length === 0) return demand;
 
@@ -2925,7 +2982,7 @@ app.post('/api/nianfai/reservations', async (req, res) => {
                 .update({ items_snapshot: items, delivery_method: deliveryMethod, pickup_date: pickupDate || null, total })
                 .eq('id', reservationId).eq('status', 'reserved').select().single();
             if (error || !data) return res.status(404).json({ error: '找不到保留中的訂購紀錄（可能已結帳或已取消，請重新開始）' });
-            return res.json({ reservationId: data.id, seqNo: data.seq_no });
+            return res.json({ reservationId: data.id, seqNo: data.seq_no, orderNo: nianfaiOrderNo(data.year, data.seq_no, data.confirmed_at), confirmedAt: data.confirmed_at });
         }
         const seqKey = `nianfai_${year}_next_seq`;
         const now = new Date().toISOString();
@@ -2937,7 +2994,7 @@ app.post('/api/nianfai/reservations', async (req, res) => {
             delivery_method: deliveryMethod, pickup_date: pickupDate || null, total,
         }).select().single();
         if (error) throw error;
-        res.json({ reservationId: data.id, seqNo: data.seq_no });
+        res.json({ reservationId: data.id, seqNo: data.seq_no, orderNo: nianfaiOrderNo(data.year, data.seq_no, data.confirmed_at), confirmedAt: data.confirmed_at });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -2949,7 +3006,7 @@ function reservationToCamel(r) {
     return {
         id: r.id, year: r.year, seqNo: r.seq_no, status: r.status,
         items: r.items_snapshot || [], deliveryMethod: r.delivery_method, pickupDate: r.pickup_date,
-        total: r.total, confirmedAt: r.confirmed_at,
+        total: r.total, confirmedAt: r.confirmed_at, orderNo: nianfaiOrderNo(r.year, r.seq_no, r.confirmed_at),
     };
 }
 app.get('/api/nianfai/reservations', async (req, res) => {
@@ -3009,7 +3066,7 @@ app.post('/api/nianfai/reservations/:id/checkout', async (req, res) => {
         if (nfErr) throw nfErr;
 
         const { data: invoice, error: invErr } = await supabase.from('invoices').insert({
-            invoice_number: `NF-${nianfaiSeqLabel(year, seqNo)}`,
+            invoice_number: `NF-${nianfaiOrderNo(year, seqNo, resv.confirmed_at)}`,
             payment_time: now, order_id: order.id,
             order_type: '外帶', table_name: '外帶', customer_count: 0,
             total, amount: total, items_snapshot: items, status: '已開立',
@@ -3019,7 +3076,7 @@ app.post('/api/nianfai/reservations/:id/checkout', async (req, res) => {
         await supabase.from('nianfai_seq_reservations').update({ status: 'used', used_at: now }).eq('id', req.params.id);
         await checkAndCloseFormIfNeeded(year);
 
-        res.json({ ok: true, orderId: order.id, seqNo, invoiceId: invoice.id, total });
+        res.json({ ok: true, orderId: order.id, seqNo, orderNo: nianfaiOrderNo(year, seqNo, resv.confirmed_at), confirmedAt: resv.confirmed_at, invoiceId: invoice.id, total });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -3044,15 +3101,19 @@ async function fetchValidNianfaiOrders({ year, since, statuses } = {}) {
     const oMap = new Map((orders || []).map(o => [o.id, o]));
     const invMap = new Map((invoices || []).map(i => [i.order_id, i]));
     const sinceMs = since ? new Date(since).getTime() : null;
+    // 出單日期（訂購編號用）：依年度一次查
+    const issuedByYear = new Map();
+    for (const y of [...new Set(nfRows.map(r => r.year))]) issuedByYear.set(y, await nianfaiIssueDates(y));
     return nfRows
         .filter(nf => invMap.has(nf.order_id) && oMap.has(nf.order_id))
-        .map(nf => ({ nf, order: oMap.get(nf.order_id), invoice: invMap.get(nf.order_id) }))
+        .map(nf => ({ nf, order: oMap.get(nf.order_id), invoice: invMap.get(nf.order_id), issuedAt: issuedByYear.get(nf.year).get(nf.seq_no) }))
         .filter(({ order }) => sinceMs == null || new Date(order.timestamp).getTime() >= sinceMs);
 }
 
-function nianfaiQueueEntry({ nf, order, invoice }) {
+function nianfaiQueueEntry({ nf, order, invoice, issuedAt }) {
     return {
         orderId: nf.order_id, invoiceId: invoice.id, year: nf.year, seqNo: nf.seq_no,
+        orderNo: nianfaiOrderNo(nf.year, nf.seq_no, issuedAt || nf.created_at || order.timestamp),
         checkoutTime: order.timestamp, total: order.total,
         items: (order.items || []).map(it => ({ id: it.id, name: it.name, quantity: it.quantity || 1, price: it.price })),
         customerName: nf.customer_name || '', customerPhone: nf.customer_phone || '',
@@ -3150,7 +3211,7 @@ app.get('/api/nianfai/close-check', async (req, res) => {
         const rows = await fetchValidNianfaiOrders({ since: req.query.since || null, statuses: ['incomplete'] });
         const blocking = rows.map(nianfaiQueueEntry)
             .sort((a, b) => a.year - b.year || a.seqNo - b.seqNo)
-            .map(r => ({ orderId: r.orderId, label: nianfaiSeqLabel(r.year, r.seqNo) }));
+            .map(r => ({ orderId: r.orderId, label: r.orderNo }));
         res.json({ blocking });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -3659,6 +3720,9 @@ app.post('/print-preview', async (req, res) => {
         const slips = [];
 
         // 年菜單聯預覽（確認訂購/結帳分開測試）
+        if (data.printMode === 'nianfai-confirm' || data.printMode === 'nianfai-stub') {
+            data.pickupHours = await nianfaiPickupHoursFor(data.year, data.pickupDate).catch(() => '');
+        }
         if (data.printMode === 'nianfai-confirm') {
             const fnameC = `preview_nf_confirm_${ts}.pdf`;
             const hc = await buildNianfaiConfirmPDF(data, path.join(os.tmpdir(), fnameC));

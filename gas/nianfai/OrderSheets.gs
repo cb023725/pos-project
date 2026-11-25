@@ -46,7 +46,7 @@ function nfOrderCols_(kind, settings) {
   add('phone', '電話', { text: true, width: 110 });
   add('summary', '品項', { width: 300 });
   add('amount', '金額', { type: 'money', width: 80, align: 'right', note: '含運費的最終金額' });
-  add('last5', '末五碼', { text: true, width: 90, align: 'center', note: '匯款帳號末五碼；現場單顯示「現結＋流水號」' });
+  add('last5', '末五碼', { text: true, width: 140, align: 'center', note: '匯款帳號末五碼；現場單顯示「現結＋訂購編號」（例 現結27261205001）' });
   add('paid', '付款', { manual: true, type: 'check', width: 56, align: 'center', note: '確認收到款項後打勾（現場單自動打勾）' });
   if (kind === 'delivery') {
     add('recipientName', '收件人', { width: 100 });

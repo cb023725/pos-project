@@ -1,7 +1,7 @@
 /**
  * 分頁建立：宅配、自取（OrderSheets.gs，由 GAS 寫入）＋查詢、統計、備料表、修改紀錄（公式，讀宅配／自取）
  *
- *   查詢    B1 輸入姓名、電話、末五碼或流水號（例 27001）的任何一部分，列出符合的訂單（宅配＋自取）
+ *   查詢    B1 輸入姓名、電話、末五碼或訂購編號（例 27261205001）的任何一部分，列出符合的訂單（宅配＋自取）
  *   統計    收款（總額／已收／未收）、訂單數（宅配／自取、線上／現場）、包材、各品項訂購量與出貨／取貨進度
  *           （入庫、需求、差額、停售在 WebPOS 年菜管理頁看，這裡不重複）
  *   備料表  列是品項（套餐拆成組成）、欄是 宅配｜各取貨日｜合計；下方每天保冷袋與宅配件數
@@ -114,7 +114,7 @@ function nfBuildLookupSheet_(ss, s, defs) {
   nfStyleTitle_(sh, 'A1', '🔍 查詢訂單');
   sh.getRange('B1').setBackground('#fef3c7').setNumberFormat('@').setFontSize(13).setFontWeight('bold')
     .setBorder(true, true, true, true, false, false, '#f59e0b', SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
-  sh.getRange('C1').setValue('← 輸入姓名、電話、末五碼或流水號的任何一部分，例如「王」「0912」「27001」；每筆訂單一欄')
+  sh.getRange('C1').setValue('← 輸入姓名、電話、末五碼或訂購編號的任何一部分，例如「王」「0912」「27261205001」；每筆訂單一欄')
     .setFontColor(NF_HINT).setFontSize(10).setWrapStrategy(SpreadsheetApp.WrapStrategy.OVERFLOW);
   // 左邊欄位名稱
   nfStyleHead_(sh.getRange(top, 1, n, 1).setValues(labels.map(function (l) { return [l]; })));

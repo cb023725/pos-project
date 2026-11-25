@@ -78,7 +78,7 @@ function nfBuildOrderData_(order, settings) {
     pickupHours: nfPickupHours_(settings, nfIsoDate_(order.pickupDateRaw)).hours,
     isLastDay: nfPickupHours_(settings, nfIsoDate_(order.pickupDateRaw)).isLastDay,
     isOnsite: order.isOnsite,
-    seqLabel: order.seqLabel, // 現場單：WebPOS 流水號（例 27001）
+    seqLabel: order.seqLabel, // 現場單：WebPOS 訂購編號（例 27261205001）
     mapUrl: String(kv['地圖連結'] || ''),
     storePhone: String(kv['電話'] || ''),
     storeAddress: String(kv['店址'] || ''),

@@ -51,6 +51,7 @@ const NianfaiOrderPage = () => {
     // 點餐順序：從卡片點進來時記一個遞增序號，購物車照序號由新到舊排列（最新點的在最上面）
     const [addSeq, setAddSeq] = useState({});
     const seqCounter = useRef(0);
+    const confirmedAtRef = useRef(null); // 確認訂購的時間（訂購日期、訂購編號的出單日期）
     const cartListRef = useRef(null);
     const [hiddenBelow, setHiddenBelow] = useState(0); // 購物車捲軸下方還藏著幾項
     const [deliveryMethod, setDeliveryMethod] = useState('pickup');
@@ -92,7 +93,8 @@ const NianfaiOrderPage = () => {
             seqCounter.current = r.items.length;
             setAddSeq(seqMap);
             const pd = r.deliveryMethod === 'pickup' ? (r.pickupDate || '') : '';
-            const label = formatNianfaiSeq(r.year, r.seqNo);
+            const label = r.orderNo || formatNianfaiSeq(r.year, r.seqNo);
+            confirmedAtRef.current = r.confirmedAt || null;
             setQty(qtyMap); setDeliveryMethod(r.deliveryMethod); setPickupDate(pd);
             setReservationId(r.id); setSeqLabel(label);
             setConfirmedSnapshot(makeSnapshot(qtyMap, r.deliveryMethod, pd));
@@ -194,7 +196,7 @@ const NianfaiOrderPage = () => {
 
     const handleCancelOrder = async () => {
         const ok = await showConfirm(
-            reservationId ? `流水號 ${seqLabel} 將記為放棄` : '這筆訂購會清空',
+            reservationId ? `訂購編號 ${seqLabel} 將記為放棄` : '這筆訂購會清空',
             { title: '取消本單', icon: 'danger', confirmText: '取消本單', cancelText: '繼續點單', danger: true });
         if (!ok) return;
         await abandonReservation();
@@ -206,8 +208,8 @@ const NianfaiOrderPage = () => {
     const handleGoBack = async () => {
         if (reservationId) {
             const ok = await showConfirm(
-                `流水號 ${seqLabel} 已確認、尚未結帳`,
-                { title: '尚未結帳', icon: 'warning', note: '返回後此單取消，流水號記為放棄', confirmText: '放棄並返回', cancelText: '繼續點單', danger: true });
+                `訂購編號 ${seqLabel} 已確認、尚未結帳`,
+                { title: '尚未結帳', icon: 'warning', note: '返回後此單取消，訂購編號記為放棄', confirmText: '放棄並返回', cancelText: '繼續點單', danger: true });
             if (!ok) return;
             await abandonReservation();
         }
@@ -226,7 +228,8 @@ const NianfaiOrderPage = () => {
                 items: cartItems.map(it => ({ id: it.id, name: it.name, price: it.price, quantity: it.quantity })),
             };
             const result = await confirmNianfaiReservation(payload);
-            const label = formatNianfaiSeq(year, result.seqNo);
+            const label = result.orderNo || formatNianfaiSeq(year, result.seqNo);
+            confirmedAtRef.current = result.confirmedAt || null;
             setReservationId(result.reservationId);
             setSeqLabel(label);
             setConfirmedSnapshot(currentSnapshot);
@@ -235,7 +238,7 @@ const NianfaiOrderPage = () => {
             fetch('/print', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    printMode: 'nianfai-confirm', seqLabel: label,
+                    printMode: 'nianfai-confirm', seqLabel: label, year, orderDate: result.confirmedAt,
                     deliveryMethod, pickupDate, deliveryPeriod,
                     items: buildPrintItems(), subtotal, shippingFee, total,
                 }),
@@ -249,16 +252,17 @@ const NianfaiOrderPage = () => {
 
     const doCheckout = async (override) => {
         const result = await checkoutNianfaiReservation(reservationId, { override });
-        const label = formatNianfaiSeq(year, result.seqNo);
+        const label = result.orderNo || formatNianfaiSeq(year, result.seqNo);
         fetch('/print', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                printMode: 'nianfai-stub', seqLabel: label,
-                deliveryMethod, items: buildPrintItems(), total: result.total,
+                printMode: 'nianfai-stub', seqLabel: label, year, orderDate: result.confirmedAt || confirmedAtRef.current,
+                deliveryMethod, pickupDate, deliveryPeriod,
+                items: buildPrintItems(), subtotal, shippingFee, total: result.total,
             }),
         }).catch(e => console.warn('年菜存根聯列印失敗：', e));
         resetOrder();
-        await showAlert(`流水號 ${label}\n請客人在存根聯填寫資料，稍後補登`, { title: '結帳完成', icon: 'success', confirmText: '前往年菜訂單' });
+        await showAlert(`訂購編號 ${label}\n請客人在存根聯填寫資料，稍後補登`, { title: '結帳完成', icon: 'success', confirmText: '前往年菜訂單' });
         navigate('/nianfai-queue');
     };
 
@@ -385,8 +389,8 @@ const NianfaiOrderPage = () => {
                         {seqLabel && (
                             <p className={`rounded-lg px-2.5 py-1.5 text-xs font-bold ${isDirty ? 'bg-orange-50 text-orange-600' : 'bg-green-50 text-green-700'}`}>
                                 {isDirty
-                                    ? `流水號 ${seqLabel} 已保留，但內容已變更——請重新按「確認訂購」`
-                                    : `流水號 ${seqLabel} 已確認，可以結帳`}
+                                    ? `訂購編號 ${seqLabel} 已保留，但內容已變更——請重新按「確認訂購」`
+                                    : `訂購編號 ${seqLabel} 已確認，可以結帳`}
                             </p>
                         )}
                         {resumeNotice && <p className="rounded-lg px-2.5 py-1.5 text-xs font-bold bg-blue-50 text-blue-700">{resumeNotice}</p>}
