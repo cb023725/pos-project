@@ -109,6 +109,7 @@ function nfBuildLookupSheet_(ss, s, defs) {
   sh.getRange('A4').setFormula(formula);
   sh.getRange(4, 7, NF_DATA_ROWS, 1).setNumberFormat('#,##0');
   sh.setFrozenRows(3);
+  nfSaveBounds_(NF.SHEET_LOOKUP, 200, head.length, 'B1');
   [[1, 130], [2, 170], [3, 100], [4, 110], [5, 90], [6, 300], [7, 80], [8, 120], [9, 60], [10, 170], [11, 320], [12, 110]]
     .forEach(function (w) { sh.setColumnWidth(w[0], w[1]); });
 }
@@ -233,6 +234,7 @@ function nfBuildStatsSheet_(ss, s, defs) {
   sh.getRange(tr, 7).setFormula('=SUM(G' + (top + 1) + ':G' + (tr - 1) + ')').setFontWeight('bold');
   sh.setFrozenRows(1);
   sh.setHiddenGridlines(true);
+  nfSaveBounds_(NF.SHEET_STATS, tr, 8, null);
 }
 
 /**
@@ -241,6 +243,8 @@ function nfBuildStatsSheet_(ss, s, defs) {
  *   下方「每日明細」：列是品項、欄是 宅配｜各取貨日｜合計，最下面是每天的保冷袋與宅配件數
  */
 function nfBuildPrepSheet_(ss, s, defs) {
+  var old = ss.getSheetByName(NF.SHEET_PREP);
+  var keepDate = old ? old.getRange('B3').getValue() : null; // 重建時保留已選的截至日期
   var sh = nfGetOrCreateSheet_(ss, NF.SHEET_PREP);
   var R = function (kind, k) { return nfOrderRange_(kind, defs[kind], k); };
   var ok = function (kind) { return R(kind, 'note') + ',' + NF_NOT_CANCELLED; };
@@ -255,37 +259,47 @@ function nfBuildPrepSheet_(ss, s, defs) {
   // ── 截至日期 ──
   sh.getRange('A3').setValue('截至日期').setFontWeight('bold').setHorizontalAlignment('right');
   var first = s.pickupDates[0] ? /^(\d{4})-(\d{2})-(\d{2})/.exec(s.pickupDates[0]) : null;
-  sh.getRange('B3').setValue(first ? new Date(+first[1], +first[2] - 1, +first[3]) : new Date())
+  sh.getRange('B3').setValue(keepDate instanceof Date ? keepDate : first ? new Date(+first[1], +first[2] - 1, +first[3]) : new Date())
     .setNumberFormat('yyyy/m/d').setBackground('#fef3c7').setFontWeight('bold').setFontSize(13).setHorizontalAlignment('center')
     .setBorder(true, true, true, true, false, false, '#f59e0b', SpreadsheetApp.BorderStyle.SOLID_MEDIUM)
     .setDataValidation(SpreadsheetApp.newDataValidation().requireDate().setAllowInvalid(false).setHelpText('點兩下選日期').build());
   sh.getRange('C3').setValue('← 點兩下選日期：顯示這天（含）以前要準備好的數量').setFontColor('#6b7280').setFontSize(10);
-  var cumHead = ['品項', '需準備總數', '其中宅配', '其中自取'];
-  nfStyleHead_(sh.getRange(5, 1, 1, 4).setValues([cumHead]));
+  // 需準備總數＝單點＋套餐內含（例：雞湯＝單點的雞湯＋富貴套餐份數×套餐裡的雞湯數）
+  var cumHead = ['品項', '需準備總數', '單點', '套餐內含', '其中宅配', '其中自取'];
+  nfStyleHead_(sh.getRange(5, 1, 1, cumHead.length).setValues([cumHead]));
+  sh.getRange('B5').setNote('需準備總數＝單點＋套餐內含＝其中宅配＋其中自取');
   var upTo = R('delivery', 'sortDate'), upToP = R('pickup', 'sortDate');
+  var dateOf = function (kind) { return kind === 'delivery' ? upTo : upToP; };
   var cumRows = s.items.map(function (it, i) {
     var parts = nfItemParts_(s, i);
-    var sum = function (kind, dateRange) {
-      return parts.map(function (p) {
-        return (p.mult === 1 ? '' : p.mult + '*') + 'SUMIFS(' + R(kind, p.key) + ',' + R(kind, 'id') + ',"<>",' + ok(kind) + ',' + dateRange + ',"<="&$B$3)';
+    var sum = function (kinds, which) {
+      var ps = parts.filter(function (p, pi) { return which === 'all' || (which === 'own' ? pi === 0 : pi > 0); });
+      if (!ps.length) return '0';
+      return kinds.map(function (kind) {
+        return ps.map(function (p) {
+          return (p.mult === 1 ? '' : p.mult + '*') + 'SUMIFS(' + R(kind, p.key) + ',' + R(kind, 'id') + ',"<>",' + ok(kind) + ',' + dateOf(kind) + ',"<="&$B$3)';
+        }).join('+');
       }).join('+');
     };
     var r = 6 + i;
-    return [it.isBundle ? it.name + '（份）' : it.name, '=C' + r + '+D' + r, '=' + sum('delivery', upTo), '=' + sum('pickup', upToP)];
+    return [it.isBundle ? it.name + '（份）' : it.name, '=E' + r + '+F' + r,
+      '=' + sum(['delivery', 'pickup'], 'own'), it.isBundle ? '' : '=' + sum(['delivery', 'pickup'], 'bundle'),
+      '=' + sum(['delivery'], 'all'), '=' + sum(['pickup'], 'all')];
   });
   var cumEnd = 6 + cumRows.length;
   if (cumRows.length) {
-    sh.getRange(6, 1, cumRows.length, 4).setValues(cumRows).applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false);
-    sh.getRange(6, 2, cumRows.length, 3).setHorizontalAlignment('center');
+    sh.getRange(6, 1, cumRows.length, cumHead.length).setValues(cumRows).applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false);
+    sh.getRange(6, 2, cumRows.length, cumHead.length - 1).setHorizontalAlignment('center');
     sh.getRange(6, 2, cumRows.length, 1).setFontWeight('bold').setFontSize(13).setFontColor('#b91c1c');
+    sh.getRange(6, 3, cumRows.length, 2).setFontColor('#6b7280');
   }
-  sh.getRange(cumEnd, 1, 2, 4).setValues([
-    ['保冷提袋（自取）', '=D' + (cumEnd), '', '=SUMIFS(' + R('pickup', 'bags') + ',' + R('pickup', 'id') + ',"<>",' + ok('pickup') + ',' + upToP + ',"<="&$B$3)'],
-    ['宅配紙箱', '=C' + (cumEnd + 1), '=COUNTIFS(' + R('delivery', 'id') + ',"<>",' + ok('delivery') + ',' + upTo + ',"<="&$B$3)', ''],
+  sh.getRange(cumEnd, 1, 2, cumHead.length).setValues([
+    ['保冷提袋（自取）', '=F' + cumEnd, '', '', '', '=SUMIFS(' + R('pickup', 'bags') + ',' + R('pickup', 'id') + ',"<>",' + ok('pickup') + ',' + upToP + ',"<="&$B$3)'],
+    ['宅配紙箱', '=E' + (cumEnd + 1), '', '', '=COUNTIFS(' + R('delivery', 'id') + ',"<>",' + ok('delivery') + ',' + upTo + ',"<="&$B$3)', ''],
   ]).setFontColor('#374151');
-  sh.getRange(cumEnd, 2, 2, 3).setHorizontalAlignment('center');
+  sh.getRange(cumEnd, 2, 2, cumHead.length - 1).setHorizontalAlignment('center');
   sh.getRange(cumEnd, 1, 2, 1).setFontWeight('bold');
-  sh.getRange(cumEnd, 1, 1, 4).setBorder(true, null, null, null, null, null, '#9ca3af', SpreadsheetApp.BorderStyle.SOLID);
+  sh.getRange(cumEnd, 1, 1, cumHead.length).setBorder(true, null, null, null, null, null, '#9ca3af', SpreadsheetApp.BorderStyle.SOLID);
 
   // ── 每日明細 ──
   var t = cumEnd + 4;
@@ -311,7 +325,7 @@ function nfBuildPrepSheet_(ss, s, defs) {
     sh.getRange(t + 1, head.length, rows.length, 1).setFontWeight('bold');
     // 0 顯示成淡灰，數字一眼看得出來
     sh.setConditionalFormatRules([SpreadsheetApp.newConditionalFormatRule().whenNumberEqualTo(0).setFontColor('#d1d5db')
-      .setRanges([sh.getRange(t + 1, 2, rows.length, head.length - 1), sh.getRange(6, 2, cumRows.length, 3)]).build()]);
+      .setRanges([sh.getRange(t + 1, 2, rows.length, head.length - 1), sh.getRange(6, 2, cumRows.length, 5)]).build()]);
   }
   var b = t + 1 + rows.length;
   var bagRow = ['保冷提袋（自取）', ''];
@@ -325,6 +339,7 @@ function nfBuildPrepSheet_(ss, s, defs) {
   sh.getRange(b, 1, 1, head.length).setBorder(true, null, null, null, null, null, '#9ca3af', SpreadsheetApp.BorderStyle.SOLID);
   sh.setFrozenColumns(1);
   sh.setHiddenGridlines(true);
+  nfSaveBounds_(NF.SHEET_PREP, b + 1, Math.max(head.length, cumHead.length), 'B3');
 }
 
 function nfBuildLogSheet_(ss) {
@@ -340,4 +355,33 @@ function nfBuildLogSheet_(ss) {
     .build();
   sh.setConditionalFormatRules([rule]);
   sh.setColumnWidth(2, 220);
+}
+
+/**
+ * 公式分頁（統計、備料表、查詢）的鎖定範圍：資料用到的區域（最後一列、最後一欄），input 是唯一可以填的格子。
+ * 存在年度資訊裡，保護範圍與編輯觸發（擁有者改到時自動還原）共用。
+ */
+function nfSaveBounds_(sheet, lastRow, lastCol, input) {
+  NF_CTX.meta.bounds = NF_CTX.meta.bounds || {};
+  NF_CTX.meta.bounds[sheet] = { lastRow: lastRow, lastCol: lastCol, input: input };
+  nfSaveMeta_(NF_CTX.env, NF_CTX.year, NF_CTX.meta);
+}
+
+/** 擁有者改到公式分頁的鎖定區域 → 重建這一頁（保留截至日期／查詢關鍵字），跳提示 */
+function nfFormulaSheetEdit_(e, name) {
+  var b = (NF_CTX.meta.bounds || {})[name];
+  if (!b) return;
+  var r0 = e.range.getRow(), c0 = e.range.getColumn();
+  var r1 = r0 + e.range.getNumRows() - 1, c1 = c0 + e.range.getNumColumns() - 1;
+  if (r0 > b.lastRow || c0 > b.lastCol) return; // 鎖定區域以外可以自由使用
+  if (b.input && r0 === r1 && c0 === c1 && e.range.getA1Notation() === b.input) return; // 唯一可以填的格子
+  var settings = nfReadSettings_();
+  var defs = { delivery: nfOrderCols_('delivery', settings), pickup: nfOrderCols_('pickup', settings) };
+  var ss = nfSpreadsheet_();
+  var keep = name === NF.SHEET_LOOKUP ? ss.getSheetByName(name).getRange('B1').getValue() : null;
+  if (name === NF.SHEET_STATS) nfBuildStatsSheet_(ss, settings, defs);
+  else if (name === NF.SHEET_PREP) nfBuildPrepSheet_(ss, settings, defs);
+  else if (name === NF.SHEET_LOOKUP) { nfBuildLookupSheet_(ss, settings, defs); if (keep) ss.getSheetByName(name).getRange('B1').setValue(keep); }
+  nfApplyProtections_();
+  nfToast_(e, '「' + name + '」是自動計算的內容，已還原。' + (b.input ? '可以填的只有黃色格子（' + b.input + '）。' : ''));
 }

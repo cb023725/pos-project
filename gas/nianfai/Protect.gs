@@ -5,10 +5,11 @@
  *   「表單回應」整個分頁               修改前跳警告（Yw 仍要手動改數量、取消訂單，不能完全鎖死，
  *                                      但不會在不知情的情況下手滑改到）
  *   「設定」品項表（D～K 欄）           修改前跳警告（品項應由 WebPOS 同步）
- *   「宅配」「自取」整個分頁            修改前跳警告，只開放手動欄（付款、出貨日、託運單號、已取貨）的資料列；
- *                                      其他欄被改到會由編輯觸發自動還原（擁有者無法被 Google 鎖住，所以補這一層），
- *                                      訂單內容只能從「表單回應」改，並留下修改紀錄
- *   「查詢」只開放 B1；「統計」「備料表」整頁   修改前跳警告
+ *   「宅配」「自取」                    鎖定（只有擁有者能改），只開放手動欄（付款、出貨日、託運單號、已取貨）的資料列；
+ *                                      擁有者改到其他欄會由編輯觸發自動還原（Google 不允許鎖住擁有者，所以補這一層），
+ *                                      顧客資料只能從「表單回應」改，並留下修改紀錄
+ *   「統計」「備料表」「查詢」           只鎖資料用到的區域（空白處可以自由使用），只開放黃色輸入格
+ *                                      （備料表截至日期 B3、查詢 B1）；擁有者改到會自動重建該頁
  *
  * 表單送出、GAS 自己寫入（寄信狀態、WebPOS 同步）不受保護範圍影響。
  * 建立年度時執行，之後可從 WebPOS 年菜管理頁「重新套用保護範圍」；只移除／重建說明以「年菜：」
@@ -41,25 +42,38 @@ function nfApplyProtections_() {
     .setDescription(NF_PROTECT_PREFIX + '設定品項表（請由 WebPOS 同步）')
     .setWarningOnly(true);
 
-  // 宅配、自取：整個分頁跳警告，手動欄的資料列除外
+  // 宅配、自取：鎖定（只有擁有者能改；擁有者改到也會自動還原），只開放手動欄的資料列
+  var me = Session.getEffectiveUser();
+  var lockDown = function (p) { // 只留擁有者（Google 不允許鎖住擁有者，擁有者改到由編輯觸發還原）
+    p.setWarningOnly(false);
+    p.addEditor(me);
+    p.removeEditors(p.getEditors().filter(function (u) { return u.getEmail() !== me.getEmail(); }));
+    if (p.canDomainEdit()) p.setDomainEdit(false);
+    return p;
+  };
   var settings = nfReadSettings_();
   ['delivery', 'pickup'].forEach(function (kind) {
     var sh = ss.getSheetByName(nfOrderSheetName_(kind));
     if (!sh) return;
-    var p0 = sh.protect().setDescription(NF_PROTECT_PREFIX + nfOrderSheetName_(kind) + '（訂單內容請到表單回應修改）').setWarningOnly(true);
+    var p0 = lockDown(sh.protect().setDescription(NF_PROTECT_PREFIX + nfOrderSheetName_(kind) + '（訂單內容請到表單回應修改）'));
     var open = [];
     nfOrderCols_(kind, settings).forEach(function (d, i) { if (d.manual) open.push(sh.getRange(2, i + 1, NF_DATA_ROWS, 1)); });
     p0.setUnprotectedRanges(open);
   });
-  var lookup = ss.getSheetByName(NF.SHEET_LOOKUP);
-  if (lookup) lookup.protect().setDescription(NF_PROTECT_PREFIX + '查詢（只開放 B1 輸入）').setWarningOnly(true).setUnprotectedRanges([lookup.getRange('B1')]);
-  [NF.SHEET_STATS, NF.SHEET_PREP].forEach(function (n) {
-    var sh = ss.getSheetByName(n);
-    if (sh) sh.protect().setDescription(NF_PROTECT_PREFIX + n + '（公式）').setWarningOnly(true);
+  // 統計、備料表、查詢：只鎖資料用到的區域（空白處可以自由使用），黃色輸入格開放
+  var bounds = (NF_CTX.meta && NF_CTX.meta.bounds) || {};
+  [NF.SHEET_STATS, NF.SHEET_PREP, NF.SHEET_LOOKUP].forEach(function (n) {
+    var sh = ss.getSheetByName(n), bd = bounds[n];
+    if (!sh || !bd) return;
+    var p1 = lockDown(sh.protect().setDescription(NF_PROTECT_PREFIX + n + '（自動計算，請勿修改）'));
+    var open = [];
+    if (bd.lastCol < sh.getMaxColumns()) open.push(sh.getRange(1, bd.lastCol + 1, sh.getMaxRows(), sh.getMaxColumns() - bd.lastCol));
+    if (bd.lastRow < sh.getMaxRows()) open.push(sh.getRange(bd.lastRow + 1, 1, sh.getMaxRows() - bd.lastRow, Math.min(bd.lastCol, sh.getMaxColumns())));
+    if (bd.input) open.push(sh.getRange(bd.input));
+    p1.setUnprotectedRanges(open);
   });
 
   // 匯款資訊：只有擁有者能改
-  var me = Session.getEffectiveUser();
   var rows = nfBankRows_(st);
   rows.forEach(function (r) {
     var p = st.getRange(r, 1, 1, 2).protect().setDescription(NF_PROTECT_PREFIX + '匯款資訊（只有擁有者能改）');
@@ -88,6 +102,7 @@ function nfOnEdit(e) {
     nfLogResponseEdit_(e);
     nfSyncOrderSheets_(); // 修改／取消訂單 → 更新宅配、自取
   }
+  else if (name === NF.SHEET_STATS || name === NF.SHEET_PREP || name === NF.SHEET_LOOKUP) nfFormulaSheetEdit_(e, name);
   else if (name === NF.SHEET_DELIVERY) nfOrderSheetEdit_(e, 'delivery');
   else if (name === NF.SHEET_PICKUP) nfOrderSheetEdit_(e, 'pickup');
 }

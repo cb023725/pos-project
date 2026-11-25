@@ -267,6 +267,13 @@ run('改取貨方式 → 搬到另一張表、付款跟著走', () => {
   respSheet.getRange(r, mc).setValue('來店自取'); respSheet.getRange(r, dc).setValue('2027/2/1 (一)'); ctx.nfOnEdit({ range: respSheet.getRange(r, mc), source: ss(), oldValue: '宅配' });
   const p = sheetObj('自取').find(x => x['訂單編號'] === id); return { inPickup: !!p, paid: p && p['付款'], inDelivery: sheetObj('宅配').some(x => x['訂單編號'] === id) };
 });
+run('統計／備料表：改到自動計算區域會重建，黃色格子與空白處可以改', () => {
+  const st = ss().getSheetByName('統計'); const f = st.getRange('C4').getValue(); st.getRange('C4').setValue('亂改'); ctx.nfOnEdit({ range: st.getRange('C4'), source: ss() });
+  const pr = ss().getSheetByName('備料表'); const d = new ctx._Date(2027, 0, 30); pr.getRange('B3').setValue(d); ctx.nfOnEdit({ range: pr.getRange('B3'), source: ss() });
+  pr.getRange('Z50').setValue('備註'); ctx.nfOnEdit({ range: pr.getRange('Z50'), source: ss() });
+  return { statsRestored: st.getRange('C4').getValue() === f, dateKept: pr.getRange('B3').getValue() === d, freeCell: pr.getRange('Z50').getValue(),
+    prepHead: pr.getRange(5, 1, 1, 6).getValues()[0].join('|'), bounds: Object.keys(ctx.NF_CTX.meta.bounds || {}) };
+});
 run('分頁', () => ss().getSheets().map(s => s.getName()).join(' | '));
 run('統計／備料表公式（取樣）', () => ({ stats: ss().getSheetByName('統計').getRange(2, 2).getValue().slice(0, 160), prepHead: ss().getSheetByName('備料表').getRange(1, 1, 1, 4).getValues()[0].join(' | '),
   lookup: ss().getSheetByName('查詢').getRange('A4').getValue().slice(0, 120) }));

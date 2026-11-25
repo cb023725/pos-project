@@ -211,7 +211,7 @@ function nfDiagnose_() {
   out.delivery = tail(NF.SHEET_DELIVERY, 1, 8, 40);
   out.pickup = tail(NF.SHEET_PICKUP, 1, 8, 40);
   out.stats = dump(NF.SHEET_STATS, 1, 22, 10);
-  out.prep = dump(NF.SHEET_PREP, 1, 16, 12);
+  out.prep = dump(NF.SHEET_PREP, 1, 45, 12);
   out.lookup = dump(NF.SHEET_LOOKUP, 1, 8, 12);
   return out;
 }
