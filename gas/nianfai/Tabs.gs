@@ -77,41 +77,71 @@ function nfColNumber_(letter) {
 var NF_NOT_CANCELLED = '"<>*已取消*"';
 
 /** 查詢：B1 輸入關鍵字 */
+/**
+ * 查詢：B1 輸入姓名、電話、末五碼或流水號的任何一部分 → 每筆符合的訂單一欄（像訂單卡片），
+ * 每列一個欄位，重要的在上面：訂購人、取貨方式、進度、日期、品項、金額、付款、電話、末五碼、收件資訊、信件
+ */
+var NF_LOOKUP_COLS = 26; // 最多同時顯示 25 筆
 function nfBuildLookupSheet_(ss, s, defs) {
   var sh = nfGetOrCreateSheet_(ss, NF.SHEET_LOOKUP);
   var D = function (k) { return nfOrderRange_('delivery', defs.delivery, k); };
   var P = function (k) { return nfOrderRange_('pickup', defs.pickup, k); };
-  var head = ['取貨方式', '訂單編號', '訂購姓名', '電話', '末五碼', '品項', '金額', '取貨日／出貨日', '付款', '進度', '信件', '狀態'];
+  var labels = ['訂購人', '取貨方式', '進度', '取貨／出貨日', '品項', '金額', '付款', '電話', '末五碼', '收件資訊', '信件'];
+  var mail = function (label, rng) { return '"' + label + '："&IF(' + rng + '="","未寄",' + rng + ')'; };
   var dArr = [
-    'IF(' + D('id') + '="","","宅配")', D('id'), D('name'), D('phone'), D('last5'), D('summary'), D('amount'), D('shipDate'),
-    'IF(' + D('paid') + ',"已付","未付")',
-    'IF(' + D('shipDate') + '<>"","已出貨 "&' + D('shipDate') + ',"未出貨")',
-    '"寄出前確認："&IF(' + D('preShipStatus') + '="","—",' + D('preShipStatus') + ')&"／出貨通知："&IF(' + D('shippedStatus') + '="","—",' + D('shippedStatus') + ')',
-    D('note'),
+    D('name'), 'IF(' + D('id') + '="","","宅配")', D('status'), 'IF(' + D('shipDate') + '="","尚未出貨",' + D('shipDate') + ')',
+    D('summary'), D('amount'), 'IF(' + D('paid') + ',"已付款","未付款")', D('phone'), D('last5'),
+    D('recipientName') + '&"　"&' + D('recipientPhone') + '&CHAR(10)&' + D('recipientAddress'),
+    mail('寄出前確認', D('preShipStatus')) + '&CHAR(10)&' + mail('出貨通知', D('shippedStatus')),
   ];
   var pArr = [
-    'IF(' + P('id') + '="","","自取")', P('id'), P('name'), P('phone'), P('last5'), P('summary'), P('amount'), P('pickupDate'),
-    'IF(' + P('paid') + ',"已付","未付")',
-    'IF(' + P('picked') + ',"已取貨 "&' + P('pickedAt') + ',"未取貨")',
-    '"取貨提醒："&IF(' + P('remindStatus') + '="","—",' + P('remindStatus') + ')',
-    P('note'),
+    P('name'), 'IF(' + P('id') + '="","","自取")', P('status'), P('pickupDate'),
+    P('summary'), P('amount'), 'IF(' + P('paid') + ',"已付款","未付款")', P('phone'), P('last5'),
+    'IF(' + P('picked') + ',"已取貨 "&' + P('pickedAt') + ',"—")',
+    mail('取貨提醒', P('remindStatus')),
   ];
-  var formula = '=IF(LEN($B$1)=0,"",IFERROR(LET(d,ARRAYFORMULA({' + dArr.join(',') + ';' + pArr.join(',') + '}),' +
-    'FILTER(d,INDEX(d,,2)<>"",ISNUMBER(SEARCH($B$1,INDEX(d,,3)&"|"&INDEX(d,,4)&"|"&INDEX(d,,5))))),"查無符合的訂單"))';
-  sh.getRange(1, 1, 200, head.length).setFontSize(11).setVerticalAlignment('middle').setFontFamily('Arial').setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
-  sh.setRowHeights(1, 200, 30);
-  sh.setRowHeight(1, 40);
+  var formula = '=IF(LEN($B$1)=0,"",IFERROR(TRANSPOSE(LET(d,ARRAYFORMULA({' + dArr.join(',') + ';' + pArr.join(',') + '}),' +
+    'FILTER(d,INDEX(d,,1)<>"",ISNUMBER(SEARCH($B$1,INDEX(d,,1)&"|"&INDEX(d,,8)&"|"&INDEX(d,,9)))))),"查無符合的訂單"))';
+  var n = labels.length, top = 3;
+  sh.getRange(1, 1, top + n + 2, NF_LOOKUP_COLS).setFontSize(11).setVerticalAlignment('middle').setFontFamily('Arial')
+    .setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
+  sh.setRowHeight(1, 44);
+  sh.setRowHeights(top, n, 32);
+  sh.setRowHeight(top + 4, 52);  // 品項
+  sh.setRowHeight(top + 9, 52);  // 收件資訊
+  sh.setRowHeight(top + 10, 52); // 信件
   sh.getRange('A1').setValue('🔍 查詢訂單').setFontWeight('bold').setFontSize(14);
   sh.getRange('B1').setBackground('#fef3c7').setNumberFormat('@').setFontSize(13).setFontWeight('bold')
     .setBorder(true, true, true, true, false, false, '#f59e0b', SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
-  sh.getRange('C1').setValue('← 輸入姓名、電話、末五碼或流水號的任何一部分，例如「王」「0912」「27001」').setFontColor('#6b7280').setFontSize(10);
-  nfStyleHead_(sh.getRange(3, 1, 1, head.length).setValues([head]));
-  sh.getRange('A4').setFormula(formula);
-  sh.getRange(4, 7, NF_DATA_ROWS, 1).setNumberFormat('#,##0');
-  sh.setFrozenRows(3);
-  nfSaveBounds_(NF.SHEET_LOOKUP, 200, head.length, 'B1');
-  [[1, 130], [2, 170], [3, 100], [4, 110], [5, 90], [6, 300], [7, 80], [8, 120], [9, 60], [10, 170], [11, 320], [12, 110]]
-    .forEach(function (w) { sh.setColumnWidth(w[0], w[1]); });
+  sh.getRange('C1').setValue('← 輸入姓名、電話、末五碼或流水號的任何一部分，例如「王」「0912」「27001」；每筆訂單一欄')
+    .setFontColor('#6b7280').setFontSize(10).setWrapStrategy(SpreadsheetApp.WrapStrategy.OVERFLOW);
+  // 左邊欄位名稱
+  nfStyleHead_(sh.getRange(top, 1, n, 1).setValues(labels.map(function (l) { return [l]; })));
+  sh.getRange(top, 1, n, 1).setHorizontalAlignment('right');
+  sh.getRange(top, 2).setFormula(formula);
+  var cards = sh.getRange(top, 2, n, NF_LOOKUP_COLS - 1);
+  cards.setBorder(null, null, null, null, true, true, '#e5e7eb', SpreadsheetApp.BorderStyle.SOLID);
+  sh.getRange(top, 2, 1, NF_LOOKUP_COLS - 1).setFontSize(13).setFontWeight('bold');         // 訂購人
+  sh.getRange(top + 2, 2, 1, NF_LOOKUP_COLS - 1).setFontWeight('bold').setHorizontalAlignment('center'); // 進度
+  sh.getRange(top + 5, 2, 1, NF_LOOKUP_COLS - 1).setNumberFormat('$#,##0').setFontWeight('bold');         // 金額
+  sh.getRange(top + 8, 2, 1, NF_LOOKUP_COLS - 1).setNumberFormat('@');
+  sh.getRange(top + 10, 2, 1, NF_LOOKUP_COLS - 1).setFontSize(10);
+  var rule = function () { return SpreadsheetApp.newConditionalFormatRule(); };
+  var st = sh.getRange(top + 2, 2, 1, NF_LOOKUP_COLS - 1), pay = sh.getRange(top + 6, 2, 1, NF_LOOKUP_COLS - 1);
+  var rules = [];
+  [['待付款', '#fee2e2', '#b91c1c'], ['待出貨', '#fef3c7', '#92400e'], ['待取貨', '#fef3c7', '#92400e'],
+    ['已出貨', '#dcfce7', '#166534'], ['已取貨', '#dcfce7', '#166534'], ['已取消', '#f3f4f6', '#9ca3af']].forEach(function (x) {
+    rules.push(rule().whenTextEqualTo(x[0]).setBackground(x[1]).setFontColor(x[2]).setRanges([st]).build());
+  });
+  rules.push(rule().whenTextEqualTo('未付款').setFontColor('#b91c1c').setBold(true).setRanges([pay]).build());
+  rules.push(rule().whenTextEqualTo('查無符合的訂單').setFontColor('#9ca3af').setRanges([sh.getRange(top, 2)]).build());
+  sh.setConditionalFormatRules(rules);
+  sh.setColumnWidth(1, 120);
+  for (var c = 2; c <= NF_LOOKUP_COLS; c++) sh.setColumnWidth(c, 240);
+  sh.setFrozenRows(1);   // 搜尋列固定在上面
+  sh.setFrozenColumns(1); // 欄位名稱固定在左邊
+  sh.setHiddenGridlines(true);
+  nfSaveBounds_(NF.SHEET_LOOKUP, top + n - 1, NF_LOOKUP_COLS, 'B1');
 }
 
 /** 品項要加總哪些欄位：單點＝自己的欄＋含它的套餐欄×份數；套餐只算自己 */
