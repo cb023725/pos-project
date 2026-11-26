@@ -5,7 +5,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import {
-    getNianfaiItems, getSettingValue,
+    getNianfaiItems, getSettingValue, updateMenuItem,
     confirmNianfaiReservation, abandonNianfaiReservation, checkoutNianfaiReservation, getNianfaiReservation,
 } from '../db';
 import MenuCard from '../components/MenuCard';
@@ -68,14 +68,34 @@ const NianfaiOrderPage = () => {
     const [checkingOut, setCheckingOut] = useState(false);
     const [resumeNotice, setResumeNotice] = useState('');
 
-    useEffect(() => {
+    const loadItems = useCallback(() => {
         if (!year) return;
         getNianfaiItems(year).then(list => setItems(sortForCards(list))).catch(() => setItems([]));
+    }, [year]);
+
+    useEffect(() => {
+        if (!year) return;
+        loadItems();
         getSettingValue(`nianfai_${year}_pickup_dates`, '[]').then(v => {
             try { setPickupDates(JSON.parse(v) || []); } catch { setPickupDates([]); }
         });
         getSettingValue(`nianfai_${year}_delivery_period`, '').then(setDeliveryPeriod);
-    }, [year]);
+    }, [year, loadItems]);
+
+    // 長按卡片：手動停售／恢復販售（比照一般點單頁）。只影響 WebPOS 現場點單，不會關閉 Google 表單
+    const handleToggleSoldOut = async (item) => {
+        const name = nianfaiDisplayName(item);
+        const ok = item.soldOut
+            ? await showConfirm(`「${name}」恢復販售`, { title: '取消停售', icon: 'info', confirmText: '恢復販售' })
+            : await showConfirm(`「${name}」停售`, { title: '停售確認', icon: 'warning', note: '只影響 WebPOS 現場點單，Google 表單不會跟著關閉', confirmText: '確認停售', danger: true });
+        if (!ok) return;
+        try {
+            await updateMenuItem(item.id, { soldOut: !item.soldOut });
+            loadItems();
+        } catch (e) {
+            await showAlert(e.message, { title: '設定失敗', icon: 'warning' });
+        }
+    };
 
     // 還原保留中的單：佇列頁按「繼續點單」帶進來的，或本機記住的上一張未結帳單
     useEffect(() => {
@@ -145,6 +165,10 @@ const NianfaiOrderPage = () => {
             return;
         }
         const current = qty[item.id] || 0;
+        if (item.soldOut && current === 0 && value > current) {
+            const ok = await showConfirm(`「${nianfaiDisplayName(item)}」已停售`, { title: '仍要加入嗎？', icon: 'warning', confirmText: '仍要加入', danger: true });
+            if (!ok) return;
+        }
         setCapNotice('');
         if (bump && value > current) {
             seqCounter.current += 1;
@@ -446,7 +470,7 @@ const NianfaiOrderPage = () => {
                                             <span className="absolute top-1 right-1 z-20 bg-[#C1032F] text-white text-[10px] font-black px-1.5 py-0.5 rounded pointer-events-none">套餐</span>
                                         )}
                                         {/* 卡片上不顯示已點數量（數量看左側購物車） */}
-                                        <MenuCard item={isBundle ? { ...item, name: cardName(item) } : item} onAddItem={() => setItemQty(item, q + 1, { bump: true })} onLongPress={() => setItemQty(item, q - 1)} allowOverride hideStock fillHeight priceClassName="text-amber-700" />
+                                        <MenuCard item={isBundle ? { ...item, name: cardName(item) } : item} onAddItem={() => setItemQty(item, q + 1, { bump: true })} onLongPress={() => handleToggleSoldOut(item)} allowOverride hideStock fillHeight priceClassName="text-amber-700" />
                                     </div>
                                 );
                             })}

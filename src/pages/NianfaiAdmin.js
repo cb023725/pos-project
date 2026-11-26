@@ -261,7 +261,7 @@ const NianfaiAdminPage = () => {
                                         const dash = <span className="text-gray-300">—</span>;
                                         return (
                                             <tr key={item.id}>
-                                                <td className="py-2 pr-2 font-bold text-gray-800">{item.name}</td>
+                                                <td className="py-2 pr-2 font-bold text-gray-800">{item.name}{item.soldOut && <span className="ml-2 text-xs font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-600 whitespace-nowrap">已停售</span>}</td>
                                                 <td className="py-2 px-2 text-gray-500">{isBundle ? '套餐' : regular ? '平常也賣' : '年節限定'}</td>
                                                 <td className="py-2 px-2 text-right text-gray-800">
                                                     {isBundle ? dash : !item.nianfaiStockRef ? <span className="text-xs font-bold text-red-600">未設定庫存</span> : stock == null ? dash : stock}

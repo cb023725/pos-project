@@ -3372,7 +3372,8 @@ app.get('/api/nianfai/items', async (req, res) => {
         // nianfai_stock_ref 指向庫存管理頁的庫存品項（只顯示用，不是 consumes，年菜不扣庫存）：
         //  - 冷凍包庫存：平常也賣的 5 項，對應冷凍包現有庫存
         //  - 年菜庫存：年節限定品項的製作數量（統一在庫存管理頁補貨/盤點）
-        // 只顯示庫存與訂購量，不連動停售、不自動關表單（2026-11-27 Yw 決定）
+        // 只顯示庫存與訂購量，不連動停售、不自動關表單（2026-11-27 Yw 決定）；
+        // 停售只看 Yw 在年菜點單頁長按卡片手動設定的 sold_out（只影響 WebPOS，不會關 Google 表單）
         const stockRef = r.nianfai_stock_ref || null;
         const refStock = stockRef && stockRef in invMap ? invMap[stockRef] : null;
         const isSeasonalStock = !!stockRef && catMap[stockRef] === NIANFAI_STOCK_CATEGORY;
@@ -3388,6 +3389,7 @@ app.get('/api/nianfai/items', async (req, res) => {
             nianfaiProductionQty: isSeasonalStock ? refStock : null,
             demand: demand[r.id] || 0,
             ordered: ordered[r.id] || 0, // 原始點購份數（套餐不拆）
+            soldOut: !!r.sold_out,
             isRegularSellingItem: !!stockRef && !isSeasonalStock,
             stock: refStock,
         };
