@@ -1439,11 +1439,14 @@ function nfSlipParts(doc, opts = {}) {
     // 條列（・）：每點只在標點斷行、兩行長度接近，第二行對齊文字開頭
     const bullets = (items, y) => {
         const bw = wOf('・', NF_SZ.label);
+        // 條列只用一般字重，用實際字重量寬度（比用最粗的量準），一行放得下就不換行
+        // 句尾全形標點右半邊是空白，可以超出邊界半個字
+        const wReg = (t, size) => doc.font(REG).fontSize(size).widthOfString(String(t)) - ('，、。；'.includes(String(t).slice(-1)) ? size * 0.5 : 0);
         for (const t of items) {
             draw('・', X, y, NF_SZ.label);
             // 只差一點放不下：縮小最多 1pt 保持一行；真的太長才在標點平均換行
-            const sz = fitSize(t, NF_SZ.label, NF_SZ.label - 1, W - bw);
-            const lines = wOf(t, sz) <= W - bw ? [t] : balance(t, NF_SZ.label, W - bw);
+            let sz = NF_SZ.label; while (sz > NF_SZ.label - 1 && wReg(t, sz) > W - bw) sz -= 0.25;
+            const lines = wReg(t, sz) <= W - bw ? [t] : balance(t, NF_SZ.label, W - bw);
             const lsz = lines.length === 1 ? sz : NF_SZ.label;
             lines.forEach((l, i) => draw(l, X + bw, y + i * (lsz + 3), lsz));
             y += lines.length * (lsz + 3) + 2;
@@ -1540,7 +1543,7 @@ function buildNianfaiConfirmPDF(data, filePath) {
             y = P.field('取貨日期：', nfDateWeek(data.pickupDate), y);
             y = P.field('取貨時間：', data.pickupHours || '', y);
             y = P.section('注意事項', y);
-            y = P.bullets(['請依照取貨日期前往取貨。', '取貨時請出示此單據以利作業。'], y);
+            y = P.bullets(['請依照取貨日期前往取貨。', '取貨時請出示此訂購單據。', '需變更取貨日期請提前通知。'], y);
         }
         return y;
     }, filePath);
