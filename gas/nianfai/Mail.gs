@@ -3,7 +3,8 @@
  *
  *   寄出前確認  宅配單；WebPOS 年菜管理頁「寄信」先預覽名單、確認後才寄
  *   出貨通知    宅配單；必須已填「出貨日」與「託運單號」，沒填的列出原因跳過
- *   取貨提醒    自取單；每天 08:00 自動寄給「明天」取貨的客人（設定「取貨提醒開關」= 開），
+ *   寄出前確認  也可以到「宅配提醒時間」自動寄出（Reminder.gs）
+ *   取貨提醒    自取單；每天 08:00 自動寄給「明天」取貨的客人（設定「取貨提醒開關」= 開，小卡ID 必填），
  *               寄完把名單寄給店家；失敗只重試一次。WebPOS 也可以手動預覽／補寄指定日期
  *
  * 共同規則：
@@ -513,7 +514,7 @@ function nfDailyPickupReminder() {
       var envYear = k.slice(5).split(':');
       nfUseYear_(envYear[0], envYear[1]);
       if (String(nfReadSettings_().kv['取貨提醒開關'] || '').trim() !== '開') return;
-      nfMailSend_('pickupReminder', null, null, { retry: true, auto: true });
+      nfAutoPickupReminder_(); // 小卡沒問題才寄（Reminder.gs）
     } catch (e) {
       try {
         MailApp.sendEmail({ to: NF.STORE_EMAIL, subject: '【年菜】自動取貨提醒執行失敗', body: k + '\n' + (e && e.stack ? e.stack : e), name: NF.SENDER_NAME });
@@ -522,9 +523,10 @@ function nfDailyPickupReminder() {
   });
 }
 
-/** 確保每天 08:00 的取貨提醒觸發存在（整個專案一個） */
+/** 確保自動提醒的觸發存在（整個專案各一個）：每天 08:00 取貨提醒、每 10 分鐘檢查宅配提醒時間 */
 function nfEnsureDailyTrigger_() {
-  var has = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'nfDailyPickupReminder'; });
-  if (!has) ScriptApp.newTrigger('nfDailyPickupReminder').timeBased().everyDays(1).atHour(8).nearMinute(0).inTimezone(NF.TZ).create();
+  var handlers = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
+  if (handlers.indexOf('nfDailyPickupReminder') < 0) ScriptApp.newTrigger('nfDailyPickupReminder').timeBased().everyDays(1).atHour(8).nearMinute(0).inTimezone(NF.TZ).create();
+  if (handlers.indexOf('nfDeliveryReminderTick') < 0) ScriptApp.newTrigger('nfDeliveryReminderTick').timeBased().everyMinutes(10).create();
   return true;
 }

@@ -110,7 +110,7 @@ const ctx = {
   PropertiesService: { getScriptProperties: () => { const p = ctx._props; return { getProperty: (k) => p[k] ?? null, setProperty: (k, v) => { p[k] = v; }, deleteProperty: (k) => { delete p[k]; }, getProperties: () => ({ ...p }) }; } },
   _props: { WEBPOS_SECRET: 'x'.repeat(20) },
   DriveApp: chain({ getRootFolder: () => chain({ getName: () => '我的雲端硬碟', getFoldersByName: () => ({ hasNext: () => false }), createFolder: (n) => chain({ getId: () => 'folder' + nextId(), getName: () => n }) }),
-    getFileById: () => chain({ moveTo: () => {}, getBlob: () => ({}) }) }),
+    getFileById: () => chain({ moveTo: () => {}, getName: () => '小卡.jpg', getBlob: () => ({ setName() { return this; } }) }) }),
   SpreadsheetApp: chain({ create: (t) => { const s = makeSpreadsheet(t); spreadsheets[s.getId()] = s; return s; }, openById: (id) => spreadsheets[id], flush: () => {},
     newConditionalFormatRule: () => chain({ build: () => ({}) }), ProtectionType: { RANGE: 'R', SHEET: 'S' } }),
   FormApp: { create: (t) => { const f = makeForm(t); forms[f.getId()] = f; return f; }, openById: (id) => forms[id], ItemType, DestinationType: { SPREADSHEET: 'SS' },
@@ -291,6 +291,42 @@ run('Gmail 額度用完 → 名單存起來，隔天 08:00 寄清單提醒；補
   if (!(r.overQuota.length === 1 && pending1.includes(id) && remind && remind.body.includes(row['訂購人']) && again.reminded === 0 && ctx.nfQuotaPending_().length === 0)) throw new Error(JSON.stringify({ over: r.overQuota, pending1, remind: remind && remind.subject, again, left: ctx.nfQuotaPending_() }));
   return { overQuota: r.overQuota.map(x => x.name), remindSubject: remind.subject, afterResend: again };
 });
+run('自動提醒：兩個開關預設都是開', () => { const st = ctx.nfReminderStatus_(); if (!st.delivery.on || !st.pickup.on) throw new Error(JSON.stringify(st)); return st; });
+run('自動取貨提醒：小卡ID 沒填 → 不寄、寄信通知店家原因', () => {
+  const row = sheetObj('自取').find(x => x['訂購人'] === '線上自取'); ctx.nfSetMailState_(row['訂單編號'], 'pickupReminder', '失敗：測試');
+  ctx.nfSetKv_('加熱說明小卡ID', ''); ctx._mails = []; ctx._quiet = true;
+  const r = ctx.nfAutoPickupReminder_(); ctx._quiet = false;
+  const store = ctx._mails.find(m => m.subject && m.subject.includes('取貨提醒沒有寄出'));
+  const customer = ctx._mails.filter(m => m.html).length;
+  if (!r.skipped || !store || customer !== 0) throw new Error(JSON.stringify({ r, mails: ctx._mails.map(m => m.subject) }));
+  return { skipped: r.skipped, store: store.subject, customerMails: customer };
+});
+run('自動取貨提醒：填了小卡ID → 寄出（附小卡）', () => {
+  ctx.nfSetKv_('加熱說明小卡ID', 'card123'); ctx._mails = []; ctx._quiet = true;
+  const r = ctx.nfAutoPickupReminder_(); ctx._quiet = false; const m = ctx._mails.find(x => x.html);
+  if (!r.sent || !r.sent.length || !m || m.attachments !== 1) throw new Error(JSON.stringify({ r, m }));
+  return { sent: r.sent.map(x => x.name), attachments: m.attachments };
+});
+run('自動宅配提醒：沒填時間 → 不寄；格式不對 → 擋下', () => {
+  const st = ctx.nfSetDeliveryReminder_(true, ''); ctx._mails = []; ctx.nfDeliveryReminderTick();
+  let bad = 'NO ERROR (bad)'; try { ctx.nfSetDeliveryReminder_(true, '1/20 8點'); } catch (e) { bad = 'error: ' + e.message; }
+  if (!st.delivery.problem || ctx._mails.length || !bad.startsWith('error')) throw new Error(JSON.stringify({ st, mails: ctx._mails.length, bad }));
+  return { problem: st.delivery.problem, bad };
+});
+run('自動宅配提醒：時間還沒到不寄；到了寄給全部宅配客，之後不重寄', () => {
+  const d = sheetObj('宅配').find(x => x['訂購人'] === '宅配客'); ctx.nfSetMailState_(d['訂單編號'], 'preShip', '失敗：測試');
+  const fmt = (ms) => ctx.nfFormatReminderAt_(new ctx._Date(ms));
+  ctx.nfSetDeliveryReminder_(true, fmt(Date.now() + 86400000)); ctx._mails = []; ctx._quiet = true; ctx.nfDeliveryReminderTick();
+  const early = ctx._mails.filter(m => m.html).length;
+  const st1 = ctx.nfSetDeliveryReminder_(true, fmt(Date.now() - 60000)); ctx.nfDeliveryReminderTick();
+  const sent = ctx._mails.filter(m => m.html && /寄出前確認/.test(m.subject)).length;
+  const report = ctx._mails.some(m => m.subject && m.subject.includes('寄出前確認') && !m.html);
+  ctx._mails = []; ctx.nfDeliveryReminderTick(); const again = ctx._mails.length; ctx._quiet = false;
+  const st2 = ctx.nfReminderStatus_();
+  if (early !== 0 || sent < 1 || again !== 0 || !st2.delivery.sentAt) throw new Error(JSON.stringify({ early, sent, again, st1, st2 }));
+  return { early, sent, storeReport: report, again, sentAt: st2.delivery.sentAt };
+});
+run('自動提醒觸發都已安裝（每天 08:00＋每 10 分鐘）', () => ['nfDailyPickupReminder', 'nfDeliveryReminderTick'].every(h => ctx._triggers.includes(h)));
 run('取消訂單（清除表單回應整列）→ 標已取消、統計不計入', () => {
   const rows = sheetObj('宅配'); const id = rows.find(x => x['訂購人'] === '現場宅配')['訂單編號'];
   const lc = respSheet.getLastColumn(); const all = respSheet.getRange(1, 1, respSheet.getLastRow(), lc).getValues();

@@ -376,6 +376,9 @@ export async function sendNianfaiMail(year, type, ids, date) {
 export async function setNianfaiReminder(year, on) {
     return api('POST', '/api/nianfai/gas/set-reminder', { year, on });
 }
+export async function setNianfaiDeliveryReminder(year, { on, at } = {}) {
+    return api('POST', '/api/nianfai/gas/set-delivery-reminder', { year, on, at });
+}
 export async function getNianfaiFormLinks(year) {
     return api('GET', `/api/nianfai/gas/form-links?year=${year}`);
 }

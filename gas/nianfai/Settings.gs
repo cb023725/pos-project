@@ -32,8 +32,10 @@ var NF_SETTINGS_DEFAULTS = [
   ['地圖連結', 'https://maps.google.com/?cid=15270325023204343081'], // 信件底部地址連到 Google 商家資訊
   ['套餐圖片ID', ''],           // 雲端硬碟圖片檔案 ID，建立表單時插在套餐題目前（空白就不放）
   ['單點圖片ID', ''],           // 插在單點表格前
-  ['取貨提醒開關', '關'],        // 開：每天 08:00 自動寄給明天取貨的客人（WebPOS 年菜管理頁切換）
-  ['加熱說明小卡ID', ''],        // 雲端硬碟圖片檔案 ID，出貨通知與取貨提醒的附件（空白就不附）
+  ['取貨提醒開關', '開'],        // 開：每天 08:00 自動寄給明天取貨的客人；小卡ID 沒填就不寄、通知店家（WebPOS 年菜管理頁切換）
+  ['宅配提醒開關', '開'],        // 開：到「宅配提醒時間」自動寄「寄出前確認」給所有宅配客（WebPOS 年菜管理頁切換）
+  ['宅配提醒時間', ''],          // 例：2027/01/20 20:00；沒填就不會自動寄
+  ['加熱說明小卡ID', ''],        // 雲端硬碟圖片檔案 ID，出貨通知與取貨提醒的附件；自動取貨提醒一定要有
   ['匯款戶名', ''],             // 確認信「匯款資訊」，由 Yw 自己填（不放在程式裡）
   ['匯款銀行', ''],
   ['匯款分行', ''],
@@ -85,7 +87,10 @@ function nfReadSettings_() {
     if (i === 0 || !r[0]) return;
     var v = r[1];
     // 「16:00」「2027/2/4」這類值會被試算表自動轉成時間／日期，讀回文字
-    if (v instanceof Date) v = Utilities.formatDate(v, NF.TZ, v.getFullYear() < 1901 ? 'HH:mm' : 'yyyy/M/d');
+    if (v instanceof Date) {
+      var hasTime = v.getHours() !== 0 || v.getMinutes() !== 0; // 「2027/1/20 20:00」這種日期＋時間要保留時間
+      v = Utilities.formatDate(v, NF.TZ, v.getFullYear() < 1901 ? 'HH:mm' : hasTime ? 'yyyy/MM/dd HH:mm' : 'yyyy/M/d');
+    }
     kv[String(r[0]).trim()] = v;
   });
   var items = [];

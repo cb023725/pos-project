@@ -22,6 +22,8 @@
  *                     送單紀錄並重建分頁；每個年度只能做一次（之後拒絕，避免誤刪正式訂單）
  *   backToTesting     只限 dev：把年度改回測試中，方便重複測試正式上線流程
  *   setAccepting      開關表單（WebPOS 開賣／收單時呼叫）
+ *   setReminder       自動取貨提醒開關
+ *   setDeliveryReminder 自動宅配提醒（寄出前確認）開關與時間
  *   submitOrder       WebPOS 現場單送進表單（WebposSubmit.gs）
  *   ping              連線測試
  * doGet action（一個專案只能有一個 doGet，用參數區分）：
@@ -102,7 +104,9 @@ function doPost(e) {
       case 'setReminder':
         nfSetKv_('取貨提醒開關', body.on ? '開' : '關');
         nfEnsureDailyTrigger_();
-        return nfJson_({ ok: true, reminderOn: !!body.on });
+        return nfJson_({ ok: true, reminderOn: !!body.on, reminders: nfReminderStatus_() });
+      case 'setDeliveryReminder':
+        return nfJson_({ ok: true, reminders: nfSetDeliveryReminder_(body.on, body.at) });
       case 'diagnose':
         return nfJson_({ ok: true, result: nfDiagnose_() });
       case 'resetTestData':
@@ -181,6 +185,7 @@ function nfPing_(env, year) {
     live: !!NF_CTX.meta.live,
     liveAt: NF_CTX.meta.liveAt || null,
     reminderOn: String(settings.kv['取貨提醒開關'] || '').trim() === '開',
+    reminders: nfReminderStatus_(settings), // 宅配／自取自動提醒的開關、時間與不寄的原因
     sender: Session.getEffectiveUser().getEmail(), // 信件實際寄件帳號（顯示名稱是「咕咕義小餐館」）
     mailQuota: nfMailQuota_(),
     hasOrderSheets: !!nfSpreadsheet_().getSheetByName(NF.SHEET_DELIVERY),

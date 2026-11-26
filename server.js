@@ -2994,7 +2994,13 @@ app.post('/api/nianfai/gas/mail-sample', nianfaiGasRoute(async (year, req) => {
 }));
 app.post('/api/nianfai/gas/set-reminder', nianfaiGasRoute(async (year, req) => {
     const r = await callNianfaiGas('setReminder', { year, on: !!req.body?.on });
-    return { ok: true, reminderOn: r.reminderOn };
+    return { ok: true, reminderOn: r.reminderOn, reminders: r.reminders };
+}));
+// 自動宅配提醒（寄出前確認）：開關與寄出時間（例 2027/01/20 20:00；空字串＝清除）
+app.post('/api/nianfai/gas/set-delivery-reminder', nianfaiGasRoute(async (year, req) => {
+    const body = req.body || {};
+    const r = await callNianfaiGas('setDeliveryReminder', { year, on: body.on === undefined ? null : !!body.on, at: body.at === undefined ? null : String(body.at) });
+    return { ok: true, reminders: r.reminders };
 }));
 app.post('/api/nianfai/gas/sync-orders', nianfaiGasRoute(async (year) => {
     const r = await callNianfaiGas('syncOrders', { year }, { timeoutMs: 120000 });

@@ -4,7 +4,7 @@
 // 篩選「已寄未確認」就是需要電話提醒的名單。勾選可寄的客人 → 寄出。
 // 寄信狀態與試算表「📧 年菜寄信」選單共用，兩邊寄過的不會重寄。
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { getNianfaiMailOverview, sendNianfaiMail, setNianfaiReminder } from '../db';
+import { getNianfaiMailOverview, sendNianfaiMail, setNianfaiReminder, setNianfaiDeliveryReminder } from '../db';
 import { formatPickupDate } from '../utils/nianfai';
 
 const TYPES = [
@@ -28,6 +28,16 @@ const FILTERS = [
     { key: 'all', label: '全部', match: () => true },
 ];
 const short = (t) => String(t || '').slice(5, 16); // MM/dd HH:mm
+// 「2027/01/20 20:00」⇄ <input type="datetime-local"> 的「2027-01-20T20:00」
+const toInputDt = (t) => (t ? String(t).replace(/\//g, '-').replace(' ', 'T') : '');
+const fromInputDt = (v) => (v ? String(v).replace(/-/g, '/').replace('T', ' ') : '');
+
+const Switch = ({ on, disabled, onClick }) => (
+    <button onClick={onClick} disabled={disabled} role="switch" aria-checked={!!on}
+        className={`relative flex-shrink-0 w-14 h-8 rounded-full transition disabled:opacity-50 ${on ? 'bg-[#4A9A7A]' : 'bg-gray-300'}`}>
+        <span className={`absolute top-1 w-6 h-6 rounded-full bg-white shadow transition-all ${on ? 'left-7' : 'left-1'}`} />
+    </button>
+);
 const tomorrowIso = () => {
     const d = new Date(Date.now() + 24 * 3600 * 1000);
     return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -41,6 +51,9 @@ export default function NianfaiMailCard({ year, number, gas, showAlert, showConf
     const [date, setDate] = useState('');
     const [checked, setChecked] = useState(new Set());
     const [busy, setBusy] = useState('');
+    const rem = gas?.reminders;
+    const [deliveryAt, setDeliveryAt] = useState('');
+    useEffect(() => { setDeliveryAt(toInputDt(rem?.delivery?.at)); }, [rem?.delivery?.at]);
 
     const load = useCallback(async () => {
         setLoadError('');
@@ -109,6 +122,16 @@ export default function NianfaiMailCard({ year, number, gas, showAlert, showConf
         finally { setBusy(''); }
     };
 
+    const handleDeliveryReminder = async ({ on, at }) => {
+        if (on !== undefined && !await showConfirm(on ? '到設定的時間自動寄「寄出前確認」給所有宅配客' : '停止自動寄宅配提醒', {
+            title: on ? '開啟自動宅配提醒' : '關閉自動宅配提醒', icon: 'info', confirmText: on ? '開啟' : '關閉',
+        })) return;
+        setBusy('delivery');
+        try { await setNianfaiDeliveryReminder(year, { on, at: at === undefined ? undefined : fromInputDt(at) }); onChanged?.(); }
+        catch (e) { await showAlert(e.message, { title: '設定失敗', icon: 'warning' }); }
+        finally { setBusy(''); }
+    };
+
     const typeSummary = (k) => {
         let rs = (data?.types?.[k]?.rows) || [];
         const c = (f) => rs.filter(FILTERS.find(x => x.key === f).match).length;
@@ -125,6 +148,45 @@ export default function NianfaiMailCard({ year, number, gas, showAlert, showConf
                 </div>
             </div>
             <p className="text-sm text-gray-500 mb-4">和試算表「📧 年菜寄信」選單共用寄信狀態，兩邊寄過的都不會重寄。「已寄未確認」的客人可以電話提醒。</p>
+
+            {/* 自動提醒：宅配（寄出前確認）／自取（取貨提醒），條件不符就不寄並提醒 */}
+            {rem && (
+                <div className="mb-4 rounded-xl border border-gray-200 divide-y divide-gray-100">
+                    <div className="p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                            <div className="text-sm">
+                                <span className="font-bold text-gray-800">自動宅配提醒</span>
+                                <span className="text-gray-500 ml-2">到設定時間自動寄「寄出前確認」給所有宅配客</span>
+                            </div>
+                            <Switch on={rem.delivery.on} disabled={!!busy || !gas?.ok} onClick={() => handleDeliveryReminder({ on: !rem.delivery.on })} />
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 text-sm">
+                            <span className="text-gray-600">寄出時間</span>
+                            <input type="datetime-local" value={deliveryAt} onChange={e => setDeliveryAt(e.target.value)}
+                                className="border border-gray-300 rounded-lg px-2 py-1.5" />
+                            <button onClick={() => handleDeliveryReminder({ at: deliveryAt })} disabled={!!busy || toInputDt(rem.delivery.at) === deliveryAt}
+                                className="px-3 py-1.5 rounded-lg font-bold text-white bg-gray-700 disabled:opacity-40">{busy === 'delivery' ? '儲存中...' : '儲存時間'}</button>
+                        </div>
+                        {rem.delivery.on && (rem.delivery.problem
+                            ? <p className="text-sm font-bold text-red-600">⚠️ {rem.delivery.problem}</p>
+                            : rem.delivery.sentAt
+                                ? <p className="text-sm text-green-700 font-bold">✓ 已在 {rem.delivery.sentAt} 自動寄出（之後新增的宅配客請手動寄）</p>
+                                : <p className="text-sm text-gray-600">將在 <b>{rem.delivery.at}</b> 自動寄出（時間到後 10 分鐘內）{!rem.live && '，正式上線後才會自動寄'}</p>)}
+                    </div>
+                    <div className="p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                            <div className="text-sm">
+                                <span className="font-bold text-gray-800">自動取貨提醒</span>
+                                <span className="text-gray-500 ml-2">每天 08:00 寄給明天取貨的客人（附加熱說明小卡）</span>
+                            </div>
+                            <Switch on={rem.pickup.on} disabled={!!busy || !gas?.ok} onClick={handleReminder} />
+                        </div>
+                        {rem.pickup.on && (rem.pickup.problem
+                            ? <p className="text-sm font-bold text-red-600">⚠️ {rem.pickup.problem}：自動取貨提醒不會寄出（到時會寄信通知店家）。請到試算表「設定」填「加熱說明小卡ID」</p>
+                            : <p className="text-sm text-gray-600">加熱說明小卡正常{!rem.live && '，正式上線後才會自動寄'}</p>)}
+                    </div>
+                </div>
+            )}
 
             {/* 三種信的進度 */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
@@ -155,16 +217,6 @@ export default function NianfaiMailCard({ year, number, gas, showAlert, showConf
             {/* 取貨提醒：自動寄送＋取貨日 */}
             {type === 'pickupReminder' && (
                 <div className="mb-3 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-lg bg-gray-50">
-                        <div className="text-sm">
-                            <span className="font-bold text-gray-800">自動取貨提醒</span>
-                            <span className="text-gray-500 ml-2">每天 08:00 寄給明天取貨的客人{gas?.phase !== 'live' && '（正式上線後才會自動寄）'}</span>
-                        </div>
-                        <button onClick={handleReminder} disabled={!!busy || !gas?.ok} role="switch" aria-checked={!!gas?.reminderOn}
-                            className={`relative w-14 h-8 rounded-full transition disabled:opacity-50 ${gas?.reminderOn ? 'bg-[#4A9A7A]' : 'bg-gray-300'}`}>
-                            <span className={`absolute top-1 w-6 h-6 rounded-full bg-white shadow transition-all ${gas?.reminderOn ? 'left-7' : 'left-1'}`} />
-                        </button>
-                    </div>
                     {dates.length > 0 && (
                         <div className="flex flex-wrap gap-2">
                             {dates.map(d => (
