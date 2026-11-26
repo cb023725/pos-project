@@ -1567,9 +1567,13 @@ function buildNianfaiStubPDF(data, filePath) {
 }
 
 // 取貨時間：最後一天（除夕前一天）提早結束，其他天用每日取貨時間（年菜管理頁的日期設定）
-const nianfaiPickupKvCache = new Map(); // year -> 上次讀到的取貨時間設定（資料庫慢時用）
+// 資料庫連不上時用上次讀到的設定（記憶體＋存到硬碟，伺服器重開也還在）；完全沒有設定就留空，不印可能錯的時間
+const NIANFAI_PICKUP_CACHE_FILE = path.join(__dirname, 'logs', 'nianfai_pickup_cache.json');
+const nianfaiPickupKvCache = new Map(); // year -> 上次讀到的取貨時間設定
+try { for (const [y, v] of Object.entries(JSON.parse(fs.readFileSync(NIANFAI_PICKUP_CACHE_FILE, 'utf8')))) nianfaiPickupKvCache.set(Number(y), v); } catch { /* 還沒有 */ }
 async function nianfaiPickupHoursFor(year, pickupDate) {
     if (!year || !pickupDate) return '';
+    year = Number(year);
     const keys = ['pickup_hours', 'last_pickup_end', 'pickup_dates'].map(k => `nianfai_${year}_${k}`);
     let kv;
     try {
@@ -1580,16 +1584,23 @@ async function nianfaiPickupHoursFor(year, pickupDate) {
         ]);
         if (error) throw error;
         kv = Object.fromEntries((data || []).map(r => [r.key.replace(`nianfai_${year}_`, ''), r.value]));
-        nianfaiPickupKvCache.set(year, kv);
+        if (kv.pickup_dates) {
+            nianfaiPickupKvCache.set(year, kv);
+            try { fs.mkdirSync(path.dirname(NIANFAI_PICKUP_CACHE_FILE), { recursive: true }); fs.writeFileSync(NIANFAI_PICKUP_CACHE_FILE, JSON.stringify(Object.fromEntries(nianfaiPickupKvCache))); } catch { /* 存不了就算了 */ }
+        }
     } catch (e) {
-        kv = nianfaiPickupKvCache.get(year) || {};
-        console.warn('[年菜] 讀取貨時間設定失敗，用上次的設定：', e.message);
+        kv = nianfaiPickupKvCache.get(year);
+        console.warn('[年菜] 讀取貨時間設定失敗' + (kv ? '，用上次的設定：' : '，也沒有存下的設定，取貨時間留空：'), e.message);
+        if (!kv) return '';
     }
     const [start = '12:00', end = '20:00'] = String(kv.pickup_hours || '12:00 ~ 20:00').split(/\s*[~～-]\s*/);
     let dates = []; try { dates = JSON.parse(kv.pickup_dates || '[]'); } catch { dates = []; }
-    const isLast = dates.length && pickupDate === dates[dates.length - 1];
-    return `${start} - ${isLast ? (kv.last_pickup_end || '16:00') : end}`;
+    const last = [...dates].sort().pop(); // 最後一個取貨日（不管存的順序）
+    return `${start} - ${last && pickupDate === last ? (kv.last_pickup_end || '16:00') : end}`;
 }
+
+// 開機先讀一次今年和明年的設定（存起來，之後資料庫連不上也有）
+setTimeout(() => { const y = new Date().getFullYear(); [y, y + 1].forEach(yr => nianfaiPickupHoursFor(yr, '0000-00-00').catch(() => {})); }, 5000);
 
 // ----------------------------------------------------
 // 【列印】POST /print
