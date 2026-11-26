@@ -13,7 +13,7 @@
  *   - 沒有 email（或 email 是店家信箱）不寄
  *   - 已取消的訂單不列入
  *   - Gmail 每天可寄封數有上限（一般帳號約 100 封，含確認信）；超過的部分不寄、列出來隔天再寄
- * 出貨通知與取貨提醒附上「加熱說明小卡」（「設定」的「加熱說明小卡ID」，空白就不附）。
+ * 寄出前確認、出貨通知、取貨提醒都附上「加熱說明小卡」（「設定」的「加熱說明小卡ID」）；自動寄送時小卡ID 必填。
  */
 /** ids：只看這些訂單（Sheet 選單選取的列）；取貨提醒有指定 ids 時不限日期 */
 function nfMailPlan_(type, dateIso, ids) {
@@ -111,7 +111,7 @@ function nfMailSend_(type, ids, dateIso, opts) {
     var quota = nfMailQuota_();
     var overQuota = [];
     if (quota !== null && todo.length > quota) { overQuota = todo.slice(quota); todo = todo.slice(0, quota); }
-    var attachment = type === 'preShip' ? null : nfHeatingCard_(p.settings);
+    var attachment = nfHeatingCard_(p.settings); // 三種後續通知都附加熱說明小卡（2026-11-27 Yw）
     var sent = [], failed = [];
     todo.forEach(function (x) {
       var cur = nfMailState_(x.id)[type]; // 寄之前再確認一次（WebPOS 與 Sheet 選單同時寄也不會重複）
@@ -230,7 +230,9 @@ function nfMailReport_(r, auto) {
 function nfHeatingCard_(settings) {
   var id = String(settings.kv['加熱說明小卡ID'] || '').trim();
   if (!id) return null;
-  return DriveApp.getFileById(id).getBlob().setName('加熱說明小卡.jpg');
+  var blob = DriveApp.getFileById(id).getBlob();
+  var ext = (/\/(png|gif|webp)$/.exec(blob.getContentType() || '') || [null, 'jpg'])[1];
+  return blob.setName('加熱說明小卡.' + ext); // 副檔名照實際格式
 }
 
 function nfNoticeItems_(row, settings) {
@@ -274,7 +276,7 @@ function nfSendNotice_(type, row, settings, attachment, subjectPrefix) {
   if (type === 'preShip') {
     file = 'PreShip'; subject = '冷凍年菜宅配寄出前確認';
   } else if (type === 'shipped') {
-    file = 'Shipped'; subject = '年菜寄出通知';
+    file = 'Shipped'; subject = '冷凍年菜寄出通知';
   } else {
     file = 'PickupReminder'; subject = '冷凍年菜取貨提醒';
     var iso = nfIsoDate_(row.pickupDate);

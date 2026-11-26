@@ -123,6 +123,8 @@ function doPost(e) {
         return nfJson_({ ok: true, result: nfTestAutoPickup_(body.date) });
       case 'testSetPickupDate':
         return nfJson_({ ok: true, result: nfTestSetPickupDate_(body.id, body.label) });
+      case 'testCardInfo':
+        return nfJson_({ ok: true, result: nfTestCardInfo_() });
       case 'testCreateCard':
         return nfJson_({ ok: true, result: nfTestCreateCard_(body.base64) });
       case 'devArchiveYear':

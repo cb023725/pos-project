@@ -4,6 +4,7 @@
  *   宅配提醒＝「寄出前確認」：「宅配提醒開關」開，而且「宅配提醒時間」有填（例 2027/01/20 20:00），
  *             時間到了一次寄給所有可寄的宅配客（每 10 分鐘檢查一次，所以會在設定時間後 10 分鐘內寄出）。
  *             時間沒填就不寄，WebPOS 年菜管理頁會提醒。寄過的不重寄；之後改時間，只會寄給還沒寄過的人。
+ *             寄出前確認也附加熱說明小卡：小卡有問題時不寄，寄信通知店家一次，小卡改好後下次檢查自動寄出。
  *   自取提醒＝「取貨提醒」：「取貨提醒開關」開，每天 08:00 寄給明天取貨的客人；
  *             「加熱說明小卡ID」沒填或讀不到檔案就不寄，改寄信通知店家原因（明天沒人取貨就不通知）。
  *
@@ -29,7 +30,10 @@ function nfFormatReminderAt_(d) { // 專案時區是 Asia/Taipei，直接用本�
 function nfHeatingCardProblem_(settings) {
   var id = String(settings.kv['加熱說明小卡ID'] || '').trim();
   if (!id) return '加熱說明小卡ID 沒填';
-  try { DriveApp.getFileById(id).getName(); } catch (e) { return '加熱說明小卡ID 讀不到檔案（請檢查 ID 或共用權限）'; }
+  var file;
+  try { file = DriveApp.getFileById(id); file.getName(); } catch (e) { return '加熱說明小卡ID 讀不到檔案（請檢查 ID 或共用權限）'; }
+  try { if (file.isTrashed()) return '加熱說明小卡在垃圾桶裡，請還原'; } catch (e) { /* 讀不到垃圾桶狀態就略過 */ }
+  if (!/^image\//.test(String(file.getMimeType() || ''))) return '加熱說明小卡ID 不是圖片檔（' + file.getName() + '）';
   return '';
 }
 
@@ -98,6 +102,14 @@ function nfDeliveryReminderTick() {
       nfUseYear_(envYear[0], envYear[1]);
       var st = nfReminderStatus_();
       if (!st.delivery.on || st.delivery.problem || st.delivery.sentAt) return;
+      if (st.pickup.problem) { // 寄出前確認也要附小卡：小卡有問題就不寄，通知店家（只通知一次，改好後下次檢查就會寄）
+        var warnKey = 'PRESHIP_CARDWARN_' + NF_CTX.env + ':' + NF_CTX.year;
+        if (nfProps_().getProperty(warnKey) !== st.delivery.at) {
+          MailApp.sendEmail({ to: NF.STORE_EMAIL, subject: '【年菜】宅配寄出前確認沒有寄出', body: '原因：' + st.pickup.problem + '\n\n請到試算表「設定」填好「加熱說明小卡ID」，填好後 10 分鐘內會自動寄出。', name: NF.SENDER_NAME });
+          nfProps_().setProperty(warnKey, st.delivery.at);
+        }
+        return;
+      }
       if (Date.now() < nfParseReminderAt_(st.delivery.at).getTime()) return;
       nfMailSend_('preShip', null, null, { retry: true, auto: true });
       nfProps_().setProperty(NF_PRESHIP_DONE_PREFIX + NF_CTX.env + ':' + NF_CTX.year, st.delivery.at);

@@ -78,7 +78,7 @@
         </tr>
         <tr style="border-bottom: 1px solid #f0f0f0;">
           <td style="border: none; padding: 8px 0; width: 80px; color: #888; font-size: 12px; vertical-align: top;">取貨時段</td>
-          <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><?= data.pickupHours ?></td>
+          <td style="border: none; padding: 8px 0; color: #333; font-size: 12px; font-weight: bold; line-height: 1.5;"><? if (data.isLastDay) { ?><?= String(data.pickupHours).split(" - ")[0] ?> - <span style="color: #d32f2f; font-weight: bold;"><?= String(data.pickupHours).split(" - ")[1] ?></span><? } else { ?><?= data.pickupHours ?><? } ?></td>
         </tr>
         <tr>
           <td style="border: none; padding: 8px 0; width: 80px; color: #888; font-size: 12px; vertical-align: top;">取貨地點</td>

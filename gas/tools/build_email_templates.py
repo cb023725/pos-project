@@ -106,6 +106,12 @@ def nb(text):
     return f'<span style="white-space: nowrap;">{text}</span>'
 
 
+# 取貨時段：最後一天（除夕前一天）結束時間用紅字，和注意事項的紅字一致
+HOURS = ('<? if (data.isLastDay) { ?><?= String(data.pickupHours).split(" - ")[0] ?> - '
+         '<span style="color: #d32f2f; font-weight: bold;"><?= String(data.pickupHours).split(" - ")[1] ?></span>'
+         '<? } else { ?><?= data.pickupHours ?><? } ?>')
+
+
 def notes(items):
     """注意事項：一點一段（不加項目符號），段落之間留空隙。
     items 可以是字串，或 (條件, 字串)：條件是範本 JS 運算式，成立才顯示。
@@ -274,13 +280,13 @@ def confirm(delivery):
         info = section('取貨資訊', BLUE, info_rows([
             ('取貨方式', '<?= data.method ?>'),
             ('取貨日期', '<?= data.pickupDate ?>'),
-            ('取貨時段', '<?= data.pickupHours ?>'),
+            ('取貨時段', HOURS),
             ('取貨地點', map_link('<?= data.storeAddress ?>')),
         ]), boxed=True)
-        # 每日取貨時段已寫在「取貨資訊」，注意事項只提醒除夕前一天提早結束（紅字）
+        # 每日取貨時段已寫在「取貨資訊」；除夕前一天提早結束的提醒只在最後一天取貨的訂單出現（紅字）
         first = [
             f'請依指定的取貨日期前往取貨，如需變更取貨日請{nb("提前通知我們備貨。")}',
-            f'除夕前一天取貨時間只到 <span style="color: {RED}; font-weight: bold;"><?= data.lastPickupEnd ?></span>。',
+            ('data.isLastDay', f'除夕前一天取貨時間只到 <span style="color: {RED}; font-weight: bold;"><?= data.lastPickupEnd ?></span>。'),
         ]
     body = (section('訂購明細', RED, items_amount(delivery)) + info
             + section('注意事項', AMBER, notes(first + PAY_NOTES)) + ADD_BUTTON + BANK)
@@ -327,7 +333,7 @@ def shipped():
         ('收件地址', '<?= data.receiverAddress ?>'),
         ('託運單號', track),
     ]), boxed=True) + ack_button('我已收到出貨通知')
-    return page('年菜寄出通知', greeting, body)
+    return page('冷凍年菜寄出通知', greeting, body)
 
 
 def pickup_reminder():
@@ -340,7 +346,7 @@ def pickup_reminder():
     )
     body = section('訂購明細', RED, ITEMS_QTY) + section('取貨資訊', BLUE, info_rows([
         ('取貨日期', '<?= data.shipDate ?>'),
-        ('取貨時段', '<?= data.pickupHours ?>'),
+        ('取貨時段', HOURS),
         ('取貨地點', map_link('<?= data.storeAddress ?>')),
     ]), boxed=True) + ack_button('我已收到取貨提醒')
     return page('冷凍年菜取貨提醒', greeting, body)

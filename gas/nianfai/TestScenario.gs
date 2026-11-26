@@ -148,3 +148,15 @@ function nfTestSetPickupDate_(id, label) {
   }
   throw new Error('找不到這筆訂單：' + id);
 }
+
+/** 只限 dev：讀「設定」的加熱說明小卡：檔名、格式、大小、所在資料夾，小於 3MB 時回傳圖片內容（確認上傳的是哪張圖） */
+function nfTestCardInfo_() {
+  nfTestGuard_();
+  var id = String(nfReadSettings_().kv['加熱說明小卡ID'] || '').trim();
+  var f = DriveApp.getFileById(id);
+  var parents = []; var it = f.getParents(); while (it.hasNext()) parents.push(it.next().getName());
+  var blob = f.getBlob();
+  return { id: id, name: f.getName(), mime: f.getMimeType(), size: f.getSize(), folders: parents, owner: (function () { try { return f.getOwner().getEmail() === Session.getEffectiveUser().getEmail() ? '寄信帳號本人' : '其他帳號'; } catch (e) { return '未知'; } })(),
+    base64: f.getSize() < 3 * 1024 * 1024 ? Utilities.base64Encode(blob.getBytes()) : null,
+    thumb: (function () { try { var t = f.getThumbnail(); return t ? Utilities.base64Encode(t.getBytes()) : null; } catch (e) { return null; } })() };
+}
