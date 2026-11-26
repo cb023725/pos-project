@@ -1302,13 +1302,13 @@ const NF_M = 3;                     // 出血邊（左右、上方）
 // 讀不到蘋方時退回微軟正黑體＋描邊加粗
 const NF_FONT_FILE = '/System/Library/Fonts/PingFang.ttc';
 const NF_PINGFANG = (() => { try { fs.accessSync(NF_FONT_FILE); return true; } catch { return false; } })();
+// 有粗有細（Yw 2026-11-26：參考第一版，一般字要細）：一般字 Light、重點 Medium；預覽可用 slipWeights 比較其他組合
+const NF_WEIGHTS = { light: 'PingFangTC-Light', regular: 'PingFangTC-Regular', medium: 'PingFangTC-Medium', semibold: 'PingFangTC-Semibold' };
+const NF_DEFAULT_WEIGHTS = { reg: 'light', bold: 'medium' };
 function nfFonts(doc) {
-    if (NF_PINGFANG) {
-        doc.registerFont('NfReg', NF_FONT_FILE, 'PingFangTC-Regular'); // Yw：Medium 偏粗，改 Regular
-        doc.registerFont('NfBold', NF_FONT_FILE, 'PingFangTC-Semibold');
-    } else {
-        doc.registerFont('NfReg', FONT_REG);
-        doc.registerFont('NfBold', FONT_REG);
+    for (const [k, ps] of Object.entries(NF_WEIGHTS)) {
+        if (NF_PINGFANG) doc.registerFont('Nf_' + k, NF_FONT_FILE, ps);
+        else doc.registerFont('Nf_' + k, FONT_REG);
     }
 }
 const NF_W = PAGE_W - NF_M * 2;     // 內容寬度
@@ -1351,18 +1351,19 @@ function nfRenderSlip(drawFn, filePath) {
 }
 
 // 排版工具：整張單只用一個字型家族（蘋方 TC Medium／Semibold），同一行的中文與數字基線一致、不會上下錯開
-// 整張預設不用粗體（Yw 2026-11-26 比較列印後決定：熱感紙上一般字重最清楚）；opts.bold = true 才用粗體（預覽傳 slipBold: true）
+// opts.weights：{ reg, bold }（light／regular／medium／semibold），預設一般字 Light、重點 Medium
 function nfSlipParts(doc, opts = {}) {
     const X = NF_M, W = NF_W;
-    const useBold = opts.bold === true;
-    const draw = (t, x, y, size, { bold: b = false, width, align } = {}) => {
-        const bold = b && useBold;
+    const wt = { ...NF_DEFAULT_WEIGHTS, ...(opts.weights || {}) };
+    const REG = 'Nf_' + (NF_WEIGHTS[wt.reg] ? wt.reg : 'light');
+    const BOLD = 'Nf_' + (NF_WEIGHTS[wt.bold] ? wt.bold : 'medium');
+    const draw = (t, x, y, size, { bold = false, width, align } = {}) => {
         const stroke = bold && !NF_PINGFANG; // 沒有蘋方才用描邊加粗
-        doc.font(bold ? 'NfBold' : 'NfReg').fontSize(size).fillColor('black').strokeColor('black').lineWidth(stroke ? 0.35 : 0);
+        doc.font(bold ? BOLD : REG).fontSize(size).fillColor('black').strokeColor('black').lineWidth(stroke ? 0.35 : 0);
         doc.text(String(t), x, y, { lineBreak: false, width, align, fill: true, stroke });
     };
-    // 量寬度一律用粗體量（比較寬），一般字和粗體都放得下
-    const wOf = (t, size) => doc.font('NfBold').fontSize(size).widthOfString(String(t));
+    // 量寬度一律用最粗的字重量（比較寬），一般字和粗體都放得下
+    const wOf = (t, size) => doc.font('Nf_semibold').fontSize(size).widthOfString(String(t));
     const line = (y, lw = 0.6, dash = false) => {
         doc.save(); if (dash) doc.dash(2, { space: 1.5 });
         doc.moveTo(X, y).lineTo(X + W, y).lineWidth(lw).strokeColor('black').stroke(); doc.restore();
@@ -1437,7 +1438,7 @@ function nfSlipParts(doc, opts = {}) {
 
 // 抬頭到總計（兩聯共用）
 function nfSlipOrderPart(doc, data, withLogo, paid) {
-    const P = nfSlipParts(doc, { bold: data.slipBold === true });
+    const P = nfSlipParts(doc, { weights: data.slipWeights });
     const { X, W } = P;
     let y = NF_M;
     if (withLogo && NF_LOGO) {
@@ -1516,17 +1517,14 @@ function buildNianfaiStubPDF(data, filePath) {
     return nfRenderSlip((doc) => {
         let { y, P } = nfSlipOrderPart(doc, data, false, false);
         if (data.deliveryMethod === 'delivery') {
-            // 手寫區：標籤只寫「姓名」「電話」「地址」，書寫線拉長、每列加高，好寫
+            // 手寫區只填一組（訂購人＝收件人），收件人不同請寫在背面；標籤短、書寫線長、每列加高
             const H = 34;
             y = P.section('宅配資訊', y);
-            y = P.sub('訂購人', y);
-            y = P.blank('姓名：', y, { H });
-            y = P.blank('電話：', y, { H });
-            y += 6;
-            y = P.sub('收件人', y);
             y = P.blank('姓名：', y, { H });
             y = P.blank('電話：', y, { H });
             y = P.blank('地址：', y, { H, lines: 3 });
+            y += 4;
+            y = P.bullets(['收件人不同，請寫在背面。'], y);
         } else {
             const H = 34;
             y = P.section('取貨資訊', y);
