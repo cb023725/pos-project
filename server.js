@@ -1442,14 +1442,13 @@ function nfSlipParts(doc, opts = {}) {
         // 條列只用一般字重，用實際字重量寬度（比用最粗的量準），一行放得下就不換行
         // 句尾全形標點右半邊是空白，可以超出邊界半個字
         const wReg = (t, size) => doc.font(REG).fontSize(size).widthOfString(String(t)) - ('，、。；'.includes(String(t).slice(-1)) ? size * 0.5 : 0);
+        // 同一組注意事項用同一個字級、每點一行不換行：以最長的那點放得下為準一起縮小
+        let sz = NF_SZ.label;
+        while (sz > 6 && items.some(t => wReg(t, sz) > W - bw)) sz -= 0.25;
         for (const t of items) {
-            draw('・', X, y, NF_SZ.label);
-            // 只差一點放不下：縮小最多 1pt 保持一行；真的太長才在標點平均換行
-            let sz = NF_SZ.label; while (sz > NF_SZ.label - 1 && wReg(t, sz) > W - bw) sz -= 0.25;
-            const lines = wReg(t, sz) <= W - bw ? [t] : balance(t, NF_SZ.label, W - bw);
-            const lsz = lines.length === 1 ? sz : NF_SZ.label;
-            lines.forEach((l, i) => draw(l, X + bw, y + i * (lsz + 3), lsz));
-            y += lines.length * (lsz + 3) + 2;
+            draw('・', X, y, sz);
+            draw(t, X + bw, y, sz);
+            y += sz + 5;
         }
         return y;
     };
@@ -1537,7 +1536,7 @@ function buildNianfaiConfirmPDF(data, filePath) {
             y = P.section('宅配資訊', y);
             y = P.field('寄出期間：', String(data.deliveryPeriod || '').replace(/^\d{4}\//, '').replace(/\s*[~～]\s*/, '～').replace(/\s+/g, ''), y);
             y = P.section('注意事項', y);
-            y = P.bullets(['宅配統一於寄出期間寄出，恕無法指定到貨日期。'], y);
+            y = P.bullets(['宅配統一於寄出期間寄出。', '恕無法指定到貨日期。'], y);
         } else {
             y = P.section('取貨資訊', y);
             y = P.field('取貨日期：', nfDateWeek(data.pickupDate), y);
