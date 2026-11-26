@@ -3927,7 +3927,7 @@ app.get(/.*/, (req, res) => {
 // ----------------------------------------------------
 // 啟動 server
 // ----------------------------------------------------
-app.listen(PORT, '0.0.0.0', () => {
+const httpServer = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Node server running on http://localhost:${PORT}`);
 
     // 年菜：啟動時先把 Google 狀態與訂購需求讀進快取，第一次打開年菜頁面不用等 GAS
@@ -3959,4 +3959,15 @@ app.listen(PORT, '0.0.0.0', () => {
             }
         });
     }
+});
+
+// 連接埠被占用（例如已經有一份 server 在跑）就直接結束，不要留在背景：
+// 留下來的程序拿不到連接埠卻還會跑定時工作（資料庫保溫、補送年菜表單），
+// 2026-11 曾累積上百個這種程序，把 dev 資料庫拖垮。launchd 管的那份會自己重試。
+httpServer.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        console.error(`🔴 連接埠 ${PORT} 已被占用，這份 server 直接結束（已經有一份在跑）`);
+        process.exit(1);
+    }
+    throw err;
 });
