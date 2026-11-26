@@ -1,5 +1,5 @@
 /**
- * 表單提交 → 確認信＋停售檢查（取代舊 confirm.gs）
+ * 表單提交 → 確認信（取代舊 confirm.gs）
  *
  * 舊版問題（handoff 第 10 節）的修正：
  * - 用 e.range 讀觸發的那一列（不用 getLastRow，兩人同時送出不會寄錯人）
@@ -37,12 +37,7 @@ function nfOnFormSubmit(e) {
   } catch (errSync) {
     console.error('宅配／自取同步失敗：' + errSync);
   }
-
-  try {
-    nfCheckSellout_((order.isOnsite ? '現場單 ' + order.seqLabel : '線上單') + ' ' + order.timestampText);
-  } catch (err2) {
-    console.error('停售檢查失敗：' + err2);
-  }
+  // 不自動停售、不自動關表單（2026-11-27 Yw 決定：表單由 Yw 自己關）
 }
 
 function nfBuildOrderData_(order, settings) {

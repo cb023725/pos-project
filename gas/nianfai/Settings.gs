@@ -186,21 +186,6 @@ function nfWriteSettingsFromWebpos_(p) {
   return { items: rows.length };
 }
 
-/** 寫入單一品項的停售上限（WebPOS「製作完成」） */
-function nfSetSelloutCap_(itemId, itemName, cap) {
-  var sh = nfSheet_(NF.SHEET_SETTINGS);
-  var last = sh.getLastRow();
-  if (last < 2) throw new Error('「設定」沒有品項，請先從 WebPOS 同步');
-  var vals = sh.getRange(2, NF_SETTINGS_ITEM_COL, last - 1, 2).getValues();
-  for (var i = 0; i < vals.length; i++) {
-    if ((itemId && String(vals[i][0]) === String(itemId)) || (itemName && String(vals[i][1]) === String(itemName))) {
-      sh.getRange(i + 2, NF_SETTINGS_ITEM_COL + 6).setValue(cap);
-      return true;
-    }
-  }
-  throw new Error('「設定」找不到品項：' + (itemName || itemId));
-}
-
 /** 寫入「設定」A:B 的單一項目（沒有就新增在最後一個項目之後） */
 function nfSetKv_(key, value) {
   nfEnsureKv_([key]);

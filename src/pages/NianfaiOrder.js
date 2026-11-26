@@ -145,10 +145,6 @@ const NianfaiOrderPage = () => {
             return;
         }
         const current = qty[item.id] || 0;
-        if (item.soldOut && current === 0 && value > current) {
-            const ok = await showConfirm(`「${nianfaiDisplayName(item)}」已停售`, { title: '仍要加入嗎？', icon: 'warning', confirmText: '仍要加入', danger: true });
-            if (!ok) return;
-        }
         setCapNotice('');
         if (bump && value > current) {
             seqCounter.current += 1;
@@ -274,7 +270,7 @@ const NianfaiOrderPage = () => {
             await doCheckout(false);
         } catch (e) {
             if (e.code === 'FORM_CLOSED') {
-                const ok = await showConfirm('年菜表單已關閉（已達停售上限）', { title: '仍要結帳嗎？', icon: 'warning', confirmText: '繼續結帳', danger: true });
+                const ok = await showConfirm('年菜表單已關閉', { title: '仍要結帳嗎？', icon: 'warning', confirmText: '繼續結帳', danger: true });
                 if (ok) {
                     try { await doCheckout(true); } catch (e2) { setError(`結帳失敗：${e2.message}`); }
                 }

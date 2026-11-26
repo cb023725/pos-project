@@ -167,7 +167,8 @@ run('demand', () => { const d = ctx.nfComputeDemand_(); return { byName: d.deman
 run('onFormSubmit (confirm mail)', () => ctx.nfOnFormSubmit({ range: respSheet.getRange(2, 1), source: ctx.NF_CTX.ss }));
 run('onFormSubmit delivery', () => ctx.nfOnFormSubmit({ range: respSheet.getRange(3, 1), source: ctx.NF_CTX.ss }));
 run('planFormSync', () => { const p = ctx.nfPlanFormSync_(); return { changes: p.changes, warnings: p.warnings }; });
-run('finishProduction + sellout', () => { ctx.nfSetSelloutCap_('chicken', '花雕雞', 3); return ctx.nfCheckSellout_('test'); });
+run('表單送出後不會自動關表單', () => ctx.NF_CTX.form.isAcceptingResponses());
+run('手動關閉表單（模擬 Yw 自己關）', () => { ctx.NF_CTX.form.setAcceptingResponses(false); return ctx.NF_CTX.form.isAcceptingResponses(); });
 run('submit when closed', () => ctx.nfSubmitWebposOrder_({ orderId: 103, seqLabel: '27003', customerName: 'x', customerPhone: '1', email: 'goodgoodeatrestaurant@gmail.com', deliveryMethod: 'pickup', pickupDate: '2027-01-29', items: [{ name: '鮑魚人蔘雞湯', qty: 1 }] }));
 run('form closed again?', () => ctx.NF_CTX.form.isAcceptingResponses());
 run('clear whole row → no 已修改', () => { const lc = respSheet.getLastColumn(); const hdr = respSheet.getRange(1, 1, 1, lc).getValues()[0]; const ed = hdr.indexOf('已修改') + 1;

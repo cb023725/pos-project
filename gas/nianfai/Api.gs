@@ -23,7 +23,6 @@
  *   backToTesting     只限 dev：把年度改回測試中，方便重複測試正式上線流程
  *   setAccepting      開關表單（WebPOS 開賣／收單時呼叫）
  *   submitOrder       WebPOS 現場單送進表單（WebposSubmit.gs）
- *   finishProduction  寫入停售上限並立即檢查（製作完成）
  *   ping              連線測試
  * doGet action（一個專案只能有一個 doGet，用參數區分）：
  *   demand            各品項總訂購量（套餐已拆）、已送進表單的現場單流水號、表單是否開放
@@ -121,9 +120,6 @@ function doPost(e) {
         return nfJson_({ ok: true, formAccepting: nfForm_().isAcceptingResponses() });
       case 'submitOrder':
         return nfJson_(nfSubmitWebposOrder_(body.order));
-      case 'finishProduction':
-        nfSetSelloutCap_(body.itemId, body.itemName, Number(body.cap));
-        return nfJson_({ ok: true, sellout: nfCheckSellout_('製作完成：' + (body.itemName || body.itemId)) });
       default:
         return nfJson_({ ok: false, error: '未知的 action：' + body.action });
     }

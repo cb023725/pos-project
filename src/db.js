@@ -409,9 +409,6 @@ export async function getNianfaiOrderStatus(orderId) {
 export async function getNianfaiCloseCheck(since) {
     return api('GET', `/api/nianfai/close-check${since ? `?since=${encodeURIComponent(since)}` : ''}`);
 }
-export async function finishNianfaiProduction(itemId, year) {
-    return api('POST', `/api/nianfai/items/${itemId}/finish-production`, { year });
-}
 export async function getNianfaiDemand(year) {
     return api('GET', `/api/nianfai/demand?year=${year}`);
 }

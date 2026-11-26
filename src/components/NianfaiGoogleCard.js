@@ -22,7 +22,27 @@ const Step = ({ n, title, done, active, children }) => (
     </div>
 );
 
-export default function NianfaiGoogleCard({ year, number, datesReady, showAlert, showConfirm, onStatusChange, reloadKey }) {
+// Google 表單目前是開放還是關閉（讀 Google 表單實際狀態）。不連動停售，表單要不要關由 Yw 自己決定，
+// 這裡只負責提醒：開賣中卻關著、或不在開賣中卻還開著，都會跳出提示。
+export function NianfaiFormStatus({ gas, salesStatus, compact = false }) {
+    if (!gas || !gas.configured || !gas.ok || !gas.created) return null;
+    const open = !!gas.formAccepting;
+    const live = gas.phase === 'live';
+    let warn = '';
+    if (live && salesStatus === 'selling' && !open) warn = '目前是「開賣中」，但表單已關閉，顧客無法線上下單';
+    else if (live && salesStatus && salesStatus !== 'selling' && open) warn = '目前不是「開賣中」，但表單還開著，顧客仍可線上下單';
+    return (
+        <div className={compact ? 'mt-2' : 'mb-4'}>
+            <div className={`flex items-center gap-2 rounded-lg px-3 py-2 font-bold ${open ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'}`}>
+                <span className={`w-2.5 h-2.5 rounded-full ${open ? 'bg-green-500' : 'bg-red-500'}`} />
+                Google 表單：{open ? '開放中（顧客可以線上下單）' : '已關閉（顧客無法線上下單）'}
+            </div>
+            {warn && <p className="mt-1.5 text-sm font-bold text-orange-600">⚠️ {warn}</p>}
+        </div>
+    );
+}
+
+export default function NianfaiGoogleCard({ year, number, datesReady, showAlert, showConfirm, onStatusChange, reloadKey, salesStatus }) {
     const [gas, setGas] = useState(null); // null = 檢查中
     const [busy, setBusy] = useState('');
 
@@ -148,12 +168,10 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
                             <span className={`px-2.5 py-1 rounded-full font-black ${live ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
                                 {live ? `已正式上線（${gas.liveAt || ''}）` : '測試中'}
                             </span>
-                            <span className={`px-2.5 py-1 rounded-full font-bold ${gas.formAccepting ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                                表單{gas.formAccepting ? '開放中' : '已關閉'}
-                            </span>
                             {gas.env === 'dev' && <span className="px-2.5 py-1 rounded-full font-bold bg-gray-100 text-gray-500">測試環境</span>}
                         </div>
                     )}
+                    <NianfaiFormStatus gas={gas} salesStatus={salesStatus} />
 
                     <div className="space-y-4">
                         <Step n={1} title="建立試算表與表單" done={created} active={!created}>

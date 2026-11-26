@@ -1806,7 +1806,6 @@ app.get('/api/menu', async (req, res) => {
             bundleComposition: r.bundle_composition || null,
             nianfaiYear: r.nianfai_year || null,
             nianfaiProductionQty: r.nianfai_production_qty,
-            nianfaiSelloutCap: r.nianfai_sellout_cap,
             nianfaiStockRef: r.nianfai_stock_ref || null,
         };
     }));
@@ -1849,7 +1848,6 @@ app.patch('/api/menu/:id', async (req, res) => {
     if (b.bundleComposition !== undefined) updates.bundle_composition = b.bundleComposition;
     if (b.nianfaiYear !== undefined) updates.nianfai_year = b.nianfaiYear;
     if (b.nianfaiProductionQty !== undefined) updates.nianfai_production_qty = b.nianfaiProductionQty;
-    if (b.nianfaiSelloutCap !== undefined) updates.nianfai_sellout_cap = b.nianfaiSelloutCap;
     if (b.nianfaiStockRef !== undefined) updates.nianfai_stock_ref = b.nianfaiStockRef;
     const { data, error } = await supabase.from('menu_items').update(updates).eq('id', req.params.id).select().single();
     if (error) return res.status(500).json({ error: error.message });
@@ -2817,22 +2815,6 @@ async function computeNianfaiDemand(year) {
     return (await computeNianfaiDemandDetail(year)).demand;
 }
 
-// 任一已完成（sellout_cap 不是 null）的品項，需求達到或超過上限，就關閉整份表單。
-// 有接 GAS 時，Google 表單由 GAS 關閉（每筆送出、製作完成時檢查），這裡同步狀態即可；
-// 沒接 GAS 時只更新 WebPOS 認知的狀態。
-async function checkAndCloseFormIfNeeded(year) {
-    nianfaiDemandCache.delete(year);
-    const { data: items } = await supabase.from('menu_items').select('id, nianfai_sellout_cap')
-        .eq('nianfai_year', year).not('nianfai_sellout_cap', 'is', null);
-    if (!items || items.length === 0) return;
-    const demand = await computeNianfaiDemand(year);
-    const anyReached = items.some(it => (demand[it.id] || 0) >= it.nianfai_sellout_cap);
-    if (anyReached) {
-        await supabase.from('app_settings').upsert({
-            key: `nianfai_${year}_form_closed`, value: 'true', updated_at: new Date().toISOString(),
-        });
-    }
-}
 
 // 「設定」分頁用的資料：品項／價格／套餐組成／停售上限、取貨與寄出日期（品項唯一來源是 WebPOS）
 async function buildNianfaiSheetPayload(year) {
@@ -3216,7 +3198,7 @@ app.post('/api/nianfai/reservations/:id/checkout', async (req, res) => {
         if (invErr) throw invErr;
 
         await supabase.from('nianfai_seq_reservations').update({ status: 'used', used_at: now }).eq('id', req.params.id);
-        await checkAndCloseFormIfNeeded(year);
+        nianfaiDemandCache.delete(year); // 訂購量重新計算
 
         res.json({ ok: true, orderId: order.id, seqNo, orderNo: nianfaiOrderNo(year, seqNo, resv.confirmed_at), confirmedAt: resv.confirmed_at, invoiceId: invoice.id, total });
     } catch (error) {
@@ -3360,34 +3342,6 @@ app.get('/api/nianfai/close-check', async (req, res) => {
     }
 });
 
-app.post('/api/nianfai/items/:id/finish-production', async (req, res) => {
-    const { year } = req.body;
-    if (!year) return res.status(400).json({ error: '缺少年度' });
-    try {
-        const { data: item, error: fetchErr } = await supabase.from('menu_items').select('*').eq('id', req.params.id).single();
-        if (fetchErr || !item) return res.status(404).json({ error: '找不到品項' });
-        // 製作入庫量統一在庫存管理頁的「年菜庫存」維護，製作完成時以當下庫存數作為停售上限
-        if (!item.nianfai_stock_ref) return res.status(400).json({ error: '此品項沒有對應的年菜庫存，請先到菜單管理設定' });
-        const { data: stockRow } = await supabase.from('menu_items').select('stock, category').eq('id', item.nianfai_stock_ref).single();
-        if (!stockRow || stockRow.category !== NIANFAI_STOCK_CATEGORY) return res.status(400).json({ error: '對應的庫存不是年菜庫存（平常也賣的品項不需要製作完成）' });
-        const cap = stockRow.stock || 0;
-        const { error: updErr } = await supabase.from('menu_items').update({ nianfai_sellout_cap: cap }).eq('id', req.params.id);
-        if (updErr) throw updErr;
-        // 有接 GAS：同步寫入 Sheet「設定」的停售上限，GAS 立即檢查、達標就關閉 Google 表單
-        let gasWarning = null;
-        if (nianfaiGasConfigured()) {
-            try {
-                await callNianfaiGas('finishProduction', { year: parseInt(year, 10), itemId: item.id, itemName: item.name, cap });
-            } catch (e) {
-                gasWarning = `WebPOS 已設定上限，但同步到 Sheet 失敗：${e.message}（請稍後到年菜管理頁按「同步品項到 Sheet」）`;
-            }
-        }
-        await checkAndCloseFormIfNeeded(parseInt(year, 10));
-        res.json({ ok: true, cap, gasWarning });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
 app.get('/api/nianfai/demand', async (req, res) => {
     const { year } = req.query;
     if (!year) return res.status(400).json({ error: '缺少年度' });
@@ -3414,21 +3368,11 @@ app.get('/api/nianfai/items', async (req, res) => {
     const invMap = {};
     (allItems || []).forEach(r => { if ((r.category || '').includes('庫存')) invMap[r.id] = r.stock; });
     const { demand, ordered } = await computeNianfaiDemandDetail(yearNum);
-    const byId = new Map((data || []).map(r => [r.id, r]));
-    const isSoldOut = (r) => {
-        const bundle = r.bundle_composition;
-        if (bundle && bundle.length > 0) {
-            return bundle.some(comp => {
-                const sub = byId.get(comp.itemId);
-                return sub && sub.nianfai_sellout_cap != null && (demand[comp.itemId] || 0) >= sub.nianfai_sellout_cap;
-            });
-        }
-        return r.nianfai_sellout_cap != null && (demand[r.id] || 0) >= r.nianfai_sellout_cap;
-    };
     res.json((data || []).map(r => {
         // nianfai_stock_ref 指向庫存管理頁的庫存品項（只顯示用，不是 consumes，年菜不扣庫存）：
-        //  - 冷凍包庫存：平常也賣的 5 項，對應冷凍包現有庫存，只警示不停售
-        //  - 年菜庫存：年節限定品項的製作入庫量（統一在庫存管理頁補貨/盤點），製作完成後設停售上限
+        //  - 冷凍包庫存：平常也賣的 5 項，對應冷凍包現有庫存
+        //  - 年菜庫存：年節限定品項的製作數量（統一在庫存管理頁補貨/盤點）
+        // 只顯示庫存與訂購量，不連動停售、不自動關表單（2026-11-27 Yw 決定）
         const stockRef = r.nianfai_stock_ref || null;
         const refStock = stockRef && stockRef in invMap ? invMap[stockRef] : null;
         const isSeasonalStock = !!stockRef && catMap[stockRef] === NIANFAI_STOCK_CATEGORY;
@@ -3438,15 +3382,12 @@ app.get('/api/nianfai/items', async (req, res) => {
             nianfaiStockRef: stockRef,
             consumes: stockRef ? [stockRef] : [], // 給 MenuCard 判斷庫存徽章用，年菜不會真的扣這個庫存
             linkedStock: refStock,
-            // 年節限定品項是否能賣看停售上限，不看入庫量（還沒入庫時數量是 0，不能顯示成售完）
+            // 年節限定品項不看製作數量（還沒做時是 0，不能顯示成售完）
             depleted: !isSeasonalStock && refStock !== null && refStock <= 0,
             bundleComposition: r.bundle_composition || null,
             nianfaiProductionQty: isSeasonalStock ? refStock : null,
-            nianfaiSelloutCap: r.nianfai_sellout_cap,
             demand: demand[r.id] || 0,
             ordered: ordered[r.id] || 0, // 原始點購份數（套餐不拆）
-            soldOut: isSoldOut(r),
-            // 平常也賣的品項：對應冷凍包庫存只警示，不走停售上限機制；年節限定品項才用製作入庫/完成
             isRegularSellingItem: !!stockRef && !isSeasonalStock,
             stock: refStock,
         };

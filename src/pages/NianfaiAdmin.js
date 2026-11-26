@@ -5,9 +5,9 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import useDialog from '../components/useDialog';
 import NianfaiDatesCard from '../components/NianfaiDatesCard';
-import NianfaiGoogleCard from '../components/NianfaiGoogleCard';
+import NianfaiGoogleCard, { NianfaiFormStatus } from '../components/NianfaiGoogleCard';
 import NianfaiMailCard from '../components/NianfaiMailCard';
-import { getSettingValue, saveSettingValue, getMenuItems, getInventoryItems, addMenuItem, updateMenuItem, getNianfaiItems, finishNianfaiProduction, getNianfaiDemand, setNianfaiFormAccepting } from '../db';
+import { getSettingValue, saveSettingValue, getMenuItems, getInventoryItems, addMenuItem, updateMenuItem, getNianfaiItems, getNianfaiDemand, setNianfaiFormAccepting } from '../db';
 
 const STATUS_ORDER = ['preparing', 'selling', 'closed', 'archived'];
 const STATUS_LABELS = { preparing: '準備中', selling: '開賣中', closed: '收單後', archived: '已封存（平常營業）' };
@@ -24,11 +24,9 @@ const NianfaiAdminPage = () => {
     const [status, setStatus] = useState('archived');
     const [items, setItems] = useState([]);
     const [inventoryItems, setInventoryItems] = useState([]);
-    const [formClosed, setFormClosed] = useState(false);
     const [newYearInput, setNewYearInput] = useState('');
     const [isInitializing, setIsInitializing] = useState(false);
     const [isToggling, setIsToggling] = useState(false);
-    const [finishingId, setFinishingId] = useState(null);
     const [gasReload, setGasReload] = useState(0);   // 寄信區改了取貨提醒開關 → 重新讀 GAS 狀態
     const [gas, setGas] = useState(null);            // GAS 狀態（由 NianfaiGoogleCard 回報），用來決定能不能開賣
     const [demandInfo, setDemandInfo] = useState(null); // { source, updatedAt, error }
@@ -41,18 +39,15 @@ const NianfaiAdminPage = () => {
         setNewYearInput(String((activeYearNum || new Date().getFullYear()) + 1));
         if (activeYearNum) {
             // 同時讀（以前一個接一個等）
-            const [s, closed, nfItems] = await Promise.all([
+            const [s, nfItems] = await Promise.all([
                 getSettingValue(`nianfai_${activeYearNum}_status`, 'preparing'),
-                getSettingValue(`nianfai_${activeYearNum}_form_closed`, 'false'),
                 getNianfaiItems(activeYearNum).catch(() => []),
             ]);
             setStatus(STATUS_ORDER.includes(s) ? s : 'preparing');
-            setFormClosed(closed === 'true');
             setInventoryItems(nfItems);
             getNianfaiDemand(activeYearNum).then(d => setDemandInfo({ source: d.source, updatedAt: d.updatedAt, error: d.error })).catch(() => setDemandInfo(null));
         } else {
             setStatus('archived');
-            setFormClosed(false);
             setInventoryItems([]);
         }
         const all = await getMenuItems();
@@ -74,7 +69,7 @@ const NianfaiAdminPage = () => {
     };
 
     // 新年度初始化＝真的複製：去年品項複製成新的 menu_items（新 id、新 nianfai_year），
-    // 套餐的 bundle_composition 重新指向新品項 id；製作入庫/停售上限/流水號都歸零；
+    // 套餐的 bundle_composition 重新指向新品項 id；年菜庫存/流水號都歸零；
     // 去年的品項與訂單完全不動，只是不再是「目前年度」。
     const handleInitNewYear = async () => {
         const newYear = parseInt(newYearInput, 10);
@@ -157,19 +152,7 @@ const NianfaiAdminPage = () => {
         }
     };
 
-    const handleFinishProduction = async (item) => {
-        if (!await showConfirm(`停售上限 ${item.nianfaiProductionQty || 0} 份`, { title: `${item.name} 製作完成`, icon: 'warning', note: '設定後不能再調整', confirmText: '製作完成' })) return;
-        setFinishingId(item.id);
-        try {
-            const r = await finishNianfaiProduction(item.id, activeYear);
-            await load();
-            if (r?.gasWarning) await showAlert(r.gasWarning, { title: 'Sheet 同步失敗', icon: 'warning' });
-        } catch (e) {
-            await showAlert(e.message, { title: '設定失敗', icon: 'warning' });
-        } finally {
-            setFinishingId(null);
-        }
-    };
+
 
 
     return (
@@ -190,11 +173,7 @@ const NianfaiAdminPage = () => {
                 <p className="text-gray-600 mt-1">
                     目前年度品項數：<span className="font-black text-gray-800">{items.length}</span>
                 </p>
-                {formClosed && (
-                    <p className="mt-2 text-sm font-bold text-red-600 bg-red-50 rounded-lg px-3 py-2">
-                        ⚠️ 已有品項達停售上限，表單已自動關閉。WebPOS 現場要繼續新增年菜訂單需要額外確認。
-                    </p>
-                )}
+                {activeYear && status !== 'archived' && <NianfaiFormStatus gas={gas} salesStatus={status} compact />}
             </div>
 
             <div className="bg-white rounded-xl shadow p-6 mb-5">
@@ -248,7 +227,7 @@ const NianfaiAdminPage = () => {
 
             {activeYear && status !== 'archived' && (
                 <NianfaiGoogleCard year={activeYear} number={5} datesReady={datesReady}
-                    showAlert={showAlert} showConfirm={showConfirm} onStatusChange={setGas} reloadKey={gasReload} />
+                    showAlert={showAlert} showConfirm={showConfirm} onStatusChange={setGas} reloadKey={gasReload} salesStatus={status} />
             )}
 
             {activeYear && (
@@ -261,8 +240,7 @@ const NianfaiAdminPage = () => {
                     </p>
 
                     <p className="text-xs text-gray-400 mb-3">
-                        入庫數量在 <Link to="/inventory" className="text-[#4A9A7A] font-bold underline">庫存管理頁</Link> 維護（年節限定＝年菜庫存，平常也賣＝冷凍包庫存）。
-                        年節限定品項做完時按「製作完成」，當下的入庫數就是停售上限；平常也賣的品項只警示、不停售。
+                        庫存數量在 <Link to="/inventory" className="text-[#4A9A7A] font-bold underline">庫存管理頁</Link> 維護（年節限定＝年菜庫存，平常也賣＝冷凍包庫存）。這裡只顯示對照，不會自動停售或關閉表單。
                     </p>
                     {inventoryItems.length > 0 && (
                         <div className="overflow-x-auto">
@@ -271,54 +249,30 @@ const NianfaiAdminPage = () => {
                                     <tr className="border-b-2 border-gray-200 text-xs font-bold text-gray-500">
                                         <th className="py-2 pr-2 text-left">品項</th>
                                         <th className="py-2 px-2 text-left">類型</th>
-                                        <th className="py-2 px-2 text-right">入庫</th>
-                                        <th className="py-2 px-2 text-right">訂購需求</th>
-                                        <th className="py-2 px-2 text-right">差額</th>
-                                        <th className="py-2 px-2 text-right">停售上限</th>
-                                        <th className="py-2 px-2 text-center">狀態</th>
-                                        <th className="py-2 pl-2 w-24"></th>
+                                        <th className="py-2 px-2 text-right">庫存</th>
+                                        <th className="py-2 pl-2 text-right">訂購量</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-100">
                                     {inventoryItems.map(item => {
                                         const isBundle = !!item.bundleComposition;
                                         const regular = item.isRegularSellingItem;
-                                        const cap = item.nianfaiSelloutCap;
-                                        const completed = cap != null;
                                         const stock = regular ? item.stock : item.nianfaiProductionQty;
-                                        // 差額：年節限定已完成用停售上限，其餘用入庫數
-                                        const base = !regular && completed ? cap : stock;
-                                        const diff = isBundle || base == null ? null : base - item.demand;
                                         const dash = <span className="text-gray-300">—</span>;
-                                        let badge;
-                                        if (isBundle) badge = item.soldOut ? ['停售', 'bg-red-100 text-red-600'] : ['依組成', 'bg-gray-100 text-gray-500'];
-                                        else if (regular) badge = diff != null && diff < 0 ? ['庫存不足', 'bg-red-100 text-red-600'] : ['平常也賣', 'bg-blue-50 text-blue-600'];
-                                        else if (!item.nianfaiStockRef) badge = ['未設定庫存', 'bg-red-100 text-red-600'];
-                                        else if (completed && item.demand >= cap) badge = ['停售', 'bg-red-100 text-red-600'];
-                                        else badge = completed ? ['已完成', 'bg-gray-100 text-gray-600'] : ['製作中', 'bg-orange-100 text-orange-600'];
                                         return (
                                             <tr key={item.id}>
                                                 <td className="py-2 pr-2 font-bold text-gray-800">{item.name}</td>
                                                 <td className="py-2 px-2 text-gray-500">{isBundle ? '套餐' : regular ? '平常也賣' : '年節限定'}</td>
-                                                <td className="py-2 px-2 text-right text-gray-800">{isBundle || stock == null ? dash : stock}</td>
-                                                <td className="py-2 px-2 text-right text-gray-800">{isBundle ? `${item.ordered || 0} 份` : item.demand}</td>
-                                                <td className={`py-2 px-2 text-right font-bold ${diff != null && diff < 0 ? 'text-red-600' : 'text-gray-800'}`}>{diff == null ? dash : diff}</td>
-                                                <td className="py-2 px-2 text-right text-gray-800">{isBundle || regular ? dash : (completed ? cap : <span className="text-gray-400">未設定</span>)}</td>
-                                                <td className="py-2 px-2 text-center"><span className={`text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap ${badge[1]}`}>{badge[0]}</span></td>
-                                                <td className="py-2 pl-2 text-right">
-                                                    {!isBundle && !regular && !completed && item.nianfaiStockRef && (
-                                                        <button onClick={() => handleFinishProduction(item)} disabled={finishingId === item.id}
-                                                            className="text-xs font-bold text-white bg-[#4A9A7A] px-3 py-1.5 rounded-lg disabled:opacity-50 whitespace-nowrap">
-                                                            {finishingId === item.id ? '處理中...' : '製作完成'}
-                                                        </button>
-                                                    )}
+                                                <td className="py-2 px-2 text-right text-gray-800">
+                                                    {isBundle ? dash : !item.nianfaiStockRef ? <span className="text-xs font-bold text-red-600">未設定庫存</span> : stock == null ? dash : stock}
                                                 </td>
+                                                <td className="py-2 pl-2 text-right font-bold text-gray-800">{isBundle ? `${item.ordered || 0} 份` : item.demand}</td>
                                             </tr>
                                         );
                                     })}
                                 </tbody>
                             </table>
-                            <p className="text-xs text-gray-400 mt-2">訂購需求已把套餐拆成單品計算；套餐列顯示的是點購份數。</p>
+                            <p className="text-xs text-gray-400 mt-2">單品的訂購量已把套餐拆開計入；套餐列顯示的是套餐本身的點購份數。</p>
                         </div>
                     )}
 
