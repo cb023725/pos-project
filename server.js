@@ -1303,12 +1303,21 @@ const NF_M = 3;                     // 出血邊（左右、上方）
 const NF_FONT_FILE = '/System/Library/Fonts/PingFang.ttc';
 const NF_PINGFANG = (() => { try { fs.accessSync(NF_FONT_FILE); return true; } catch { return false; } })();
 // 有粗有細（Yw 2026-11-26：參考第一版，一般字要細）：一般字 Light、重點 Medium；預覽可用 slipWeights 比較其他組合
-const NF_WEIGHTS = { light: 'PingFangTC-Light', regular: 'PingFangTC-Regular', medium: 'PingFangTC-Medium', semibold: 'PingFangTC-Semibold' };
-const NF_DEFAULT_WEIGHTS = { reg: 'light', bold: 'medium' };
+// 可選字重／字型：蘋方 TC 四種粗細、黑體-繁（STHeiti）Light／Medium、微軟正黑體（今天第一版用的）
+const NF_WEIGHTS = {
+    light: [NF_FONT_FILE, 'PingFangTC-Light'], regular: [NF_FONT_FILE, 'PingFangTC-Regular'],
+    medium: [NF_FONT_FILE, 'PingFangTC-Medium'], semibold: [NF_FONT_FILE, 'PingFangTC-Semibold'],
+    heitiLight: ['/System/Library/Fonts/STHeiti Light.ttc', 'STHeitiTC-Light'],
+    heitiMedium: ['/System/Library/Fonts/STHeiti Medium.ttc', 'STHeitiTC-Medium'],
+    jhenghei: [null, null],
+};
+const NF_DEFAULT_WEIGHTS = { reg: 'light', bold: 'medium' }; // Yw 2026-11-26 選 A
 function nfFonts(doc) {
-    for (const [k, ps] of Object.entries(NF_WEIGHTS)) {
-        if (NF_PINGFANG) doc.registerFont('Nf_' + k, NF_FONT_FILE, ps);
-        else doc.registerFont('Nf_' + k, FONT_REG);
+    for (const [k, [file, ps]] of Object.entries(NF_WEIGHTS)) {
+        try {
+            if (!file || !NF_PINGFANG) doc.registerFont('Nf_' + k, FONT_REG);
+            else doc.registerFont('Nf_' + k, file, ps);
+        } catch { doc.registerFont('Nf_' + k, FONT_REG); }
     }
 }
 const NF_W = PAGE_W - NF_M * 2;     // 內容寬度
@@ -1516,23 +1525,15 @@ function buildNianfaiConfirmPDF(data, filePath) {
 function buildNianfaiStubPDF(data, filePath) {
     return nfRenderSlip((doc) => {
         let { y, P } = nfSlipOrderPart(doc, data, false, false);
+        // 存根聯不印手寫格（Yw 2026-11-26）：客人資料全部寫在背面
         if (data.deliveryMethod === 'delivery') {
-            // 手寫區只填一組（訂購人＝收件人），收件人不同請寫在背面；標籤短、書寫線長、每列加高
-            const H = 34;
             y = P.section('宅配資訊', y);
-            y = P.blank('姓名：', y, { H });
-            y = P.blank('電話：', y, { H });
-            y = P.blank('地址：', y, { H, lines: 3 });
-            y += 4;
-            y = P.bullets(['收件人不同，請寫在背面。'], y);
+            y = P.bullets(['請在背面寫上收件人姓名、電話、地址。'], y);
         } else {
-            const H = 34;
             y = P.section('取貨資訊', y);
-            y = P.blank('姓名：', y, { H });
-            y = P.blank('電話：', y, { H });
-            y += 6;
             y = P.field('取貨日期：', nfDateWeek(data.pickupDate), y);
             y = P.field('取貨時間：', data.pickupHours || '', y);
+            y = P.bullets(['請在背面寫上姓名、電話。'], y + 2);
         }
         return y;
     }, filePath);
