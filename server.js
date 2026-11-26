@@ -1311,7 +1311,7 @@ const NF_WEIGHTS = {
     heitiMedium: ['/System/Library/Fonts/STHeiti Medium.ttc', 'STHeitiTC-Medium'],
     jhenghei: [null, null],
 };
-const NF_DEFAULT_WEIGHTS = { reg: 'light', bold: 'medium' }; // Yw 2026-11-26 選 A
+const NF_DEFAULT_WEIGHTS = { reg: 'light', bold: 'regular' }; // Yw 2026-11-26 選：一般字 Light、重點 Regular
 function nfFonts(doc) {
     for (const [k, [file, ps]] of Object.entries(NF_WEIGHTS)) {
         try {
@@ -1540,11 +1540,24 @@ function buildNianfaiStubPDF(data, filePath) {
 }
 
 // 取貨時間：最後一天（除夕前一天）提早結束，其他天用每日取貨時間（年菜管理頁的日期設定）
+const nianfaiPickupKvCache = new Map(); // year -> 上次讀到的取貨時間設定（資料庫慢時用）
 async function nianfaiPickupHoursFor(year, pickupDate) {
     if (!year || !pickupDate) return '';
     const keys = ['pickup_hours', 'last_pickup_end', 'pickup_dates'].map(k => `nianfai_${year}_${k}`);
-    const { data } = await supabase.from('app_settings').select('key, value').in('key', keys);
-    const kv = Object.fromEntries((data || []).map(r => [r.key.replace(`nianfai_${year}_`, ''), r.value]));
+    let kv;
+    try {
+        // 最多等 3 秒：資料庫慢時不要讓單據等太久
+        const { data, error } = await Promise.race([
+            supabase.from('app_settings').select('key, value').in('key', keys),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('逾時')), 3000)),
+        ]);
+        if (error) throw error;
+        kv = Object.fromEntries((data || []).map(r => [r.key.replace(`nianfai_${year}_`, ''), r.value]));
+        nianfaiPickupKvCache.set(year, kv);
+    } catch (e) {
+        kv = nianfaiPickupKvCache.get(year) || {};
+        console.warn('[年菜] 讀取貨時間設定失敗，用上次的設定：', e.message);
+    }
     const [start = '12:00', end = '20:00'] = String(kv.pickup_hours || '12:00 ~ 20:00').split(/\s*[~～-]\s*/);
     let dates = []; try { dates = JSON.parse(kv.pickup_dates || '[]'); } catch { dates = []; }
     const isLast = dates.length && pickupDate === dates[dates.length - 1];
@@ -1567,6 +1580,23 @@ app.post('/print', printRateLimit, async (req, res) => {
 
     // 立即回應前端，印表在背景執行（避免前端等待印表完成才解鎖）
     res.json({ status: '列印請求已送出' });
+
+    // 年菜單據與一般列印分開：讀取貨時間、產生 PDF 都在佇列外做（讀資料庫慢也不會卡住廚房單／顧客單），只有送印才排隊
+    if (printMode === 'nianfai-customer' || printMode === 'nianfai-stub') {
+        (async () => {
+            try {
+                data.pickupHours = await nianfaiPickupHoursFor(data.year, data.pickupDate).catch(() => '');
+                const isCustomer = printMode === 'nianfai-customer';
+                const f = path.join(os.tmpdir(), `${isCustomer ? 'nianfai_customer' : 'nianfai_stub'}_${Date.now()}.pdf`);
+                const h = await (isCustomer ? buildNianfaiConfirmPDF : buildNianfaiStubPDF)(data, f);
+                await withPrinterQueue(() => printPDF(f, h, 1));
+                console.log(isCustomer ? '年菜顧客聯已送出' : '年菜存根聯已送出');
+            } catch (e) {
+                console.error('🔴 年菜列印錯誤：', e);
+            }
+        })();
+        return;
+    }
 
     // 背景非同步執行印表與開錢櫃；排入印表機佇列，避免與其他桌的列印/開錢櫃請求搶連線
     withPrinterQueue(async () => {
@@ -1600,22 +1630,7 @@ app.post('/print', printRateLimit, async (req, res) => {
                 console.log('顧客聯已送出（1份）');
             }
 
-            // 年菜：確認訂購印存根聯（客人填資料），結帳印顧客聯（給客人），兩個時機分開印、內容不同
-            if (printMode === 'nianfai-customer' || printMode === 'nianfai-stub') {
-                data.pickupHours = await nianfaiPickupHoursFor(data.year, data.pickupDate).catch(() => '');
-            }
-            if (printMode === 'nianfai-customer') {
-                const fc = path.join(os.tmpdir(), `nianfai_customer_${Date.now()}.pdf`);
-                const hc = await buildNianfaiConfirmPDF(data, fc);
-                await printPDF(fc, hc, 1);
-                console.log('年菜顧客聯已送出');
-            }
-            if (printMode === 'nianfai-stub') {
-                const fs2 = path.join(os.tmpdir(), `nianfai_stub_${Date.now()}.pdf`);
-                const hs = await buildNianfaiStubPDF(data, fs2);
-                await printPDF(fs2, hs, 1);
-                console.log('年菜存根聯已送出');
-            }
+            // 年菜單據（nianfai-customer／nianfai-stub）在上面另外處理，不進這段
         } catch (e) {
             console.error('🔴 列印錯誤：', e);
         }
