@@ -1351,9 +1351,12 @@ function nfRenderSlip(drawFn, filePath) {
 }
 
 // 排版工具：整張單只用一個字型家族（蘋方 TC Medium／Semibold），同一行的中文與數字基線一致、不會上下錯開
-function nfSlipParts(doc) {
+// opts.bold = false：整張都用一般字重（測試粗體 vs 不粗體的列印效果；預覽時傳 slipBold: false）
+function nfSlipParts(doc, opts = {}) {
     const X = NF_M, W = NF_W;
-    const draw = (t, x, y, size, { bold = false, width, align } = {}) => {
+    const useBold = opts.bold !== false;
+    const draw = (t, x, y, size, { bold: b = false, width, align } = {}) => {
+        const bold = b && useBold;
         const stroke = bold && !NF_PINGFANG; // 沒有蘋方才用描邊加粗
         doc.font(bold ? 'NfBold' : 'NfReg').fontSize(size).fillColor('black').strokeColor('black').lineWidth(stroke ? 0.35 : 0);
         doc.text(String(t), x, y, { lineBreak: false, width, align, fill: true, stroke });
@@ -1374,7 +1377,7 @@ function nfSlipParts(doc) {
         const cand = (cuts.length ? cuts : [...Array(t.length - 1).keys()].map(i => i + 1))
             .map(i => [t.slice(0, i), t.slice(i)])
             // 句尾標點（，、。；）可以稍微超出（全形標點右半邊是空白），標點才不會被擠到下一行開頭
-            .filter(([a, b]) => wOf(a, size) - ('，、。；'.includes(a.slice(-1)) ? size * 0.5 : 0) <= width && wOf(b, size) <= width)
+            .filter(([a, b]) => wOf(a, size) - ('，、。；'.includes(a.slice(-1)) ? size * 0.75 : 0) <= width && wOf(b, size) <= width)
             .sort((p, q) => Math.abs(wOf(p[0], size) - wOf(p[1], size)) - Math.abs(wOf(q[0], size) - wOf(q[1], size)));
         if (cand.length) return cand[0];
         const mid = Math.ceil(t.length / 2);
@@ -1433,7 +1436,7 @@ function nfSlipParts(doc) {
 
 // 抬頭到總計（兩聯共用）
 function nfSlipOrderPart(doc, data, withLogo, paid) {
-    const P = nfSlipParts(doc);
+    const P = nfSlipParts(doc, { bold: data.slipBold !== false });
     const { X, W } = P;
     let y = NF_M;
     if (withLogo && NF_LOGO) {
