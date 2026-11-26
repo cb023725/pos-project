@@ -423,11 +423,11 @@ const InvoiceManagementPage = () => {
                             <>
                                 {voidModal.nianfai.status === 'sent' ? (
                                     <p className="text-red-600 font-bold bg-red-50 rounded-xl p-3 my-3">
-                                        此單已送出表單，請同時到表單回應用「年菜工具 → 取消訂單」處理
+                                        此單已送出表單，請同時到 Sheet「表單回應」找到「現結＋訂購編號」那一列，清除整列內容來取消訂單。
                                     </p>
                                 ) : voidModal.nianfai.status === 'unknown' ? (
                                     <p className="text-orange-600 font-bold bg-orange-50 rounded-xl p-3 my-3">
-                                        無法確認此年菜單是否已送出表單；如已送出，請同時到表單回應用「年菜工具 → 取消訂單」處理
+                                        無法確認此年菜單是否已送出表單；如已送出，請同時到 Sheet「表單回應」找到「現結＋訂購編號」那一列，清除整列內容來取消訂單。
                                     </p>
                                 ) : (
                                     <p className="text-gray-600 my-3">此年菜單尚未送出表單，作廢後請重新點單。</p>
