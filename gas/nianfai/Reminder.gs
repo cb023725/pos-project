@@ -113,11 +113,11 @@ function nfDeliveryReminderTick() {
  * 自動取貨提醒（每天 08:00 由 nfDailyPickupReminder 呼叫）：小卡沒問題才寄；
  * 有問題而且明天有人要取貨 → 不寄，改寄信告訴店家原因。回傳寄送結果或 { skipped: 原因 }
  */
-function nfAutoPickupReminder_() {
+function nfAutoPickupReminder_(dateIso) { // dateIso：只限 dev 測試指定「明天」，正式排程不傳
   var settings = nfReadSettings_();
   var problem = nfHeatingCardProblem_(settings);
   if (problem) {
-    var plan = nfMailPlan_('pickupReminder', null, null);
+    var plan = nfMailPlan_('pickupReminder', dateIso || null, null);
     var waiting = plan.list.filter(function (x) { return !x.reason; });
     if (waiting.length) {
       MailApp.sendEmail({
@@ -130,5 +130,5 @@ function nfAutoPickupReminder_() {
     }
     return { skipped: problem, waiting: waiting.length };
   }
-  return nfMailSend_('pickupReminder', null, null, { retry: true, auto: true });
+  return nfMailSend_('pickupReminder', null, dateIso || null, { retry: true, auto: true });
 }

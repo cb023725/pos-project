@@ -115,3 +115,19 @@ function nfTestSetKv_(key, value) {
   nfSetKv_(key, value);
   return true;
 }
+
+/** 只限 dev：在年度資料夾建立一張「測試用加熱說明小卡」圖片並填入「設定」的加熱說明小卡ID（測自動取貨提醒附件用） */
+function nfTestCreateCard_(base64) {
+  nfTestGuard_();
+  var blob = Utilities.newBlob(Utilities.base64Decode(base64), 'image/png', '測試用加熱說明小卡.png');
+  var file = DriveApp.getFolderById(NF_CTX.meta.folderId).createFile(blob);
+  nfSetKv_('加熱說明小卡ID', file.getId());
+  return { id: file.getId(), name: file.getName() };
+}
+
+/** 只限 dev：立刻執行一次「08:00 自動取貨提醒」，dateIso＝當作明天的取貨日（測正式上線後的自動寄送／不寄提醒） */
+function nfTestAutoPickup_(dateIso) {
+  nfTestGuard_();
+  if (!NF_CTX.meta.live) throw new Error('正式上線後才會自動寄');
+  return nfAutoPickupReminder_(dateIso);
+}

@@ -119,6 +119,12 @@ function doPost(e) {
         nfSaveMeta_(NF_CTX.env, NF_CTX.year, NF_CTX.meta);
         nfForm_().setAcceptingResponses(true);
         return nfJson_({ ok: true });
+      case 'testAutoPickup':
+        return nfJson_({ ok: true, result: nfTestAutoPickup_(body.date) });
+      case 'testCreateCard':
+        return nfJson_({ ok: true, result: nfTestCreateCard_(body.base64) });
+      case 'devArchiveYear':
+        return nfJson_({ ok: true, result: nfDevArchiveYear_() });
       case 'setAccepting':
         nfForm_().setAcceptingResponses(!!body.accepting);
         return nfJson_({ ok: true, formAccepting: nfForm_().isAcceptingResponses() });
@@ -274,4 +280,29 @@ function nfClearAllResponses_() {
   var props = nfProps_();
   Object.keys(props.getProperties()).forEach(function (k) { if (k.indexOf(prefix) === 0) props.deleteProperty(k); });
   return { cleared: Math.max(last - 1, 0) };
+}
+
+/**
+ * 只限 dev：把目前年度的測試試算表與表單「解除連結」，方便從零重新模擬建立年度。
+ * 檔案不刪：改名加上「舊」、表單關閉、移除綁在這兩個檔案上的觸發；年度設定搬到 ARCHIVED_ 開頭的屬性備查。
+ */
+function nfDevArchiveYear_() {
+  if (NF_CTX.env !== 'dev') throw new Error('只有測試環境可以解除連結');
+  var ss = nfSpreadsheet_(), form = nfForm_();
+  var stamp = nfFormatTimestamp_(new Date()).replace(/[\/: ]/g, '').slice(0, 12);
+  form.setAcceptingResponses(false);
+  var ids = [ss.getId(), form.getId()];
+  var removed = 0;
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    var src = t.getTriggerSourceId && t.getTriggerSourceId();
+    if (src && ids.indexOf(src) >= 0) { ScriptApp.deleteTrigger(t); removed++; }
+  });
+  ss.rename(ss.getName() + '（舊 ' + stamp + '）');
+  form.setTitle(form.getTitle() + '（舊 ' + stamp + '）');
+  var key = nfYearKey_(NF_CTX.env, NF_CTX.year);
+  var props = nfProps_();
+  props.setProperty('ARCHIVED_' + NF_CTX.env + ':' + NF_CTX.year + ':' + stamp, props.getProperty(key));
+  props.deleteProperty(key);
+  props.deleteProperty('PRESHIP_AUTO_' + NF_CTX.env + ':' + NF_CTX.year);
+  return { archived: ss.getName(), removedTriggers: removed };
 }

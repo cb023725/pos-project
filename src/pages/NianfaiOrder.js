@@ -47,6 +47,7 @@ const NianfaiOrderPage = () => {
     const { dialog, showAlert, showConfirm } = useDialog();
     const { year, status } = useNianfaiSeason();
     const [items, setItems] = useState([]);
+    const [itemsLoaded, setItemsLoaded] = useState(false);
     const [qty, setQty] = useState({});
     // 點餐順序：從卡片點進來時記一個遞增序號，購物車照序號由新到舊排列（最新點的在最上面）
     const [addSeq, setAddSeq] = useState({});
@@ -70,7 +71,7 @@ const NianfaiOrderPage = () => {
 
     const loadItems = useCallback(() => {
         if (!year) return;
-        getNianfaiItems(year).then(list => setItems(sortForCards(list))).catch(() => setItems([]));
+        getNianfaiItems(year).then(list => setItems(sortForCards(list))).catch(() => setItems([])).finally(() => setItemsLoaded(true));
     }, [year]);
 
     useEffect(() => {
@@ -474,7 +475,7 @@ const NianfaiOrderPage = () => {
                                     </div>
                                 );
                             })}
-                            {items.length === 0 && <p className="col-span-full text-gray-400 text-center py-10">目前沒有年菜品項，請先到菜單管理設定</p>}
+                            {items.length === 0 && <p className="col-span-full text-gray-400 text-center py-10">{itemsLoaded ? '目前沒有年菜品項，請先到菜單管理設定' : '讀取年菜品項中...'}</p>}
                         </div>
                     </div>
                 </div>

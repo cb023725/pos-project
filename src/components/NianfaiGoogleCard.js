@@ -95,7 +95,7 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
     const handleGoLive = () => run('golive', async () => {
         if (!await showConfirm(`${year} 年菜測試完畢，正式上線`, {
             title: '正式上線', icon: 'danger', confirmText: '清空並上線', danger: true,
-            note: '會清空：Google 表單所有回覆、試算表表單回應與修改紀錄、WebPOS 這個年度的年菜單與發票，流水號從 ' + (year % 100) + '001 重新開始。每個年度只能做一次，無法復原。',
+            note: '會清空：Google 表單所有回覆、試算表表單回應與修改紀錄、WebPOS 這個年度的年菜單與發票，訂購編號流水號從 001 重新開始。每個年度只能做一次，無法復原。',
         })) return;
         const r = await goLiveNianfai(year);
         await showAlert(`已清空 ${r.sheetCleared} 筆表單回應、${r.clearedOrders} 張 WebPOS 年菜單\n正式客人從表單回應第 2 列開始`, { title: '已正式上線', icon: 'success' });

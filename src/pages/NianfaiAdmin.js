@@ -74,7 +74,9 @@ const NianfaiAdminPage = () => {
     const handleInitNewYear = async () => {
         const newYear = parseInt(newYearInput, 10);
         if (!newYear) { await showAlert('請輸入有效的年度', { title: '年度錯誤', icon: 'warning' }); return; }
-        if (!await showConfirm(activeYear ? `複製 ${activeYear} 年菜 ${items.length} 個品項` : '目前沒有上一年度可複製', { title: `建立 ${newYear} 年菜`, icon: 'info', note: '去年資料不會變動', confirmText: '建立' })) return;
+        // 第一次使用（沒有目前年度）：不複製，直接用菜單裡已經有的該年度品項（正式環境部署時用 SQL 建好的 2027 品項）
+        const existing = activeYear ? [] : (await getMenuItems()).filter(i => i.category === '年菜' && i.nianfaiYear === newYear);
+        if (!await showConfirm(activeYear ? `複製 ${activeYear} 年菜 ${items.length} 個品項` : existing.length ? `使用菜單裡已有的 ${existing.length} 個 ${newYear} 年菜品項` : `菜單裡還沒有 ${newYear} 年菜品項，建立後請到菜單管理新增`, { title: `建立 ${newYear} 年菜`, icon: 'info', note: activeYear ? '去年資料不會變動' : undefined, confirmText: '建立' })) return;
         setIsInitializing(true);
         try {
             const lastYearItems = items; // 已經是「年菜」分類＋目前年度的品項
@@ -111,7 +113,7 @@ const NianfaiAdminPage = () => {
             await saveSettingValue('nianfai_active_year', String(newYear));
             await saveSettingValue(`nianfai_${newYear}_status`, 'preparing');
             await saveSettingValue(`nianfai_${newYear}_next_seq`, '1');
-            await showAlert(`已複製 ${lastYearItems.length} 個品項\n請設定取貨與寄出日期、到菜單管理確認品項後再開賣`, { title: `${newYear} 年菜已建立`, icon: 'success' });
+            await showAlert(`${activeYear ? `已複製 ${lastYearItems.length} 個品項` : `共 ${existing.length} 個品項`}\n請設定取貨與寄出日期、到菜單管理確認品項後再開賣`, { title: `${newYear} 年菜已建立`, icon: 'success' });
             await load();
         } catch (e) {
             await showAlert(e.message, { title: '建立失敗', icon: 'warning' });

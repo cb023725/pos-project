@@ -133,6 +133,10 @@ const DetailsModal = ({ order, pickupDates, onClose, onDone, showAlert }) => {
                 <p className="text-sm text-gray-500 mb-2">結帳 {fmtTime(order.checkoutTime)}</p>
                 <div className="bg-gray-50 rounded-xl p-3 mb-4 text-sm text-gray-700">
                     <ItemList items={order.items} showPrice />
+                    {(() => { // 宅配未滿免運門檻：總額含運費，把運費列出來，金額才對得上
+                        const fee = (order.total || 0) - (order.items || []).reduce((s, it) => s + (it.price || 0) * (it.quantity || 1), 0);
+                        return fee > 0 ? <div className="flex justify-between mt-1"><span>運費</span><span>{fmtMoney(fee)}</span></div> : null;
+                    })()}
                     <div className="flex justify-between border-t border-gray-200 mt-2 pt-2 font-black text-gray-800">
                         <span>總額</span><span>{fmtMoney(order.total)}</span>
                     </div>

@@ -3056,6 +3056,13 @@ app.post('/api/nianfai/gas/go-live', nianfaiGasRoute(async (year) => {
     return { ok: true, sheetCleared: g.result?.cleared || 0, liveAt: g.result?.liveAt, ...cleared };
 }));
 
+// 只限 dev：解除目前年度測試試算表與表單的連結（檔案保留、改名加「舊」），用來從零重新模擬建立年度
+app.post('/api/nianfai/gas/dev-archive-year', nianfaiGasRoute(async (year) => {
+    if (!IS_DEV) throw new Error('只有測試環境可以解除連結');
+    const r = await callNianfaiGas('devArchiveYear', { year }, { timeoutMs: 120000 });
+    return { ok: true, result: r.result };
+}));
+
 // 只限 dev：回到測試中，方便重複測試正式上線流程
 app.post('/api/nianfai/gas/back-to-testing', nianfaiGasRoute(async (year) => {
     if (!IS_DEV) throw new Error('只有測試環境可以回到測試');
