@@ -1298,13 +1298,13 @@ const NF_LOGO = (() => { try { return fs.readFileSync(path.join(__dirname, 'asse
 // 字級（Yw 2026-11-26：再大兩級）
 const NF_SZ = { label: 10.5, item: 10.5, sub: 9, section: 11, total: 13, small: 9 };
 const NF_M = 3;                     // 出血邊（左右、上方）
-// 字型：蘋方 TC 的 Medium（一般）＋ Semibold（粗體），同一家族、基線一致；用真正的粗體字重，不用描邊加粗（熱感紙上描邊會糊）
+// 字型：蘋方 TC 的 Regular（一般）＋ Semibold（粗體，預設不用），同一家族、基線一致；用真正的粗體字重，不用描邊加粗（熱感紙上描邊會糊）
 // 讀不到蘋方時退回微軟正黑體＋描邊加粗
 const NF_FONT_FILE = '/System/Library/Fonts/PingFang.ttc';
 const NF_PINGFANG = (() => { try { fs.accessSync(NF_FONT_FILE); return true; } catch { return false; } })();
 function nfFonts(doc) {
     if (NF_PINGFANG) {
-        doc.registerFont('NfReg', NF_FONT_FILE, 'PingFangTC-Medium');
+        doc.registerFont('NfReg', NF_FONT_FILE, 'PingFangTC-Regular'); // Yw：Medium 偏粗，改 Regular
         doc.registerFont('NfBold', NF_FONT_FILE, 'PingFangTC-Semibold');
     } else {
         doc.registerFont('NfReg', FONT_REG);
@@ -1399,8 +1399,7 @@ function nfSlipParts(doc, opts = {}) {
         return y + lines.length * (sz + 3) + 3;
     };
     // 手寫格：標籤＋底線（加高），可加「□同上」，地址可多行
-    const blank = (label, y, { same = false, lines = 1 } = {}) => {
-        const H = 25;
+    const blank = (label, y, { same = false, lines = 1, H = 25 } = {}) => {
         const lw = wOf(label, NF_SZ.label);
         const sameW = same ? 26 : 0;
         for (let i = 0; i < lines; i++) {
@@ -1416,6 +1415,8 @@ function nfSlipParts(doc, opts = {}) {
         return y + H * lines + 2;
     };
     // 區塊：分隔線上下都留空隙
+    // 小標（手寫區分組：訂購人／收件人）
+    const sub = (title, y) => { draw(title, X, y + 4, NF_SZ.small); return y + NF_SZ.small + 4; };
     const section = (title, y) => { y += 3; line(y, 0.9); y += 7; draw(title, X, y, NF_SZ.section, { bold: true }); return y + NF_SZ.section + 6; };
     // 條列（・）：每點只在標點斷行、兩行長度接近，第二行對齊文字開頭
     const bullets = (items, y) => {
@@ -1431,7 +1432,7 @@ function nfSlipParts(doc, opts = {}) {
         }
         return y;
     };
-    return { X, W, draw, wOf, line, fitSize, balance, field, blank, section, bullets };
+    return { X, W, draw, wOf, line, fitSize, balance, field, blank, sub, section, bullets };
 }
 
 // 抬頭到總計（兩聯共用）
@@ -1515,17 +1516,23 @@ function buildNianfaiStubPDF(data, filePath) {
     return nfRenderSlip((doc) => {
         let { y, P } = nfSlipOrderPart(doc, data, false, false);
         if (data.deliveryMethod === 'delivery') {
+            // 手寫區：標籤只寫「姓名」「電話」「地址」，書寫線拉長、每列加高，好寫
+            const H = 34;
             y = P.section('宅配資訊', y);
-            y = P.blank('訂購人姓名：', y);
-            y = P.blank('訂購人電話：', y);
-            y = P.blank('收件人姓名：', y);
-            y = P.blank('收件人電話：', y);
-            y = P.blank('宅配地址：', y, { lines: 2 });
+            y = P.sub('訂購人', y);
+            y = P.blank('姓名：', y, { H });
+            y = P.blank('電話：', y, { H });
+            y += 6;
+            y = P.sub('收件人', y);
+            y = P.blank('姓名：', y, { H });
+            y = P.blank('電話：', y, { H });
+            y = P.blank('地址：', y, { H, lines: 3 });
         } else {
+            const H = 34;
             y = P.section('取貨資訊', y);
-            y = P.blank('訂購人姓名：', y);
-            y = P.blank('訂購人電話：', y);
-            y += 3;
+            y = P.blank('姓名：', y, { H });
+            y = P.blank('電話：', y, { H });
+            y += 6;
             y = P.field('取貨日期：', nfDateWeek(data.pickupDate), y);
             y = P.field('取貨時間：', data.pickupHours || '', y);
         }
