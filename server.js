@@ -1296,7 +1296,7 @@ function buildCustomerReceiptPDF(data, filePath) {
 const NF_STORE = { phone: '04-2471-5526', address: '台中市西區東興路三段13號1樓' };
 const NF_LOGO = (() => { try { return fs.readFileSync(path.join(__dirname, 'assets', 'nianfai-logo-print.png')); } catch { return null; } })();
 // 字級（Yw 2026-11-26：再大兩級）
-const NF_SZ = { label: 10.5, item: 10.5, sub: 9, section: 11, total: 13, small: 9, head: 9.5 }; // head：訂單編號／訂購日期／出貨方式（小一級）
+const NF_SZ = { label: 10.5, item: 9.75, sub: 9, section: 11, total: 13, small: 9, head: 9.5 }; // head：訂單編號／訂購日期／出貨方式（小一級）
 const NF_M = 3;                     // 出血邊（左右、上方）
 // 字型：蘋方 TC 的 Regular（一般）＋ Semibold（粗體，預設不用），同一家族、基線一致；用真正的粗體字重，不用描邊加粗（熱感紙上描邊會糊）
 // 讀不到蘋方時退回微軟正黑體＋描邊加粗
@@ -1366,9 +1366,10 @@ function nfSlipParts(doc, opts = {}) {
     const wt = { ...NF_DEFAULT_WEIGHTS, ...(opts.weights || {}) };
     const REG = 'Nf_' + (NF_WEIGHTS[wt.reg] ? wt.reg : 'light');
     const BOLD = 'Nf_' + (NF_WEIGHTS[wt.bold] ? wt.bold : 'medium');
-    const draw = (t, x, y, size, { bold = false, width, align } = {}) => {
+    // weight：指定字重（light／regular／medium／semibold），蓋過一般／粗體
+    const draw = (t, x, y, size, { bold = false, width, align, weight } = {}) => {
         const stroke = bold && !NF_PINGFANG; // 沒有蘋方才用描邊加粗
-        doc.font(bold ? BOLD : REG).fontSize(size).fillColor('black').strokeColor('black').lineWidth(stroke ? 0.35 : 0);
+        doc.font(weight && NF_WEIGHTS[weight] ? 'Nf_' + weight : bold ? BOLD : REG).fontSize(size).fillColor('black').strokeColor('black').lineWidth(stroke ? 0.35 : 0);
         doc.text(String(t), x, y, { lineBreak: false, width, align, fill: true, stroke });
     };
     // 量寬度一律用最粗的字重量（比較寬），一般字和粗體都放得下
@@ -1461,8 +1462,9 @@ function nfSlipOrderPart(doc, data, withLogo, paid) {
         doc.image(NF_LOGO, X, y, { width: W });
         y += W * 145 / 768 + 4;
         const contact = `${NF_STORE.phone}｜${NF_STORE.address}`;
-        const csz = P.fitSize(contact, NF_SZ.small, 5.5);
-        P.draw(contact, X, y, csz, { width: W, align: 'center' });
+        // 店家電話＋地址：Medium、一行放完（不換行）
+        const csz = P.fitSize(contact, NF_SZ.small, 5);
+        P.draw(contact, X, y, csz, { width: W, align: 'center', weight: 'medium' });
         y += csz + 6;
         P.line(y, 0.9); y += 8;
     }
@@ -1485,9 +1487,9 @@ function nfSlipOrderPart(doc, data, withLogo, paid) {
     const money = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
     const rows = (data.items || []).map(it => ({ ...it, qty: it.quantity || it.qty || 1 }));
     for (const r of rows) {
-        // 品名：先縮小（最多到 9pt）放進品名欄，真的放不下才換行，不會壓到數量欄
-        const nsz = P.fitSize(r.name || '', NF_SZ.item, 9, NW - 3);
-        const nameLines = P.wOf(r.name || '', nsz) <= NW - 3 ? [r.name || ''] : P.balance(r.name || '', NF_SZ.item, NW - 3);
+        // 品名：所有品名同一字級（NF_SZ.item）；超過 7 個字的新品名才縮小（最多到 9pt），再放不下才換行，不會壓到數量欄
+        const nsz = P.fitSize(r.name || '', NF_SZ.item, 9, NW - 1);
+        const nameLines = P.wOf(r.name || '', nsz) <= NW - 1 ? [r.name || ''] : P.balance(r.name || '', NF_SZ.item, NW - 1);
         const lsz = nameLines.length === 1 ? nsz : NF_SZ.item;
         nameLines.forEach((l, i) => P.draw(l, X, y + i * (NF_SZ.item + 2) + (NF_SZ.item - lsz) * 0.8, lsz, { bold: true }));
         P.draw(String(r.qty), X + NW, y, NF_SZ.item, { width: QW, align: 'center' });
@@ -1499,7 +1501,7 @@ function nfSlipOrderPart(doc, data, withLogo, paid) {
         }
         if ((r.bundleComponents || []).length) y += 2;
     }
-    y += 2; P.line(y, 0.6); y += 7;
+    y += 2; P.line(y, 0.4, true); y += 7; // 品項下方分隔線：和上方一樣用虛線
     const subtotal = data.subtotal != null ? data.subtotal : rows.reduce((s, r) => s + (r.price || 0) * r.qty, 0);
     const ship = data.shippingFee || 0;
     const total = data.total != null ? data.total : subtotal + ship;
