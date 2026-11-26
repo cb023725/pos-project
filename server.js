@@ -1305,13 +1305,13 @@ const NF_PINGFANG = (() => { try { fs.accessSync(NF_FONT_FILE); return true; } c
 // 有粗有細（Yw 2026-11-26：參考第一版，一般字要細）：一般字 Light、重點 Medium；預覽可用 slipWeights 比較其他組合
 // 可選字重／字型：蘋方 TC 四種粗細、黑體-繁（STHeiti）Light／Medium、微軟正黑體（今天第一版用的）
 const NF_WEIGHTS = {
-    light: [NF_FONT_FILE, 'PingFangTC-Light'], regular: [NF_FONT_FILE, 'PingFangTC-Regular'],
+    thin: [NF_FONT_FILE, 'PingFangTC-Thin'], light: [NF_FONT_FILE, 'PingFangTC-Light'], regular: [NF_FONT_FILE, 'PingFangTC-Regular'],
     medium: [NF_FONT_FILE, 'PingFangTC-Medium'], semibold: [NF_FONT_FILE, 'PingFangTC-Semibold'],
     heitiLight: ['/System/Library/Fonts/STHeiti Light.ttc', 'STHeitiTC-Light'],
     heitiMedium: ['/System/Library/Fonts/STHeiti Medium.ttc', 'STHeitiTC-Medium'],
     jhenghei: [null, null],
 };
-const NF_DEFAULT_WEIGHTS = { reg: 'light', bold: 'regular' }; // Yw 2026-11-26 選：一般字 Light、重點 Regular
+const NF_DEFAULT_WEIGHTS = { reg: 'thin', bold: 'light' }; // Yw 2026-11-26：再細一級（一般字 Thin、重點 Light），熱感紙上比較不糊
 function nfFonts(doc) {
     for (const [k, [file, ps]] of Object.entries(NF_WEIGHTS)) {
         try {
