@@ -1696,6 +1696,8 @@ const OrderPage = () => {
         if (categorySettings.length === 0) return CATEGORY_ORDER;
         return categorySettings
             .filter(c => isTakeout ? c.showInTakeout : c.showInDineIn)
+            // 修正單 #01 第 2 節：一般點單／外帶頁永遠不顯示「年菜」類別（就算類別設定被打開也一樣），年菜只走 /nianfai-order
+            .filter(c => c.name !== '年菜')
             .map(c => c.name);
     }, [categorySettings, isTakeout]);
 

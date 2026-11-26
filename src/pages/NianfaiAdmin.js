@@ -84,14 +84,16 @@ const NianfaiAdminPage = () => {
         try {
             const lastYearItems = items; // 已經是「年菜」分類＋目前年度的品項
             const idMap = new Map();
-            lastYearItems.forEach(it => idMap.set(it.id, `${it.id}_${newYear}`));
+            // 新 id＝去掉舊年份後綴再加新年份（nf_beef_stew_2027 → nf_beef_stew_2028），不會一年一年疊上去
+            const baseId = (id) => String(id).replace(/_\d{4}$/, '');
+            lastYearItems.forEach(it => idMap.set(it.id, `${baseId(it.id)}_${newYear}`));
             // 年節限定品項的「年菜庫存」每年各自一筆（庫存從 0 開始），平常也賣的冷凍包庫存照原樣沿用
             const inventory = await getInventoryItems();
             const stockMap = new Map(); // 去年年菜庫存 id -> 新年度年菜庫存 id
             for (const it of lastYearItems) {
                 const ref = inventory.find(inv => inv.id === it.nianfaiStockRef);
                 if (!ref || ref.category !== '年菜庫存') continue;
-                const newStockId = `nfstock_${newYear}_${idMap.get(it.id)}`;
+                const newStockId = `nfstock_${newYear}_${baseId(it.id)}`;
                 await addMenuItem({ id: newStockId, name: ref.name, category: '年菜庫存', price: null, stock: 0, consumes: [], sortOrder: ref.sortOrder, thresholds: ref.thresholds || null });
                 stockMap.set(ref.id, newStockId);
             }

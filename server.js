@@ -2688,6 +2688,8 @@ async function submitToNianfaiForm(orderId) {
     const { data: nf } = await supabase.from('nianfai_orders').select('*').eq('order_id', orderId).single();
     if (!nf || nf.form_submission_status === 'sent') return;
     if (nianfaiMissingFields(nf).length > 0) return; // 防呆：資料不完整絕不送出
+    const { data: validInv } = await supabase.from('invoices').select('id').eq('order_id', orderId).eq('status', '已開立').limit(1);
+    if (!validInv || validInv.length === 0) return; // 防呆：發票已作廢的單絕不送出
     const { data: order } = await supabase.from('orders').select('items, timestamp').eq('id', orderId).single();
     const issued = (await nianfaiIssueDates(nf.year, [nf.seq_no])).get(nf.seq_no) || nf.created_at || order?.timestamp;
     try {
@@ -2720,10 +2722,10 @@ async function submitToNianfaiForm(orderId) {
 // 每 5 分鐘補送一次。incomplete（資料待補）不在這裡，submitToNianfaiForm 內也會再擋一次。
 setInterval(async () => {
     if (!nianfaiGasConfigured()) return;
-    const { data: pendingRows } = await supabase
-        .from('nianfai_orders').select('order_id')
-        .in('form_submission_status', ['pending', 'failed']);
-    for (const row of (pendingRows || [])) {
+    // 只補送發票有效的單：送出失敗後被作廢的單不能再送進表單（客人會收到確認信）
+    const pendingRows = (await fetchValidNianfaiOrders({ statuses: ['pending', 'failed'] }).catch(() => []))
+        .map(({ nf }) => ({ order_id: nf.order_id }));
+    for (const row of pendingRows) {
         await submitToNianfaiForm(row.order_id).catch(e => console.error(`[年菜] 待傳佇列重送失敗 order_id=${row.order_id}:`, e.message));
     }
 }, 5 * 60 * 1000);
@@ -2731,12 +2733,16 @@ setInterval(async () => {
 // WebPOS 現場單需求：只算發票有效（未作廢）的訂單，套餐依 bundle_composition 展開成單品。
 // excludeSeqLabels：已經送進表單的流水號（這些從 Sheet 算，不再從 WebPOS 算，避免重複）
 // ordered（選填）：各品項被點的原始份數（套餐不拆），給年菜庫存的套餐列顯示份數
-async function computeWebposNianfaiDemand(year, excludeSeqLabels = new Set(), ordered = null) {
-    const { data: nfOrders } = await supabase.from('nianfai_orders').select('order_id, seq_no, created_at').eq('year', year);
+// sentBefore（選填，毫秒）：在這個時間以前就送出成功的單也排除（Sheet 快照裡已經有它）。
+// 只靠流水號字串比對的話，訂購編號格式改過（例如舊單 27001 → 新格式 27261125001）就會對不上而重複計算。
+async function computeWebposNianfaiDemand(year, excludeSeqLabels = new Set(), ordered = null, sentBefore = null) {
+    const { data: nfOrders } = await supabase.from('nianfai_orders').select('order_id, seq_no, created_at, form_submission_status, submitted_at').eq('year', year);
     const demand = {};
     const issued = await nianfaiIssueDates(year);
     const seqByOrder = new Map((nfOrders || []).map(o => [o.order_id, nianfaiOrderNo(year, o.seq_no, issued.get(o.seq_no) || o.created_at)]));
-    const orderIds = (nfOrders || []).map(o => o.order_id).filter(id => !excludeSeqLabels.has(seqByOrder.get(id)));
+    const inSheet = (o) => excludeSeqLabels.has(seqByOrder.get(o.order_id))
+        || (sentBefore != null && o.form_submission_status === 'sent' && o.submitted_at && new Date(o.submitted_at).getTime() < sentBefore);
+    const orderIds = (nfOrders || []).filter(o => !inSheet(o)).map(o => o.order_id);
     if (orderIds.length === 0) return demand;
 
     const { data: invoices } = await supabase.from('invoices').select('order_id').in('order_id', orderIds).eq('status', '已開立');
@@ -2770,8 +2776,9 @@ const nianfaiDemandInflight = new Map(); // year -> Promise（同時只更新一
 function refreshNianfaiDemand(year) {
     if (nianfaiDemandInflight.has(year)) return nianfaiDemandInflight.get(year);
     const p = (async () => {
+        const startedAt = Date.now(); // 這個時間以前送出成功的現場單，一定已經在這份 Sheet 快照裡
         const sheet = await callNianfaiGas('demand', { year }, { method: 'GET', timeoutMs: 30000 });
-        const cached = { at: Date.now(), sheet };
+        const cached = { at: Date.now(), startedAt, sheet };
         nianfaiDemandCache.set(year, cached);
         // 表單開關以 Google 表單實際狀態為準（停售由 GAS 關閉表單）
         await supabase.from('app_settings').upsert({
@@ -2793,7 +2800,7 @@ async function computeNianfaiDemandDetail(year) {
             const sheetDemand = cached.sheet.demandById || {};
             const sent = new Set(cached.sheet.onsiteSeqs || []);
             const ordered = { ...(cached.sheet.orderedById || {}) };
-            const webpos = await computeWebposNianfaiDemand(year, sent, ordered);
+            const webpos = await computeWebposNianfaiDemand(year, sent, ordered, cached.startedAt ?? null);
             const demand = { ...sheetDemand };
             for (const [id, q] of Object.entries(webpos)) demand[id] = (demand[id] || 0) + q;
             return { demand, ordered, source: 'sheet', formAccepting: cached.sheet.formAccepting, updatedAt: cached.sheet.updatedAt };
