@@ -3,7 +3,7 @@
  *
  *   寄出前確認  宅配單；WebPOS 年菜管理頁「寄信」先預覽名單、確認後才寄
  *   出貨通知    宅配單；必須已填「出貨日」與「託運單號」，沒填的列出原因跳過
- *   寄出前確認  也可以到「宅配提醒時間」自動寄出（Reminder.gs）
+ *   寄出前確認  也可以在 Yw 指定的「寄出前確認時間」一次自動寄出（Reminder.gs）
  *   取貨提醒    自取單；每天 08:00 自動寄給「明天」取貨的客人（設定「取貨提醒開關」= 開，小卡ID 必填），
  *               寄完把名單寄給店家；失敗只重試一次。WebPOS 也可以手動預覽／補寄指定日期
  *
@@ -13,7 +13,8 @@
  *   - 沒有 email（或 email 是店家信箱）不寄
  *   - 已取消的訂單不列入
  *   - Gmail 每天可寄封數有上限（一般帳號約 100 封，含確認信）；超過的部分不寄、列出來隔天再寄
- * 寄出前確認、出貨通知、取貨提醒都附上「加熱說明小卡」（「設定」的「加熱說明小卡ID」）；自動寄送時小卡ID 必填。
+ * 出貨通知（冷凍年菜寄出通知）與取貨提醒附上「加熱說明小卡」（「設定」的「加熱說明小卡ID」）；寄出前確認不附。
+ * 自動取貨提醒時小卡ID 必填（沒填不寄、通知店家）；自動寄出前確認不需要小卡。
  */
 /** ids：只看這些訂單（Sheet 選單選取的列）；取貨提醒有指定 ids 時不限日期 */
 function nfMailPlan_(type, dateIso, ids) {
@@ -111,7 +112,7 @@ function nfMailSend_(type, ids, dateIso, opts) {
     var quota = nfMailQuota_();
     var overQuota = [];
     if (quota !== null && todo.length > quota) { overQuota = todo.slice(quota); todo = todo.slice(0, quota); }
-    var attachment = nfHeatingCard_(p.settings); // 三種後續通知都附加熱說明小卡（2026-11-27 Yw）
+    var attachment = type === 'preShip' ? null : nfHeatingCard_(p.settings); // 小卡附在出貨通知（提醒宅配別忘了放實體小卡）與取貨提醒；寄出前確認不附
     var sent = [], failed = [];
     todo.forEach(function (x) {
       var cur = nfMailState_(x.id)[type]; // 寄之前再確認一次（WebPOS 與 Sheet 選單同時寄也不會重複）
@@ -525,7 +526,7 @@ function nfDailyPickupReminder() {
   });
 }
 
-/** 確保自動提醒的觸發存在（整個專案各一個）：每天 08:00 取貨提醒、每 10 分鐘檢查宅配提醒時間 */
+/** 確保自動提醒的觸發存在（整個專案各一個）：每天 08:00 取貨提醒、每 10 分鐘檢查寄出前確認時間 */
 function nfEnsureDailyTrigger_() {
   var handlers = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
   if (handlers.indexOf('nfDailyPickupReminder') < 0) ScriptApp.newTrigger('nfDailyPickupReminder').timeBased().everyDays(1).atHour(8).nearMinute(0).inTimezone(NF.TZ).create();

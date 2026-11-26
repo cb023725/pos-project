@@ -123,8 +123,8 @@ export default function NianfaiMailCard({ year, number, gas, showAlert, showConf
     };
 
     const handleDeliveryReminder = async ({ on, at }) => {
-        if (on !== undefined && !await showConfirm(on ? '到設定的時間自動寄「寄出前確認」給所有宅配客' : '停止自動寄宅配提醒', {
-            title: on ? '開啟自動宅配提醒' : '關閉自動宅配提醒', icon: 'info', confirmText: on ? '開啟' : '關閉',
+        if (on !== undefined && !await showConfirm(on ? '到指定時間一次寄「寄出前確認」給所有宅配客' : '停止自動寄出前確認', {
+            title: on ? '開啟自動寄出前確認' : '關閉自動寄出前確認', icon: 'info', confirmText: on ? '開啟' : '關閉',
         })) return;
         setBusy('delivery');
         try { await setNianfaiDeliveryReminder(year, { on, at: at === undefined ? undefined : fromInputDt(at) }); onChanged?.(); }
@@ -155,8 +155,8 @@ export default function NianfaiMailCard({ year, number, gas, showAlert, showConf
                     <div className="p-3 space-y-2">
                         <div className="flex items-center justify-between gap-3">
                             <div className="text-sm">
-                                <span className="font-bold text-gray-800">自動宅配提醒</span>
-                                <span className="text-gray-500 ml-2">到設定時間自動寄「寄出前確認」給所有宅配客（附加熱說明小卡）</span>
+                                <span className="font-bold text-gray-800">自動寄出前確認（宅配）</span>
+                                <span className="text-gray-500 ml-2">到指定時間一次寄「寄出前確認」給所有宅配客</span>
                             </div>
                             <Switch on={rem.delivery.on} disabled={!!busy || !gas?.ok} onClick={() => handleDeliveryReminder({ on: !rem.delivery.on })} />
                         </div>
@@ -172,12 +172,11 @@ export default function NianfaiMailCard({ year, number, gas, showAlert, showConf
                             : rem.delivery.sentAt
                                 ? <p className="text-sm text-green-700 font-bold">✓ 已在 {rem.delivery.sentAt} 自動寄出（之後新增的宅配客請手動寄）</p>
                                 : <p className="text-sm text-gray-600">將在 <b>{rem.delivery.at}</b> 自動寄出（時間到後 10 分鐘內）{!rem.live && '，正式上線後才會自動寄'}</p>)}
-                        {rem.delivery.on && !rem.delivery.sentAt && rem.pickup.problem && <p className="text-sm font-bold text-red-600">⚠️ {rem.pickup.problem}：寄出前確認也要附小卡，時間到也不會寄出（會寄信通知店家）</p>}
                     </div>
                     <div className="p-3 space-y-2">
                         <div className="flex items-center justify-between gap-3">
                             <div className="text-sm">
-                                <span className="font-bold text-gray-800">自動取貨提醒</span>
+                                <span className="font-bold text-gray-800">自動取貨提醒（自取）</span>
                                 <span className="text-gray-500 ml-2">每天 08:00 寄給明天取貨的客人（附加熱說明小卡）</span>
                             </div>
                             <Switch on={rem.pickup.on} disabled={!!busy || !gas?.ok} onClick={handleReminder} />

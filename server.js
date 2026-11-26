@@ -3080,8 +3080,13 @@ app.post('/api/nianfai/gas/set-accepting', nianfaiGasRoute(async (year, req) => 
 
 // 刪除某年度所有年菜單（訂單／發票／明細）與保留流水號
 async function clearNianfaiYearOrders(year) {
+    // 只清年菜：先從 nianfai_orders 找該年度的訂單，再確認 orders.is_nianfai = true，一般營運訂單不會被選到
     const { data: nfRows } = await supabase.from('nianfai_orders').select('order_id').eq('year', year);
-    const orderIds = (nfRows || []).map(r => r.order_id);
+    const candidateIds = (nfRows || []).map(r => r.order_id);
+    const { data: nfOrders } = candidateIds.length
+        ? await supabase.from('orders').select('id').in('id', candidateIds).eq('is_nianfai', true)
+        : { data: [] };
+    const orderIds = (nfOrders || []).map(o => o.id);
     if (orderIds.length) {
         const { data: invs } = await supabase.from('invoices').select('id').in('order_id', orderIds);
         const invIds = (invs || []).map(i => i.id);

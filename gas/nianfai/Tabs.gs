@@ -15,7 +15,7 @@ var NF_OLD_SHEETS = ['訂單整理', '供需庫存'];
 function nfBuildTabs_(settings, opts) {
   opts = opts || {};
   var ss = nfSpreadsheet_();
-  nfEnsureKv_(['寄出日', '加熱說明小卡ID', '地圖連結', '宅配提醒開關', '宅配提醒時間']);
+  nfEnsureKv_(['寄出日', '加熱說明小卡ID', '地圖連結', '寄出前確認開關', '寄出前確認時間']);
   settings = nfReadSettings_();
   var synced = nfSyncOrderSheets_({ rebuild: true, reset: !!opts.reset });
   var defs = { delivery: nfOrderCols_('delivery', settings), pickup: nfOrderCols_('pickup', settings) };

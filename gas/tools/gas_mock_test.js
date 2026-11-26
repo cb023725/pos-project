@@ -307,13 +307,13 @@ run('自動取貨提醒：填了小卡ID → 寄出（附小卡）', () => {
   if (!r.sent || !r.sent.length || !m || m.attachments !== 1) throw new Error(JSON.stringify({ r, m }));
   return { sent: r.sent.map(x => x.name), attachments: m.attachments };
 });
-run('自動宅配提醒：沒填時間 → 不寄；格式不對 → 擋下', () => {
+run('自動寄出前確認：沒填時間 → 不寄；格式不對 → 擋下', () => {
   const st = ctx.nfSetDeliveryReminder_(true, ''); ctx._mails = []; ctx.nfDeliveryReminderTick();
   let bad = 'NO ERROR (bad)'; try { ctx.nfSetDeliveryReminder_(true, '1/20 8點'); } catch (e) { bad = 'error: ' + e.message; }
   if (!st.delivery.problem || ctx._mails.length || !bad.startsWith('error')) throw new Error(JSON.stringify({ st, mails: ctx._mails.length, bad }));
   return { problem: st.delivery.problem, bad };
 });
-run('自動宅配提醒：時間還沒到不寄；到了寄給全部宅配客，之後不重寄', () => {
+run('自動寄出前確認：時間還沒到不寄；到了寄給全部宅配客，之後不重寄', () => {
   const d = sheetObj('宅配').find(x => x['訂購人'] === '宅配客'); ctx.nfSetMailState_(d['訂單編號'], 'preShip', '失敗：測試');
   const fmt = (ms) => ctx.nfFormatReminderAt_(new ctx._Date(ms));
   ctx.nfSetDeliveryReminder_(true, fmt(Date.now() + 86400000)); ctx._mails = []; ctx._quiet = true; ctx.nfDeliveryReminderTick();
@@ -326,15 +326,19 @@ run('自動宅配提醒：時間還沒到不寄；到了寄給全部宅配客，
   if (early !== 0 || sent < 1 || again !== 0 || !st2.delivery.sentAt) throw new Error(JSON.stringify({ early, sent, again, st1, st2 }));
   return { early, sent, storeReport: report, again, sentAt: st2.delivery.sentAt };
 });
-run('自動宅配提醒：小卡有問題 → 不寄、通知店家一次；小卡改好 → 寄出', () => {
+run('小卡：寄出前確認不附也不需要（沒填照寄）；出貨通知、取貨提醒有附', () => {
   const d = sheetObj('宅配').find(x => x['訂購人'] === '宅配客'); ctx.nfSetMailState_(d['訂單編號'], 'preShip', '失敗：測試');
+  ctx.nfProps_().deleteProperty('PRESHIP_AUTO_dev:2027');
   ctx.nfSetKv_('加熱說明小卡ID', ''); ctx.nfSetDeliveryReminder_(true, ctx.nfFormatReminderAt_(new ctx._Date(Date.now() - 120000)));
-  ctx._mails = []; ctx._quiet = true; ctx.nfDeliveryReminderTick(); ctx.nfDeliveryReminderTick();
-  const warns = ctx._mails.filter(m => m.subject && m.subject.includes('寄出前確認沒有寄出')).length; const cust1 = ctx._mails.filter(m => m.html).length;
-  ctx.nfSetKv_('加熱說明小卡ID', 'card123'); ctx._mails = []; ctx.nfDeliveryReminderTick(); ctx._quiet = false;
-  const m = ctx._mails.find(x => x.html);
-  if (warns !== 1 || cust1 !== 0 || !m || m.attachments !== 1) throw new Error(JSON.stringify({ warns, cust1, m: m && m.subject }));
-  return { storeWarnings: warns, sentAfterFix: m.subject, attachments: m.attachments };
+  ctx._mails = []; ctx._quiet = true; ctx.nfDeliveryReminderTick();
+  const pre = ctx._mails.find(m => m.html && /寄出前確認/.test(m.subject));
+  ctx.nfSetKv_('加熱說明小卡ID', 'card123'); const st = ctx.nfReadSettings_();
+  const row = ctx.nfReadOrderSheets_(ss(), st).rows.delivery.find(r => r.name === '宅配客');
+  ctx._mails = []; ctx.nfSetMailState_(row.id, 'shipped', '失敗：測試'); ctx.nfMailSend_('shipped', [row.id]);
+  const shipped = ctx._mails.find(m => m.html); ctx._quiet = false;
+  const r = { preShipSentWithoutCard: !!pre, preShipAttachments: pre && pre.attachments, shippedSubject: shipped && shipped.subject, shippedAttachments: shipped && shipped.attachments };
+  if (!pre || pre.attachments !== 0 || !shipped || shipped.attachments !== 1 || shipped.subject !== '冷凍年菜寄出通知') throw new Error(JSON.stringify(r));
+  return r;
 });
 run('取貨時段：最後一天 16:00 紅字；非最後一天不紅、確認信不出現「除夕前一天」', () => {
   const st = ctx.nfReadSettings_(); const last = st.pickupDates[st.pickupDates.length - 1]; const first = st.pickupDates[0];

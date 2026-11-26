@@ -23,7 +23,7 @@
  *   backToTesting     只限 dev：把年度改回測試中，方便重複測試正式上線流程
  *   setAccepting      開關表單（WebPOS 開賣／收單時呼叫）
  *   setReminder       自動取貨提醒開關
- *   setDeliveryReminder 自動宅配提醒（寄出前確認）開關與時間
+ *   setDeliveryReminder 自動寄出前確認（宅配）開關與時間
  *   submitOrder       WebPOS 現場單送進表單（WebposSubmit.gs）
  *   ping              連線測試
  * doGet action（一個專案只能有一個 doGet，用參數區分）：
