@@ -1296,7 +1296,7 @@ function buildCustomerReceiptPDF(data, filePath) {
 const NF_STORE = { phone: '04-2471-5526', address: '台中市西區東興路三段13號1樓' };
 const NF_LOGO = (() => { try { return fs.readFileSync(path.join(__dirname, 'assets', 'nianfai-logo-print.png')); } catch { return null; } })();
 // 字級（Yw 2026-11-26：再大兩級）
-const NF_SZ = { label: 10.5, item: 10.5, sub: 9, section: 11, total: 13, small: 9 };
+const NF_SZ = { label: 10.5, item: 10.5, sub: 9, section: 11, total: 13, small: 9, head: 9.5 }; // head：訂單編號／訂購日期／出貨方式（小一級）
 const NF_M = 3;                     // 出血邊（左右、上方）
 // 字型：蘋方 TC 的 Regular（一般）＋ Semibold（粗體，預設不用），同一家族、基線一致；用真正的粗體字重，不用描邊加粗（熱感紙上描邊會糊）
 // 讀不到蘋方時退回微軟正黑體＋描邊加粗
@@ -1394,9 +1394,16 @@ function nfSlipParts(doc, opts = {}) {
         return [t.slice(0, mid), ...balance(t.slice(mid), size, width)];
     };
     // 標籤：內容（同字型、同字級、同一條基線），內容描邊加粗；放不下先縮小再平均換行
-    const field = (label, value, y) => {
+    // size：字級；oneLine：內容一律放在同一行（放不下就縮小字）
+    const field = (label, value, y, { size = NF_SZ.label, oneLine = false } = {}) => {
         const v = String(value || '');
-        const lw = wOf(label, NF_SZ.label);
+        const lw = wOf(label, size);
+        if (oneLine) {
+            const osz = fitSize(v, size, 6, W - lw);
+            draw(label, X, y + (size - osz) * 0.8, size);
+            draw(v, X + lw, y + (size - osz) * 0.8, osz, { bold: true });
+            return y + size + 4;
+        }
         draw(label, X, y, NF_SZ.label);
         const sz = fitSize(v, NF_SZ.label, NF_SZ.label - 1.5, W - lw);
         if (wOf(v, sz) > W - lw && wOf(v, NF_SZ.label) <= W) { // 同一行放不下：內容換到下一行（例如訂購日期的完整時間）
@@ -1459,13 +1466,17 @@ function nfSlipOrderPart(doc, data, withLogo, paid) {
         y += csz + 6;
         P.line(y, 0.9); y += 8;
     }
-    y = P.field('訂單編號：', data.seqLabel || '', y);
-    y = P.field('訂購日期：', nfDateTime(data.orderDate || Date.now()), y);
-    y = P.field('出貨方式：', data.deliveryMethod === 'delivery' ? '宅配' : '來店自取', y);
+    // 抬頭三欄小一級，訂購日期不換行
+    const head = { size: NF_SZ.head, oneLine: true };
+    y = P.field('訂單編號：', data.seqLabel || '', y, head);
+    y = P.field('訂購日期：', nfDateTime(data.orderDate || Date.now()), y, head);
+    y = P.field('出貨方式：', data.deliveryMethod === 'delivery' ? '宅配' : '來店自取', y, head);
+    y += 2;
 
     // 訂單明細
     y = P.section(`${data.year || ''} 年菜訂單明細`.trim(), y);
-    const QW = 22, AW = 44, NW = W - QW - AW;
+    // 欄寬：小計欄剛好放得下「$00,000」、數量欄放得下兩位數，其餘都給品名（7 個字的品名放得進一行）
+    const AW = Math.ceil(P.wOf('$00,000', NF_SZ.item)) + 2, QW = Math.ceil(P.wOf('數量', NF_SZ.small)) + 2, NW = W - QW - AW;
     P.draw('品名', X, y, NF_SZ.small);
     P.draw('數量', X + NW, y, NF_SZ.small, { width: QW, align: 'center' });
     P.draw('小計', X + NW + QW, y, NF_SZ.small, { width: AW, align: 'right' });
@@ -1474,8 +1485,11 @@ function nfSlipOrderPart(doc, data, withLogo, paid) {
     const money = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
     const rows = (data.items || []).map(it => ({ ...it, qty: it.quantity || it.qty || 1 }));
     for (const r of rows) {
-        const nameLines = P.balance(r.name || '', NF_SZ.item, NW - 2);
-        nameLines.forEach((l, i) => P.draw(l, X, y + i * (NF_SZ.item + 2), NF_SZ.item, { bold: true }));
+        // 品名：先縮小（最多到 9pt）放進品名欄，真的放不下才換行，不會壓到數量欄
+        const nsz = P.fitSize(r.name || '', NF_SZ.item, 9, NW - 3);
+        const nameLines = P.wOf(r.name || '', nsz) <= NW - 3 ? [r.name || ''] : P.balance(r.name || '', NF_SZ.item, NW - 3);
+        const lsz = nameLines.length === 1 ? nsz : NF_SZ.item;
+        nameLines.forEach((l, i) => P.draw(l, X, y + i * (NF_SZ.item + 2) + (NF_SZ.item - lsz) * 0.8, lsz, { bold: true }));
         P.draw(String(r.qty), X + NW, y, NF_SZ.item, { width: QW, align: 'center' });
         P.draw(money((r.price || 0) * r.qty), X + NW + QW, y, NF_SZ.item, { width: AW, align: 'right' });
         y += nameLines.length * (NF_SZ.item + 2) + 2;
@@ -1528,12 +1542,12 @@ function buildNianfaiStubPDF(data, filePath) {
         // 存根聯不印手寫格（Yw 2026-11-26）：客人資料全部寫在背面
         if (data.deliveryMethod === 'delivery') {
             y = P.section('宅配資訊', y);
-            y = P.bullets(['請在背面寫上收件人姓名、電話、地址。'], y);
+            y = P.bullets(['請在背面寫下宅配資訊。'], y);
         } else {
             y = P.section('取貨資訊', y);
             y = P.field('取貨日期：', nfDateWeek(data.pickupDate), y);
             y = P.field('取貨時間：', data.pickupHours || '', y);
-            y = P.bullets(['請在背面寫上姓名、電話。'], y + 2);
+            y = P.bullets(['請在背面寫下取貨資訊。'], y + 2);
         }
         return y;
     }, filePath);
