@@ -273,6 +273,23 @@ run('取貨提醒（明天）＋失敗重試一次', () => { ctx._mails = []; ct
   return { failed: r.failed.map(x => x.name), report: ctx._mails.filter(x => x.subject && x.subject.includes('取貨提醒')).map(x => x.subject), status: sheetObj('自取').map(x => x['取貨提醒']) }; });
 run('取貨提醒失敗後可補寄', () => { ctx._mails = []; const r = ctx.nfMailSend_('pickupReminder'); const m = ctx._mails.find(x => x.html); return { sent: r.sent.map(x => x.name), hours: m && /12:00 ~ (20|16):00/.test(m.html) }; });
 run('每日 08:00 觸發已安裝', () => ctx._triggers.includes('nfDailyPickupReminder'));
+run('Gmail 額度用完 → 名單存起來，隔天 08:00 寄清單提醒；補寄後不再提醒', () => {
+  const row = sheetObj('自取').find(x => x['訂單編號']); const id = row['訂單編號'];
+  ctx.nfSetMailState_(id, 'pickupReminder', '失敗：測試'); // 讓這張重新變成可寄
+  const date = ctx.nfIsoDate_(row['取貨日期'] || row['取貨日']);
+  ctx._quota = 0; ctx._mails = []; ctx._quiet = true;
+  const r = ctx.nfMailSend_('pickupReminder', [id], date);
+  const pending1 = ctx.nfQuotaPending_().map(q => q.id);
+  ctx._quota = 100; ctx._mails = [];
+  ctx.nfDailyPickupReminder(); // 隔天 08:00
+  const remind = ctx._mails.find(m => m.subject && m.subject.includes('額度用完沒寄出'));
+  ctx.nfUseYear_('dev', 2027); ctx._mails = [];
+  ctx.nfMailSend_('pickupReminder', [id], date); // 補寄
+  ctx._mails = []; const again = ctx.nfQuotaPendingReminder();
+  ctx._quiet = false;
+  if (!(r.overQuota.length === 1 && pending1.includes(id) && remind && remind.body.includes(row['訂購人']) && again.reminded === 0 && ctx.nfQuotaPending_().length === 0)) throw new Error(JSON.stringify({ over: r.overQuota, pending1, remind: remind && remind.subject, again, left: ctx.nfQuotaPending_() }));
+  return { overQuota: r.overQuota.map(x => x.name), remindSubject: remind.subject, afterResend: again };
+});
 run('取消訂單（清除表單回應整列）→ 標已取消、統計不計入', () => {
   const rows = sheetObj('宅配'); const id = rows.find(x => x['訂購人'] === '現場宅配')['訂單編號'];
   const lc = respSheet.getLastColumn(); const all = respSheet.getRange(1, 1, respSheet.getLastRow(), lc).getValues();

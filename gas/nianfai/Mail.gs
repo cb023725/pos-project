@@ -139,8 +139,69 @@ function nfMailSend_(type, ids, dateIso, opts) {
     };
   });
   nfSyncOrderSheets_(); // 把寄信狀態顯示到工作表
+  // Gmail 額度用完沒寄出的，存起來隔天 08:00 提醒店家（當天的結果通知多半也會因為額度寄不出去）
+  nfAddQuotaPending_(type, result.label, result.overQuota.concat(result.failed.filter(function (x) { return nfIsQuotaError_(x.error); })));
   if (opts.auto || result.failed.length || result.overQuota.length) nfMailReport_(result, opts.auto);
   return result;
+}
+
+// ── Gmail 每日額度用完：沒寄出的名單隔天 08:00 寄清單提醒店家，直到都寄出為止 ──
+var NF_QUOTA_PENDING_KEY = 'QUOTA_PENDING';
+
+function nfIsQuotaError_(msg) {
+  return /too many times|quota|limit exceeded|額度/i.test(String(msg || ''));
+}
+
+function nfQuotaPending_() {
+  try { return JSON.parse(nfProps_().getProperty(NF_QUOTA_PENDING_KEY) || '[]'); } catch (e) { return []; }
+}
+
+/** items：[{ id, name }]；同一封信（年度＋種類＋訂單）只記一次 */
+function nfAddQuotaPending_(type, label, items) {
+  if (!items || !items.length || !NF_CTX) return;
+  var list = nfQuotaPending_();
+  var at = nfFormatTimestamp_(new Date());
+  items.forEach(function (x) {
+    var dup = list.some(function (q) { return q.env === NF_CTX.env && q.year === NF_CTX.year && q.type === type && q.id === String(x.id); });
+    if (!dup) list.push({ env: NF_CTX.env, year: NF_CTX.year, type: type, label: label, id: String(x.id), name: x.name, at: at });
+  });
+  nfProps_().setProperty(NF_QUOTA_PENDING_KEY, JSON.stringify(list));
+}
+
+/**
+ * 每天 08:00（取貨提醒觸發一開始先跑）：把之前因為額度沒寄出、到現在還沒寄的信列成清單寄給店家。
+ * 已經補寄（狀態變成已寄出）或訂單不在了的就從清單移除；還沒寄的留著，隔天再提醒。
+ */
+function nfQuotaPendingReminder() {
+  var list = nfQuotaPending_();
+  if (!list.length) return { reminded: 0, left: 0 };
+  var keep = [];
+  list.forEach(function (q) {
+    try {
+      nfUseYear_(q.env, q.year);
+      var st = nfMailState_(q.id)[q.type];
+      if (st && st.status === '已寄出') return; // 已補寄
+      keep.push(q);
+    } catch (e) {
+      keep.push(q); // 讀不到年度先留著，不要漏掉
+    }
+  });
+  nfProps_().setProperty(NF_QUOTA_PENDING_KEY, JSON.stringify(keep));
+  if (!keep.length) return { reminded: 0, left: 0 };
+  var byLabel = {};
+  keep.forEach(function (q) { (byLabel[q.year + ' ' + q.label] = byLabel[q.year + ' ' + q.label] || []).push(q); });
+  var lines = ['之前 Gmail 當天可寄封數用完，下面這些信還沒寄出，請到 WebPOS 年菜管理頁「寄信」補寄：'];
+  Object.keys(byLabel).forEach(function (k) {
+    lines.push('\n' + k + '（' + byLabel[k].length + ' 封）：');
+    byLabel[k].forEach(function (q) { lines.push('・' + q.name + '　' + q.id + '　（' + q.at + ' 沒寄出）'); });
+  });
+  lines.push('\n今天 Gmail 還能寄 ' + (nfMailQuota_() === null ? '（無法讀取）' : nfMailQuota_()) + ' 封。補寄完成後這份提醒就不會再出現。');
+  try {
+    MailApp.sendEmail({ to: NF.STORE_EMAIL, subject: '【年菜】還有 ' + keep.length + ' 封信因為額度用完沒寄出', body: lines.join('\n'), name: NF.SENDER_NAME });
+  } catch (e) {
+    console.error('額度提醒寄送失敗：' + e);
+  }
+  return { reminded: keep.length, left: keep.length };
 }
 
 /** 寄信結果通知店家 */
@@ -442,6 +503,7 @@ function nfTomorrowIso_() {
 
 /** 每天 08:00（時間驅動觸發）：所有已正式上線、開啟取貨提醒的年度，寄給明天取貨的客人 */
 function nfDailyPickupReminder() {
+  try { nfQuotaPendingReminder(); } catch (e) { console.error('額度提醒失敗：' + e); } // 先提醒昨天額度用完沒寄出的
   var all = nfProps_().getProperties();
   Object.keys(all).forEach(function (k) {
     if (k.indexOf('YEAR_') !== 0) return;
