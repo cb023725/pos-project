@@ -1295,9 +1295,22 @@ function buildCustomerReceiptPDF(data, filePath) {
 // ----------------------------------------------------
 const NF_STORE = { phone: '04-2471-5526', address: '台中市西區東興路三段13號1樓' };
 const NF_LOGO = (() => { try { return fs.readFileSync(path.join(__dirname, 'assets', 'nianfai-logo-print.png')); } catch { return null; } })();
-// 字級：介於一般收據（品項 8、合計 10）與先前版本之間
-const NF_SZ = { label: 8.5, item: 8.5, sub: 7, section: 9, total: 11, small: 7 };
-const NF_M = 6;                     // 出血邊（左右、上方）
+// 字級（Yw 2026-11-26：再大兩級）
+const NF_SZ = { label: 10.5, item: 10.5, sub: 9, section: 11, total: 13, small: 9 };
+const NF_M = 3;                     // 出血邊（左右、上方）
+// 字型：蘋方 TC 的 Medium（一般）＋ Semibold（粗體），同一家族、基線一致；用真正的粗體字重，不用描邊加粗（熱感紙上描邊會糊）
+// 讀不到蘋方時退回微軟正黑體＋描邊加粗
+const NF_FONT_FILE = '/System/Library/Fonts/PingFang.ttc';
+const NF_PINGFANG = (() => { try { fs.accessSync(NF_FONT_FILE); return true; } catch { return false; } })();
+function nfFonts(doc) {
+    if (NF_PINGFANG) {
+        doc.registerFont('NfReg', NF_FONT_FILE, 'PingFangTC-Medium');
+        doc.registerFont('NfBold', NF_FONT_FILE, 'PingFangTC-Semibold');
+    } else {
+        doc.registerFont('NfReg', FONT_REG);
+        doc.registerFont('NfBold', FONT_REG);
+    }
+}
 const NF_W = PAGE_W - NF_M * 2;     // 內容寬度
 const WEEK = '日一二三四五六';
 // 'YYYY-MM-DD' 或時間 → 'YYYY/MM/DD (X)'（台北時間）
@@ -1324,27 +1337,29 @@ function nfDateTime(v) {
 function nfRenderSlip(drawFn, filePath) {
     return new Promise((resolve, reject) => {
         const m = new PDFDocument({ size: [PAGE_W, 3000], margins: { top: 0, bottom: 0, left: 0, right: 0 } });
-        m.registerFont('Reg', FONT_REG);
-        const h = Math.ceil(drawFn(m)) + 14; // 下方出血
+        nfFonts(m);
+        const h = Math.ceil(drawFn(m)) + 8; // 下方出血
         const doc = new PDFDocument({ size: [PAGE_W, h], margins: { top: 0, bottom: 0, left: 0, right: 0 }, compress: false });
         const chunks = [];
         doc.on('data', c => chunks.push(c));
         doc.on('end', () => fs.writeFile(filePath, Buffer.concat(chunks), e => e ? reject(e) : resolve(h)));
         doc.on('error', reject);
-        doc.registerFont('Reg', FONT_REG);
+        nfFonts(doc);
         drawFn(doc);
         doc.end();
     });
 }
 
-// 排版工具：整張單只用一種字型（微軟正黑體），強調用描邊加粗——同一行的中文與數字基線一致、不會上下錯開
+// 排版工具：整張單只用一個字型家族（蘋方 TC Medium／Semibold），同一行的中文與數字基線一致、不會上下錯開
 function nfSlipParts(doc) {
     const X = NF_M, W = NF_W;
     const draw = (t, x, y, size, { bold = false, width, align } = {}) => {
-        doc.font('Reg').fontSize(size).fillColor('black').strokeColor('black').lineWidth(bold ? 0.35 : 0);
-        doc.text(String(t), x, y, { lineBreak: false, width, align, fill: true, stroke: bold });
+        const stroke = bold && !NF_PINGFANG; // 沒有蘋方才用描邊加粗
+        doc.font(bold ? 'NfBold' : 'NfReg').fontSize(size).fillColor('black').strokeColor('black').lineWidth(stroke ? 0.35 : 0);
+        doc.text(String(t), x, y, { lineBreak: false, width, align, fill: true, stroke });
     };
-    const wOf = (t, size) => doc.font('Reg').fontSize(size).widthOfString(String(t));
+    // 量寬度一律用粗體量（比較寬），一般字和粗體都放得下
+    const wOf = (t, size) => doc.font('NfBold').fontSize(size).widthOfString(String(t));
     const line = (y, lw = 0.6, dash = false) => {
         doc.save(); if (dash) doc.dash(2, { space: 1.5 });
         doc.moveTo(X, y).lineTo(X + W, y).lineWidth(lw).strokeColor('black').stroke(); doc.restore();
@@ -1358,7 +1373,8 @@ function nfSlipParts(doc) {
         for (let i = 1; i < t.length; i++) if ('，、。；'.includes(t[i - 1])) cuts.push(i);
         const cand = (cuts.length ? cuts : [...Array(t.length - 1).keys()].map(i => i + 1))
             .map(i => [t.slice(0, i), t.slice(i)])
-            .filter(([a, b]) => wOf(a, size) <= width && wOf(b, size) <= width)
+            // 句尾標點（，、。；）可以稍微超出（全形標點右半邊是空白），標點才不會被擠到下一行開頭
+            .filter(([a, b]) => wOf(a, size) - ('，、。；'.includes(a.slice(-1)) ? size * 0.5 : 0) <= width && wOf(b, size) <= width)
             .sort((p, q) => Math.abs(wOf(p[0], size) - wOf(p[1], size)) - Math.abs(wOf(q[0], size) - wOf(q[1], size)));
         if (cand.length) return cand[0];
         const mid = Math.ceil(t.length / 2);
@@ -1366,16 +1382,22 @@ function nfSlipParts(doc) {
     };
     // 標籤：內容（同字型、同字級、同一條基線），內容描邊加粗；放不下先縮小再平均換行
     const field = (label, value, y) => {
+        const v = String(value || '');
         const lw = wOf(label, NF_SZ.label);
         draw(label, X, y, NF_SZ.label);
-        const sz = fitSize(value, NF_SZ.label, NF_SZ.label - 1.5, W - lw);
-        const lines = balance(String(value || ''), sz, W - lw);
+        const sz = fitSize(v, NF_SZ.label, NF_SZ.label - 1.5, W - lw);
+        if (wOf(v, sz) > W - lw && wOf(v, NF_SZ.label) <= W) { // 同一行放不下：內容換到下一行（例如訂購日期的完整時間）
+            y += NF_SZ.label + 3;
+            draw(v, X, y, NF_SZ.label, { bold: true });
+            return y + NF_SZ.label + 6;
+        }
+        const lines = balance(v, sz, W - lw);
         lines.forEach((l, i) => draw(l, X + lw, y + i * (sz + 3), sz, { bold: true }));
         return y + lines.length * (sz + 3) + 3;
     };
     // 手寫格：標籤＋底線（加高），可加「□同上」，地址可多行
     const blank = (label, y, { same = false, lines = 1 } = {}) => {
-        const H = 22;
+        const H = 25;
         const lw = wOf(label, NF_SZ.label);
         const sameW = same ? 26 : 0;
         for (let i = 0; i < lines; i++) {
@@ -1429,7 +1451,7 @@ function nfSlipOrderPart(doc, data, withLogo, paid) {
 
     // 訂單明細
     y = P.section(`${data.year || ''} 年菜訂單明細`.trim(), y);
-    const QW = 20, AW = 36, NW = W - QW - AW;
+    const QW = 22, AW = 44, NW = W - QW - AW;
     P.draw('品名', X, y, NF_SZ.small);
     P.draw('數量', X + NW, y, NF_SZ.small, { width: QW, align: 'center' });
     P.draw('小計', X + NW + QW, y, NF_SZ.small, { width: AW, align: 'right' });
