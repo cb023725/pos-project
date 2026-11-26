@@ -1462,9 +1462,9 @@ function nfSlipOrderPart(doc, data, withLogo, paid) {
         doc.image(NF_LOGO, X, y, { width: W });
         y += W * 145 / 768 + 4;
         const contact = `${NF_STORE.phone}｜${NF_STORE.address}`;
-        // 店家電話＋地址：Medium、一行放完（不換行）
+        // 店家電話＋地址：Regular（比 Medium 細一級）、一行放完（不換行）
         const csz = P.fitSize(contact, NF_SZ.small, 5);
-        P.draw(contact, X, y, csz, { width: W, align: 'center', weight: 'medium' });
+        P.draw(contact, X, y, csz, { width: W, align: 'center', weight: 'regular' });
         y += csz + 6;
         P.line(y, 0.9); y += 8;
     }
@@ -1505,7 +1505,7 @@ function nfSlipOrderPart(doc, data, withLogo, paid) {
         P.draw(money((r.price || 0) * r.qty), X + NW + QW, y, NF_SZ.item, { width: AW, align: 'right' });
         y += nameLines.length * (NF_SZ.item + 2) + 2;
         for (const c of r.bundleComponents || []) {
-            P.draw(`・${c.name}${c.qty > 1 ? ` ×${c.qty}` : ''}`, X + 5, y, NF_SZ.sub);
+            P.draw(`・${c.name}${c.qty > 1 ? ` ×${c.qty}` : ''}`, X + 1.5, y, NF_SZ.sub); // 套餐細項：縮排小一點
             y += NF_SZ.sub + 2.5;
         }
         if ((r.bundleComponents || []).length) y += 2;
@@ -1553,12 +1553,12 @@ function buildNianfaiStubPDF(data, filePath) {
         // 存根聯不印手寫格（Yw 2026-11-26）：客人資料全部寫在背面
         if (data.deliveryMethod === 'delivery') {
             y = P.section('宅配資訊', y);
-            y = P.bullets(['請在背面寫下宅配資訊。'], y);
+            P.draw('- 請在背面寫下宅配資訊 -', P.X, y, NF_SZ.label, { width: P.W, align: 'center' }); y += NF_SZ.label + 5;
         } else {
             y = P.section('取貨資訊', y);
             y = P.field('取貨日期：', nfDateWeek(data.pickupDate), y);
             y = P.field('取貨時間：', data.pickupHours || '', y);
-            y = P.bullets(['請在背面寫下取貨資訊。'], y + 2);
+            y += 2; P.draw('- 請在背面寫下取貨資訊 -', P.X, y, NF_SZ.label, { width: P.W, align: 'center' }); y += NF_SZ.label + 5;
         }
         return y;
     }, filePath);
