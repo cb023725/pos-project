@@ -1351,10 +1351,10 @@ function nfRenderSlip(drawFn, filePath) {
 }
 
 // 排版工具：整張單只用一個字型家族（蘋方 TC Medium／Semibold），同一行的中文與數字基線一致、不會上下錯開
-// opts.bold = false：整張都用一般字重（測試粗體 vs 不粗體的列印效果；預覽時傳 slipBold: false）
+// 整張預設不用粗體（Yw 2026-11-26 比較列印後決定：熱感紙上一般字重最清楚）；opts.bold = true 才用粗體（預覽傳 slipBold: true）
 function nfSlipParts(doc, opts = {}) {
     const X = NF_M, W = NF_W;
-    const useBold = opts.bold !== false;
+    const useBold = opts.bold === true;
     const draw = (t, x, y, size, { bold: b = false, width, align } = {}) => {
         const bold = b && useBold;
         const stroke = bold && !NF_PINGFANG; // 沒有蘋方才用描邊加粗
@@ -1436,7 +1436,7 @@ function nfSlipParts(doc, opts = {}) {
 
 // 抬頭到總計（兩聯共用）
 function nfSlipOrderPart(doc, data, withLogo, paid) {
-    const P = nfSlipParts(doc, { bold: data.slipBold !== false });
+    const P = nfSlipParts(doc, { bold: data.slipBold === true });
     const { X, W } = P;
     let y = NF_M;
     if (withLogo && NF_LOGO) {
