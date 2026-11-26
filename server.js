@@ -1468,11 +1468,20 @@ function nfSlipOrderPart(doc, data, withLogo, paid) {
         y += csz + 6;
         P.line(y, 0.9); y += 8;
     }
-    // 抬頭三欄小一級，訂購日期不換行
-    const head = { size: NF_SZ.head, oneLine: true };
-    y = P.field('訂單編號：', data.seqLabel || '', y, head);
-    y = P.field('訂購日期：', nfDateTime(data.orderDate || Date.now()), y, head);
-    y = P.field('出貨方式：', data.deliveryMethod === 'delivery' ? '宅配' : '來店自取', y, head);
+    // 抬頭三欄：同一個字級（標籤和內容都一樣大），以「訂購日期」一行放得下為準；標籤同寬，內容左緣對齊
+    const headRows = [
+        ['訂單編號：', data.seqLabel || ''],
+        ['訂購日期：', nfDateTime(data.orderDate || Date.now())],
+        ['出貨方式：', data.deliveryMethod === 'delivery' ? '宅配' : '來店自取'],
+    ];
+    let hs = NF_SZ.head;
+    while (hs > 7 && headRows.some(([l, v]) => P.wOf(l, hs) + P.wOf(v, hs) > W)) hs -= 0.25;
+    const hlw = Math.max(...headRows.map(([l]) => P.wOf(l, hs)));
+    for (const [l, v] of headRows) {
+        P.draw(l, X, y, hs);
+        P.draw(v, X + hlw, y, hs, { bold: true });
+        y += hs + 4;
+    }
     y += 2;
 
     // 訂單明細
