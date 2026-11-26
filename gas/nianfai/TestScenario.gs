@@ -131,3 +131,20 @@ function nfTestAutoPickup_(dateIso) {
   if (!NF_CTX.meta.live) throw new Error('正式上線後才會自動寄');
   return nfAutoPickupReminder_(dateIso);
 }
+
+/** 只限 dev：改「表單回應」某筆訂單（訂單時間＝id）的取貨日，模擬 Yw 手動改日期，改完同步宅配／自取 */
+function nfTestSetPickupDate_(id, label) {
+  nfTestGuard_();
+  var sh = nfSheet_(NF.SHEET_RESPONSES);
+  var data = sh.getDataRange().getValues();
+  var col = data[0].findIndex(function (h) { return /取貨日/.test(String(h)); });
+  if (col < 0) throw new Error('找不到取貨日欄');
+  for (var i = 1; i < data.length; i++) {
+    if (nfFormatTimestamp_(data[i][0]) === id) {
+      sh.getRange(i + 1, col + 1).setValue(label);
+      nfSyncOrderSheets_();
+      return { row: i + 1, header: data[0][col], value: label };
+    }
+  }
+  throw new Error('找不到這筆訂單：' + id);
+}
