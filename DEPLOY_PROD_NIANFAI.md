@@ -252,3 +252,8 @@ where id in ('inv_1775499142948','inv_1775499157078','inv_1775499177326','inv_17
 - **17:01 部署（Yw 同意）：** 年菜管理頁依操作順序重排＋「現在要做的事」、修正 iPad（http）無法複製短網址。`pos-project` → 775d496，前端 main.ec793c91.js，上一版在 `build_prev`；單一程序、GAS 連線正常。
 - **17:08 換上（Yw 同意，不重啟）：** 正式環境分類設定沒有「年菜」（年菜功能上線前存的），菜單管理看不到年菜 tab → 讀取時自動補預設值（2bfc6bc）。只換 build 資料夾（express.static 每次從磁碟讀，不用重啟），前端 main.4abbe504.js。
 - **17:23 部署（Yw 同意，不重啟）：** 正式 GAS @3（新年度沿用去年匯款／小卡／店家資料、生肖依年度）；前端 c6d8731（年菜庫存新增自動給年度 id、菜單年菜 tab 只顯示今年）main.6d028fa6.js。`MenuManagement.js` 與未提交的配色修改重疊 → stash、fast-forward、stash pop 無衝突（配色 patch 另存在備份資料夾）。
+
+### 2026-11-27 22:2x 部署「清空測試資料」按鈕（1e42e12）
+- 正式 GAS @4（新增 clearTestData：只限測試中，已上線會拒絕）。
+- 前端 main.6c101d55.js（舊版在 build_prev），server.js 新增 `/api/nianfai/gas/clear-test`（只清該年度年菜單／發票／保留編號、流水號歸 1；phase=live 拒絕），已重啟 posserver（重啟前 lpstat 佇列空）。
+- 檢查：/api/health `dev:false`（dev 的一鍵清空按鈕不顯示、API 403）；年度 2027 phase testing；按鈕在收合的「10. 維護工具」最下方，只在測試中出現（未按）。
