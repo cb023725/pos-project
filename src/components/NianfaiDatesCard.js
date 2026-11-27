@@ -98,12 +98,12 @@ export default function NianfaiDatesCard({ year, number, onStatusChange, showAle
 
     const input = 'border border-gray-300 rounded-lg p-2 text-base';
     return (
-        <div className="bg-white rounded-xl shadow p-6 mb-5">
+        <div className="bg-white rounded-xl shadow p-6">
             <div className="flex items-center justify-between mb-1">
                 <h3 className="text-xl font-bold text-gray-700">{number}. 取貨與寄出日期（{year}）</h3>
                 {!ready && <span className="text-sm font-bold text-red-600 bg-red-50 rounded-lg px-2 py-1">尚未設定，不能開賣</span>}
             </div>
-            <p className="text-sm text-gray-500 mb-4">每年初始化後設定，用在點單頁、補資料、Google 表單須知與選項、顧客聯與確認信。</p>
+            <p className="text-sm text-gray-500 mb-4">建立年度後先設定。這些日期會用在點單頁、Google 表單、顧客聯與確認信；建立 Google 表單前一定要先設定好並按「儲存」。</p>
 
             <div className="space-y-4">
                 <div>

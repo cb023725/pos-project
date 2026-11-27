@@ -160,7 +160,7 @@ export default function NianfaiMailCard({ year, number, gas, showAlert, showConf
     };
 
     return (
-        <div className="bg-white rounded-xl shadow p-6 mt-5">
+        <div className="bg-white rounded-xl shadow p-6">
             <div className="flex flex-wrap items-center justify-between gap-3 mb-1">
                 <h3 className="text-xl font-bold text-gray-700">{number}. 寄信</h3>
                 <div className="flex items-center gap-3 text-sm">

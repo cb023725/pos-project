@@ -9,6 +9,25 @@ import {
     goLiveNianfai, backToTestingNianfai, getNianfaiFormLinks,
 } from '../db';
 
+// 複製文字：iPad 用 http://（不是 https）開 WebPOS 時瀏覽器不提供 navigator.clipboard，改用舊方法；都失敗回傳 false
+export async function copyText(text) {
+    try {
+        if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
+    } catch (e) { /* 改用舊方法 */ }
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed'; ta.style.top = '0'; ta.style.left = '0'; ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus(); ta.select(); ta.setSelectionRange(0, text.length); // iPad Safari 要 setSelectionRange
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+    } catch (e) {
+        return false;
+    }
+}
+
 const Step = ({ n, title, done, active, children }) => (
     <div className={`flex gap-3 ${active || done ? '' : 'opacity-50'}`}>
         <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center font-black text-sm
@@ -42,19 +61,24 @@ export function NianfaiFormStatus({ gas, salesStatus, compact = false }) {
     );
 }
 
-export default function NianfaiGoogleCard({ year, number, datesReady, showAlert, showConfirm, onStatusChange, reloadKey, salesStatus }) {
-    const [gas, setGas] = useState(null); // null = 檢查中
+// part：'steps'（建立到正式上線，會讀 GAS 狀態並回報給年菜管理頁）｜'poster'（海報短網址／QR）｜'tools'（維護工具）
+// poster、tools 用 steps 讀到的狀態（gasData），按鈕做完呼叫 onReload 讓 steps 重新讀
+export default function NianfaiGoogleCard({ year, number, part = 'steps', gasData, onReload, datesReady, showAlert, showConfirm, onStatusChange, reloadKey, salesStatus }) {
+    const [ownGas, setGas] = useState(null); // null = 檢查中
     const [busy, setBusy] = useState('');
+    const external = part !== 'steps';
+    const gas = external ? (gasData || null) : ownGas;
 
     const load = useCallback(async () => {
+        if (external) { onReload?.(); return; }
         setGas(null);
         let g;
         try { g = await getNianfaiGasStatus(year); } catch (e) { g = { configured: true, ok: false, error: e.message }; }
         setGas(g);
         onStatusChange?.(g);
-    }, [year, onStatusChange]);
+    }, [year, onStatusChange, external, onReload]);
 
-    useEffect(() => { if (year) load(); }, [year, load, reloadKey]);
+    useEffect(() => { if (year && !external) load(); }, [year, load, reloadKey, external]);
 
     const run = async (key, fn) => {
         setBusy(key);
@@ -71,10 +95,15 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
 
     // 海報用短網址與 QR code
     const [links, setLinks] = useState(null);
+    const [copied, setCopied] = useState(false);
     useEffect(() => {
-        if (!year || !gas?.created) return;
+        if (part !== 'poster' || !year || !gas?.created) return;
         getNianfaiFormLinks(year).then(setLinks).catch(e => setLinks({ error: e.message }));
-    }, [year, gas?.created]);
+    }, [part, year, gas?.created]);
+    const handleCopy = async (text) => {
+        if (await copyText(text)) { setCopied(true); setTimeout(() => setCopied(false), 2000); }
+        else await showAlert(text, { title: '無法自動複製', icon: 'info', note: '請長按上面的網址選取後複製' });
+    };
 
     const handleCheck = () => run('check', async () => {
         const r = await checkNianfaiForm(year);
@@ -147,13 +176,69 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
     const checked = !!fc?.passed;
     const bankMissing = gas?.bankMissing || [];
 
-    return (
-        <div className="bg-white rounded-xl shadow p-6 mt-5">
+    const header = (title, desc, refresh) => (
+        <>
             <div className="flex items-center justify-between mb-1">
-                <h3 className="text-xl font-bold text-gray-700">{number}. Google 表單／Sheet</h3>
-                <button onClick={load} className="text-sm font-bold text-gray-500 hover:text-gray-700">重新整理</button>
+                <h3 className="text-xl font-bold text-gray-700">{number}. {title}</h3>
+                {refresh && <button onClick={load} className="text-sm font-bold text-gray-500 hover:text-gray-700">重新整理</button>}
             </div>
-            <p className="text-sm text-gray-500 mb-4">線上預購表單與訂單試算表。照下面的步驟完成，第 ⑤ 步正式上線後才能開賣。</p>
+            <p className="text-sm text-gray-500 mb-4">{desc}</p>
+        </>
+    );
+    if (part === 'poster') {
+        if (!gas?.ok || !created) return null;
+        return (
+            <div className="bg-white rounded-xl shadow p-6">
+                {header('海報與 QR code', live ? '開賣前做海報、貼文用。表單網址和 QR code 每年固定，之後都不會變。' : '正式上線前就可以先做海報（網址不會變），但測試期間不要先貼出去，以免客人在上線前下單（上線時會被清空）。')}
+                        <div>
+                            {links?.short || links?.url ? (
+                                <div className="flex flex-wrap items-start gap-4">
+                                    <img src={`/api/nianfai/form-qr.png?year=${year}`} alt="表單 QR code" className="w-36 h-36 border border-gray-200 rounded" />
+                                    <div className="space-y-2 text-sm">
+                                        <p className="text-lg font-bold text-gray-800 select-all">{links.short || links.url}</p>
+                                        <button onClick={() => handleCopy(links.short || links.url)} className={`${btn} ${copied ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'}`}>{copied ? '✓ 已複製' : '複製短網址'}</button>
+                                        <p>
+                                            <a href={`/api/nianfai/form-qr.png?year=${year}`} download={`${year}-年菜表單-QR.png`} className={link}>下載 QR code（PNG）</a>
+                                            <span className="mx-2 text-gray-300">｜</span>
+                                            <a href={`/api/nianfai/form-qr.png?year=${year}&format=svg`} download={`${year}-年菜表單-QR.svg`} className={link}>下載向量檔（SVG，海報放大用）</a>
+                                        </p>
+                                        <p className="text-gray-500">短網址由 Google 表單官方提供（forms.gle），表單網址不變就一直有效。</p>
+                                    </div>
+                                </div>
+                            ) : (
+                                <p className="text-sm text-gray-500">{links === null ? '讀取中...' : `讀取失敗：${links.error || ''}`}</p>
+                            )}
+                        </div>
+            </div>
+        );
+    }
+    if (part === 'tools') {
+        if (!gas?.ok || !created) return null;
+        return (
+            <div className="bg-white rounded-xl shadow p-6">
+                        <details>
+                            <summary className="text-xl font-bold text-gray-700 cursor-pointer">{number}. 維護工具<span className="ml-2 text-sm font-normal text-gray-500">平常用不到；開賣後改了品項、價格、日期才需要（點開）</span></summary>
+                            <div className="mt-3 space-y-3 text-sm">
+                                {[
+                                    ['sync', '同步品項到 Sheet', '品項、價格、套餐組成、日期改了之後，寫入試算表「設定」。', handleSyncSettings],
+                                    ['form', '同步到表單', '品名、價格、取貨日改了之後，更新表單題目與選項（會先列出差異）。完成後再按一次上面 Google 表單的 ③「檢查表單對應」。', handleFormSync],
+                                    ['rebuild', '重建分頁', '新增或刪除品項、改了寄出日後，重建宅配／自取／查詢／統計／備料表。手動欄與寄信狀態會保留。', handleRebuild],
+                                    ['protect', '重新套用保護範圍', '保護範圍被改掉或新增匯款欄位時使用。', handleProtect],
+                                ].map(([key, label, desc, fn]) => (
+                                    <div key={key} className="flex items-start gap-3">
+                                        <button onClick={fn} disabled={!!busy} className={`${btn} bg-white border border-gray-300 text-gray-700 flex-shrink-0 w-40`}>{busy === key ? '處理中...' : label}</button>
+                                        <p className="text-gray-500 pt-1.5">{desc}</p>
+                                    </div>
+                                ))}
+                            </div>
+                        </details>
+            </div>
+        );
+    }
+
+    return (
+        <div className="bg-white rounded-xl shadow p-6">
+            {header('Google 表單與訂單試算表', '線上預購表單與訂單試算表。由上往下照 ①～⑤ 做，第 ⑤ 步「正式上線」後才能開賣。', true)}
 
             {gas === null ? (
                 <p className="text-gray-400">檢查連線中...</p>
@@ -233,47 +318,6 @@ export default function NianfaiGoogleCard({ year, number, datesReady, showAlert,
                         </Step>
                     </div>
 
-                    {created && (
-                        <div className="mt-4 border border-gray-200 rounded-lg p-4">
-                            <p className="font-bold text-gray-800 mb-2">海報用短網址與 QR code</p>
-                            {links?.short || links?.url ? (
-                                <div className="flex flex-wrap items-start gap-4">
-                                    <img src={`/api/nianfai/form-qr.png?year=${year}`} alt="表單 QR code" className="w-36 h-36 border border-gray-200 rounded" />
-                                    <div className="space-y-2 text-sm">
-                                        <p className="text-lg font-bold text-gray-800 select-all">{links.short || links.url}</p>
-                                        <button onClick={() => navigator.clipboard?.writeText(links.short || links.url)} className={`${btn} bg-gray-100 text-gray-700`}>複製短網址</button>
-                                        <p>
-                                            <a href={`/api/nianfai/form-qr.png?year=${year}`} download={`${year}-年菜表單-QR.png`} className={link}>下載 QR code（PNG）</a>
-                                            <span className="mx-2 text-gray-300">｜</span>
-                                            <a href={`/api/nianfai/form-qr.png?year=${year}&format=svg`} download={`${year}-年菜表單-QR.svg`} className={link}>下載向量檔（SVG，海報放大用）</a>
-                                        </p>
-                                        <p className="text-gray-500">短網址由 Google 表單官方提供（forms.gle），表單網址不變就一直有效。</p>
-                                    </div>
-                                </div>
-                            ) : (
-                                <p className="text-sm text-gray-500">{links === null ? '讀取中...' : `讀取失敗：${links.error || ''}`}</p>
-                            )}
-                        </div>
-                    )}
-
-                    {created && (
-                        <details className="mt-4 bg-gray-50 rounded-lg p-3">
-                            <summary className="font-bold text-gray-700 cursor-pointer">維護工具（品項、價格、日期有變動時）</summary>
-                            <div className="mt-3 space-y-3 text-sm">
-                                {[
-                                    ['sync', '同步品項到 Sheet', '品項、價格、套餐組成、日期、製作入庫改了之後，寫入試算表「設定」。', handleSyncSettings],
-                                    ['form', '同步到表單', '品名、價格、取貨日改了之後，更新表單題目與選項（會先列出差異）。完成後再做第 ③ 步。', handleFormSync],
-                                    ['rebuild', '重建分頁', '新增或刪除品項、改了寄出日後，重建宅配／自取／查詢／統計／備料表。手動欄與寄信狀態會保留。', handleRebuild],
-                                    ['protect', '重新套用保護範圍', '保護範圍被改掉或新增匯款欄位時使用。', handleProtect],
-                                ].map(([key, label, desc, fn]) => (
-                                    <div key={key} className="flex items-start gap-3">
-                                        <button onClick={fn} disabled={!!busy} className={`${btn} bg-white border border-gray-300 text-gray-700 flex-shrink-0 w-40`}>{busy === key ? '處理中...' : label}</button>
-                                        <p className="text-gray-500 pt-1.5">{desc}</p>
-                                    </div>
-                                ))}
-                            </div>
-                        </details>
-                    )}
                 </>
             )}
         </div>

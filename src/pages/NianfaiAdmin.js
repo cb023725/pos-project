@@ -11,10 +11,27 @@ import { getSettingValue, saveSettingValue, getMenuItems, getInventoryItems, add
 
 const STATUS_ORDER = ['preparing', 'selling', 'closed', 'archived'];
 const STATUS_LABELS = { preparing: '準備中', selling: '開賣中', closed: '收單後', archived: '已封存（平常營業）' };
-const NEXT_ACTION_LABELS = { preparing: '開賣（顯示年菜 tab）', selling: '收單（隱藏年菜 tab）', closed: '封存（年度結束，恢復平常營業）' };
+// 版面元件放在外層（放在頁面元件裡每次重繪都會變成新元件，裡面的輸入框會失去焦點）
+const Group = ({ title, desc }) => (
+    <div className="pt-4">
+        <h3 className="text-lg font-black text-[#C1032F]">{title}</h3>
+        {desc && <p className="text-sm text-gray-500">{desc}</p>}
+    </div>
+);
+const Card = ({ id, n, title, desc, badge, children }) => (
+    <div id={id} className="bg-white rounded-xl shadow p-6 scroll-mt-4">
+        <div className="flex items-center justify-between gap-3 mb-1">
+            <h3 className="text-xl font-bold text-gray-700">{n}. {title}</h3>
+            {badge}
+        </div>
+        {desc && <p className="text-sm text-gray-500 mb-3">{desc}</p>}
+        {children}
+    </div>
+);
+const Done = ({ children = '已完成' }) => <span className="text-sm font-bold text-green-700 bg-green-50 rounded-lg px-2 py-1 whitespace-nowrap">✓ {children}</span>;
 const NEXT_CONFIRM = {
-    preparing: (y) => ({ title: `開賣 ${y} 年菜`, message: '開始接受年菜訂單', confirmText: '開賣' }),
-    selling:   (y) => ({ title: `${y} 年菜收單`, message: '收單後只有 Yw 能加單', confirmText: '收單' }),
+    preparing: (y) => ({ title: `開賣 ${y} 年菜`, message: '桌位頁出現年菜點單，Google 表單開放顧客下單', confirmText: '開賣' }),
+    selling:   (y) => ({ title: `${y} 年菜收單`, message: '桌位頁的年菜點單會隱藏，Google 表單會關閉', confirmText: '收單' }),
     closed:    (y) => ({ title: `封存 ${y} 年菜`, message: '所有年菜畫面會隱藏\n資料完整保留', confirmText: '封存' }),
 };
 
@@ -157,94 +174,128 @@ const NianfaiAdminPage = () => {
 
 
 
+    // ── 依實際操作順序排列；最上面告訴操作的人「現在該做什麼」，點一下跳到那一段 ──
+    const live = gas?.phase === 'live';
+    const gasCreated = !!gas?.created;
+    const formChecked = !!gas?.formCheck?.passed;
+    const usesGoogle = !!gas?.configured;
+    const yearOpen = !!activeYear && status !== 'archived';
+    const nextStep = (() => {
+        if (!yearOpen) return { id: 's-year', text: '建立今年的年菜年度', detail: '輸入年度（例如 2028），按「建立新年度年菜」。' };
+        if (status === 'preparing') {
+            if (items.length === 0) return { id: 's-items', text: '新增今年的年菜品項', detail: '到菜單管理頁新增或修改年菜品項、價格、套餐內容。' };
+            if (!datesReady) return { id: 's-dates', text: '設定取貨與寄出日期', detail: '填預購截止日、自取日期、每日取貨時間、宅配寄出期間，按「儲存」。' };
+            if (usesGoogle && !gas?.ok) return { id: 's-google', text: '年菜系統連線中或連線失敗', detail: '稍等一下按「重新整理」；一直失敗請聯絡負責人。' };
+            if (usesGoogle && !gasCreated) return { id: 's-google', text: '建立 Google 表單與訂單試算表', detail: '按 ①「建立試算表與表單」，約 1 分鐘。' };
+            if (usesGoogle && !formChecked) return { id: 's-google', text: '檢查表單文案，再檢查表單對應', detail: '做完 ②，按 ③「檢查表單對應」直到通過。' };
+            if (usesGoogle && bankMissing.length) return { id: 's-google', text: '在試算表「設定」填匯款資訊', detail: `還沒填：${bankMissing.join('、')}（確認信會用到）。` };
+            if (usesGoogle && !live) return { id: 's-google', text: '真實測試，測完按「正式上線」', detail: '用 WebPOS 點幾張年菜單、在表單填幾張，確認信件和試算表都正確後，按 ⑤「測試完畢，正式上線」（會清空測試資料）。' };
+            return { id: 's-open', text: '開賣', detail: '海報準備好後，按「開賣」：桌位頁出現年菜、Google 表單開放顧客下單。' };
+        }
+        if (status === 'selling') return { id: 's-mail', text: '開賣中：每天處理寄信、留意庫存', detail: '預購截止、不再接單時，到最下面按「收單」。' };
+        return { id: 's-close', text: '已收單：全部取貨、寄出完成後封存', detail: '封存後年菜畫面會隱藏，資料都保留。' };
+    })();
+    const goTo = (id) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    const btnPrimary = 'px-5 py-2.5 rounded-lg font-bold text-white disabled:opacity-50';
+
     return (
-        <div className="p-6 max-w-3xl mx-auto">
-            <h2 className="text-4xl font-black text-gray-800 mb-6">🧧 年菜管理</h2>
+        <div className="p-6 max-w-3xl mx-auto space-y-5">
+            <h2 className="text-4xl font-black text-gray-800">🧧 年菜管理</h2>
 
-            <div className="bg-white rounded-xl shadow p-6 mb-5">
-                <h3 className="text-xl font-bold text-gray-700 mb-3">目前狀態</h3>
-                <p className="text-gray-600">
-                    目前年度：<span className="font-black text-gray-800">{activeYear || '（尚未設定）'}</span>
-                </p>
-                <p className="text-gray-600 mt-1">
-                    狀態：
-                    <span className={`font-black ml-1 ${status === 'selling' ? 'text-[#4A9A7A]' : 'text-gray-400'}`}>
-                        {activeYear ? STATUS_LABELS[status] : '—'}
-                    </span>
-                </p>
-                <p className="text-gray-600 mt-1">
-                    目前年度品項數：<span className="font-black text-gray-800">{items.length}</span>
-                </p>
-                {activeYear && status !== 'archived' && <NianfaiFormStatus gas={gas} salesStatus={status} compact />}
-            </div>
-
-            <div className="bg-white rounded-xl shadow p-6 mb-5">
-                <h3 className="text-xl font-bold text-gray-700 mb-3">1. 新年度初始化</h3>
-                <p className="text-sm text-gray-500 mb-3">把目前年度的年菜品項「複製」成新年度的新品項（新品項、新年度資料互相獨立，不是改標記），複製完請到菜單管理頁修正名稱/價格/是否繼續賣。</p>
-                <div className="flex items-center gap-3">
-                    <input type="number" value={newYearInput} onChange={e => setNewYearInput(e.target.value)}
-                        className="w-28 border border-gray-300 rounded-lg p-2.5 text-base" />
-                    <button onClick={handleInitNewYear} disabled={isInitializing}
-                        className="px-5 py-2.5 rounded-lg bg-[#4A9A7A] text-white font-bold disabled:opacity-50">
-                        {isInitializing ? '處理中...' : '建立新年度年菜'}
-                    </button>
-                </div>
-            </div>
-
-            {activeYear && status !== 'archived' && (
-                <NianfaiDatesCard year={activeYear} number={2} onStatusChange={setDatesReady} showAlert={showAlert} />
-            )}
-
-            <div className="bg-white rounded-xl shadow p-6 mb-5">
-                <h3 className="text-xl font-bold text-gray-700 mb-3">3. 修正品項</h3>
-                <p className="text-sm text-gray-500 mb-3">品項的名稱、價格、套餐組成都在菜單管理頁編輯（品項編輯視窗會多一個「🧧 年菜」區塊）。</p>
-                <Link to="/menu" className="inline-block px-5 py-2.5 rounded-lg bg-gray-700 text-white font-bold hover:bg-gray-800">
-                    前往菜單管理頁
-                </Link>
-            </div>
-
+            {/* 目前進度＋下一步 */}
             <div className="bg-white rounded-xl shadow p-6">
-                <h3 className="text-xl font-bold text-gray-700 mb-3">4. 開賣 / 收單狀態</h3>
-                <p className="text-sm text-gray-500 mb-3">
-                    準備中→開賣中→收單後→已封存，只隱藏畫面不刪資料；封存以外桌位頁都會出現年菜卡片（佇列/點單頁），收單後只有 Yw 能從後台加單。
-                </p>
-                <div className="flex items-center gap-3">
-                    {status !== 'archived' && (
-                        <button onClick={handleAdvanceStatus} disabled={!activeYear || isToggling || (status === 'preparing' && (!datesReady || !googleReady))}
-                            className="px-5 py-2.5 rounded-lg font-bold text-white bg-[#D47856] hover:bg-[#C46848] disabled:opacity-50">
-                            {isToggling ? '處理中...' : NEXT_ACTION_LABELS[status]}
-                        </button>
-                    )}
-                    {status !== 'preparing' && status !== 'archived' && (
-                        <button onClick={handleRevertStatus} disabled={isToggling}
-                            className="px-4 py-2.5 rounded-lg font-bold text-gray-500 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-sm">
-                            返回上一步（修正誤按）
-                        </button>
-                    )}
-                    {status === 'archived' && <p className="text-gray-400">已封存，明年初始化新年度後才會再出現。</p>}
-                    {status === 'preparing' && !datesReady && <p className="text-sm font-bold text-red-600">請先在上方設定取貨與寄出日期</p>}
-                    {status === 'preparing' && datesReady && !googleReady && <p className="text-sm font-bold text-red-600">{bankMissing.length > 0 ? `請先在試算表「設定」填好匯款資訊（還沒填：${bankMissing.join('、')}）才能開賣` : '請先完成下方「Google 表單／Sheet」的步驟（第 ⑤ 步正式上線）'}</p>}
+                <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-gray-600">
+                    <span>年度：<b className="text-gray-800">{activeYear || '（尚未建立）'}</b></span>
+                    <span>狀態：<b className={status === 'selling' ? 'text-[#4A9A7A]' : 'text-gray-800'}>{activeYear ? STATUS_LABELS[status] : '—'}</b></span>
+                    {yearOpen && <span>品項：<b className="text-gray-800">{items.length}</b> 個</span>}
+                    {yearOpen && usesGoogle && gasCreated && <span>表單：<b className={live ? 'text-green-700' : 'text-orange-600'}>{live ? '已正式上線' : '測試中'}</b></span>}
                 </div>
+                {yearOpen && <NianfaiFormStatus gas={gas} salesStatus={status} compact />}
+                <button onClick={() => goTo(nextStep.id)} className="mt-4 w-full text-left rounded-xl border-2 border-[#C1032F]/30 bg-[#C1032F]/5 hover:bg-[#C1032F]/10 p-4">
+                    <p className="text-xs font-bold text-[#C1032F]">現在要做的事（點這裡跳到該步驟）</p>
+                    <p className="text-lg font-black text-gray-800 mt-0.5">👉 {nextStep.text}</p>
+                    <p className="text-sm text-gray-600 mt-1">{nextStep.detail}</p>
+                </button>
+                <p className="text-xs text-gray-400 mt-3">這一頁由上往下就是一整年的操作順序：開賣前準備 → 開賣期間 → 收單與年度結束。每一步做完會打勾。</p>
             </div>
 
-            {activeYear && status !== 'archived' && (
-                <NianfaiGoogleCard year={activeYear} number={5} datesReady={datesReady}
-                    showAlert={showAlert} showConfirm={showConfirm} onStatusChange={setGas} reloadKey={gasReload} salesStatus={status} />
+            <Group title="一、開賣前準備" desc="每年做一次，約在開賣前 1～2 週。" />
+
+            <Card id="s-year" n={1} title="建立年度"
+                desc={yearOpen ? undefined : (activeYear ? `會把 ${activeYear} 年的年菜品項複製成新年度的品項（去年的資料不會變動），之後在第 2 步修改名稱、價格。` : '第一次使用：會使用菜單裡已經建立好的該年度年菜品項。')}
+                badge={yearOpen ? <Done>已建立 {activeYear}</Done> : null}>
+                {yearOpen ? (
+                    <p className="text-sm text-gray-500">今年的年度已經建立。要建下一個年度，請先在最後的「收單與封存」把今年封存。</p>
+                ) : (
+                    <div className="flex items-center gap-3">
+                        <input type="number" value={newYearInput} onChange={e => setNewYearInput(e.target.value)}
+                            className="w-28 border border-gray-300 rounded-lg p-2.5 text-base" />
+                        <button onClick={handleInitNewYear} disabled={isInitializing} className={`${btnPrimary} bg-[#4A9A7A]`}>
+                            {isInitializing ? '處理中...' : '建立新年度年菜'}
+                        </button>
+                    </div>
+                )}
+            </Card>
+
+            {yearOpen && (
+                <>
+                    <Card id="s-items" n={2} title="確認品項與價格"
+                        desc="品項名稱、價格、套餐內容都在「菜單管理」修改（編輯品項時會看到「🧧 年菜」區塊）。開賣後不要再改品名，表單是用品名對應的。"
+                        badge={items.length > 0 ? <Done>{items.length} 個品項</Done> : <span className="text-sm font-bold text-red-600 bg-red-50 rounded-lg px-2 py-1">還沒有品項</span>}>
+                        <Link to="/menu" className="inline-block px-5 py-2.5 rounded-lg bg-gray-700 text-white font-bold hover:bg-gray-800">前往菜單管理頁</Link>
+                    </Card>
+
+                    <div id="s-dates" className="scroll-mt-4">
+                        <NianfaiDatesCard year={activeYear} number={3} onStatusChange={setDatesReady} showAlert={showAlert} />
+                    </div>
+
+                    <div id="s-google" className="scroll-mt-4">
+                        <NianfaiGoogleCard year={activeYear} number={4} datesReady={datesReady}
+                            showAlert={showAlert} showConfirm={showConfirm} onStatusChange={setGas} reloadKey={gasReload} salesStatus={status} />
+                    </div>
+
+                    <div id="s-poster" className="scroll-mt-4">
+                        <NianfaiGoogleCard part="poster" year={activeYear} number={5} gasData={gas} onReload={() => setGasReload(k => k + 1)}
+                            showAlert={showAlert} showConfirm={showConfirm} salesStatus={status} />
+                    </div>
+
+                    <Card id="s-open" n={6} title="開賣"
+                        desc="按下開賣後：桌位頁出現年菜（現場點單、年菜訂單），Google 表單開放顧客線上下單。"
+                        badge={status !== 'preparing' ? <Done>已開賣</Done> : null}>
+                        {status === 'preparing' ? (
+                            <div className="space-y-2">
+                                <button onClick={handleAdvanceStatus} disabled={isToggling || !datesReady || !googleReady} className={`${btnPrimary} bg-[#D47856] hover:bg-[#C46848]`}>
+                                    {isToggling ? '處理中...' : '開賣'}
+                                </button>
+                                {!datesReady && <p className="text-sm font-bold text-red-600">還不能開賣：請先完成第 3 步「取貨與寄出日期」</p>}
+                                {datesReady && !googleReady && <p className="text-sm font-bold text-red-600">還不能開賣：{bankMissing.length > 0 ? `請先在試算表「設定」填好匯款資訊（還沒填：${bankMissing.join('、')}）` : '請先完成第 4 步 Google 表單的 ①～⑤（最後要按「正式上線」）'}</p>}
+                            </div>
+                        ) : (
+                            <p className="text-sm text-gray-500">{status === 'selling' ? '開賣中。' : '已收單。'}誤按要退回，請到最後的「收單與封存」按「返回上一步」。</p>
+                        )}
+                    </Card>
+
+                    <Group title="二、開賣期間" desc="開賣到全部寄出、取貨完畢這段時間，每天會用到。" />
+
+                    {gas?.ok && gasCreated && (
+                        <div id="s-mail" className="scroll-mt-4">
+                            <NianfaiMailCard year={activeYear} number={7} gas={gas} showAlert={showAlert} showConfirm={showConfirm}
+                                onChanged={() => setGasReload(k => k + 1)} />
+                        </div>
+                    )}
+                </>
             )}
 
-            {activeYear && (
-                <div className="bg-white rounded-xl shadow p-6 mt-5">
-                    <h3 className="text-xl font-bold text-gray-700 mb-3">6. 年菜庫存</h3>
-                    <p className="text-sm text-gray-500 mb-4">
-                        {demandInfo?.source === 'sheet'
-                            ? `訂購需求＝Sheet 總訂購量（線上＋已送出的現場單）＋WebPOS 尚未送出的現場單。Sheet 更新時間 ${demandInfo.updatedAt || ''}`
-                            : `訂購需求僅含現場單（${demandInfo?.error ? `讀取 Sheet 失敗：${demandInfo.error}` : '尚未連結 Google Sheet'}），不含線上表單，實際需求會更多。`}
-                    </p>
-
+            {activeYear && status !== 'archived' && (
+                <Card id="s-stock" n={8} title="年菜庫存與訂購量"
+                    desc={demandInfo?.source === 'sheet'
+                        ? `訂購量＝試算表總訂購量（線上＋已送出的現場單）＋WebPOS 還沒送出的現場單。試算表更新時間 ${demandInfo.updatedAt || ''}`
+                        : `訂購量只含現場單（${demandInfo?.error ? `讀取試算表失敗：${demandInfo.error}` : '尚未連結 Google 試算表'}），不含線上表單，實際會更多。`}>
                     <p className="text-xs text-gray-400 mb-3">
-                        庫存數量在 <Link to="/inventory" className="text-[#4A9A7A] font-bold underline">庫存管理頁</Link> 維護（年節限定＝年菜庫存，平常也賣＝冷凍包庫存）。這裡只顯示對照，不會自動停售或關閉表單。
+                        庫存數量在 <Link to="/inventory" className="text-[#4A9A7A] font-bold underline">庫存管理頁</Link> 修改（年節限定＝年菜庫存，平常也賣＝冷凍包庫存）。這裡只做對照，不會自動停售或關閉表單；要停售某個品項，在年菜點單頁長按該品項。
                     </p>
-                    {inventoryItems.length > 0 && (
+                    {inventoryItems.length > 0 ? (
                         <div className="overflow-x-auto">
                             <table className="w-full text-sm">
                                 <thead>
@@ -274,17 +325,38 @@ const NianfaiAdminPage = () => {
                                     })}
                                 </tbody>
                             </table>
-                            <p className="text-xs text-gray-400 mt-2">單品的訂購量已把套餐拆開計入；套餐列顯示的是套餐本身的點購份數。</p>
+                            <p className="text-xs text-gray-400 mt-2">單品的訂購量已把套餐拆開計入；套餐那一列是套餐本身的份數。</p>
                         </div>
-                    )}
-
-                    {inventoryItems.length === 0 && <p className="text-gray-400 text-center py-6">目前沒有年菜品項</p>}
-                </div>
+                    ) : <p className="text-gray-400 text-center py-6">目前沒有年菜品項</p>}
+                </Card>
             )}
 
-            {activeYear && status !== 'archived' && gas?.ok && gas?.created && (
-                <NianfaiMailCard year={activeYear} number={7} gas={gas} showAlert={showAlert} showConfirm={showConfirm}
-                    onChanged={() => setGasReload(k => k + 1)} />
+            {yearOpen && (
+                <>
+                    <Group title="三、收單與年度結束" />
+                    <Card id="s-close" n={9} title="收單與封存"
+                        desc="收單：預購截止、不再接單時按（桌位頁的年菜點單隱藏）。封存：全部取貨、寄出完成後按（年菜畫面全部隱藏，恢復平常營業；資料都保留）。"
+                        badge={status === 'closed' ? <span className="text-sm font-bold text-gray-600 bg-gray-100 rounded-lg px-2 py-1">已收單</span> : null}>
+                        {status === 'preparing' ? (
+                            <p className="text-sm text-gray-400">開賣後才會用到。</p>
+                        ) : (
+                            <div className="flex flex-wrap items-center gap-3">
+                                <button onClick={handleAdvanceStatus} disabled={isToggling} className={`${btnPrimary} ${status === 'selling' ? 'bg-[#D47856] hover:bg-[#C46848]' : 'bg-gray-700 hover:bg-gray-800'}`}>
+                                    {isToggling ? '處理中...' : status === 'selling' ? '收單' : '封存（年度結束）'}
+                                </button>
+                                <button onClick={handleRevertStatus} disabled={isToggling}
+                                    className="px-4 py-2.5 rounded-lg font-bold text-gray-500 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-sm">
+                                    返回上一步（退回「{STATUS_LABELS[STATUS_ORDER[STATUS_ORDER.indexOf(status) - 1]]}」，修正誤按）
+                                </button>
+                            </div>
+                        )}
+                    </Card>
+
+                    <div id="s-tools" className="scroll-mt-4">
+                        <NianfaiGoogleCard part="tools" year={activeYear} number={10} gasData={gas} onReload={() => setGasReload(k => k + 1)}
+                            showAlert={showAlert} showConfirm={showConfirm} salesStatus={status} />
+                    </div>
+                </>
             )}
             {dialog}
         </div>
