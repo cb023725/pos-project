@@ -245,6 +245,12 @@ export default function NianfaiGoogleCard({ year, number, part = 'steps', gasDat
                                         <p className="text-gray-500 pt-1.5">{desc}</p>
                                     </div>
                                 ))}
+                                {!live && (
+                                    <div className="flex items-start gap-3 pt-3 border-t border-dashed border-gray-200">
+                                        <button onClick={handleClearTest} disabled={!!busy} className={`${btn} bg-white border border-[#C1032F] text-[#C1032F] flex-shrink-0 w-40`}>{busy === 'cleartest' ? '清空中...' : '清空測試資料'}</button>
+                                        <p className="text-gray-500 pt-1.5"><b className="text-[#C1032F]">只在測試中出現，正式上線後就沒有這個按鈕。</b>清空表單回覆、試算表訂單與寄信紀錄、WebPOS 這個年度的年菜單，流水號回到 001，從乾淨的表單重新測試。只清年菜，一般營業資料不會動。</p>
+                                    </div>
+                                )}
                             </div>
                         </details>
             </div>
@@ -311,12 +317,7 @@ export default function NianfaiGoogleCard({ year, number, part = 'steps', gasDat
 
                         <Step n={4} title="真實測試" done={live} active={created && !live}>
                             <p>用 WebPOS 年菜點單、補資料送出，也可以直接在表單網頁填幾張，確認：表單回應有新增、確認信有收到、宅配／自取有出現、統計／備料表數字正確。</p>
-                            {created && !live && (
-                                <>
-                                    <p>想從乾淨的表單重新測：按下面清空測試資料（只清年菜，不動一般營業；清完還是測試中，可以按很多次）。</p>
-                                    <button onClick={handleClearTest} disabled={!!busy} className={`${btn} border border-[#C1032F] text-[#C1032F]`}>{busy === 'cleartest' ? '清空中...' : '清空測試資料'}</button>
-                                </>
-                            )}
+                            {created && !live && <p className="text-gray-500">想從乾淨的表單重新測：最下面「維護工具」點開有「清空測試資料」（只清年菜、只限測試中）。</p>}
                         </Step>
 
                         <Step n={5} title="測試完畢，正式上線" done={live} active={created && checked && !live}>
