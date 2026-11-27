@@ -110,6 +110,27 @@ export default function NianfaiMailCard({ year, number, gas, showAlert, showConf
         }
     };
 
+    // 補寄：已寄過的再寄一次（以防萬一），缺項照樣擋
+    const handleResend = async (r) => {
+        if (!await showConfirm(`再寄一次「${current.label}」給 ${r.name || '（未填姓名）'}`, {
+            title: '補寄', icon: 'info', confirmText: '補寄', note: `上次寄出：${r.at || '—'}　${r.email}`,
+        })) return;
+        setBusy('resend:' + r.id);
+        try {
+            const res = (await sendNianfaiMail(year, type, [r.id], type === 'pickupReminder' ? date : null, { resend: true })).result;
+            if (res.sent.length) await showAlert('已補寄 1 封', { title: '補寄完成', icon: 'success' });
+            else {
+                const why = res.failed[0]?.error || res.overQuota.length && '今天額度用完' || res.skipped[0]?.reason || '沒有寄出';
+                await showAlert(why, { title: '補寄失敗', icon: 'warning' });
+            }
+        } catch (e) {
+            await showAlert(e.message, { title: '補寄失敗', icon: 'warning' });
+        } finally {
+            setBusy('');
+            load();
+        }
+    };
+
     const handleReminder = async () => {
         const on = !gas?.reminderOn;
         if (!await showConfirm(on ? '每天 08:00 自動寄取貨提醒給「明天」取貨的客人' : '停止自動寄取貨提醒', {
@@ -147,7 +168,7 @@ export default function NianfaiMailCard({ year, number, gas, showAlert, showConf
                     <button onClick={load} disabled={!!busy} className="px-3 py-1.5 rounded-lg bg-gray-100 text-gray-600 font-bold hover:bg-gray-200 disabled:opacity-50">重新整理</button>
                 </div>
             </div>
-            <p className="text-sm text-gray-500 mb-4">和試算表「📧 年菜寄信」選單共用寄信狀態，兩邊寄過的都不會重寄。「已寄未確認」的客人可以電話提醒。</p>
+            <p className="text-sm text-gray-500 mb-4">和試算表「寄信」分頁共用寄信狀態，兩邊寄過的不會重複寄；要再寄一次請按該客人的「補寄」。「已寄未確認」的客人可以電話提醒。</p>
 
             {/* 自動提醒：宅配（寄出前確認）／自取（取貨提醒），條件不符就不寄並提醒 */}
             {rem && (
@@ -166,6 +187,10 @@ export default function NianfaiMailCard({ year, number, gas, showAlert, showConf
                                 className="border border-gray-300 rounded-lg px-2 py-1.5" />
                             <button onClick={() => handleDeliveryReminder({ at: deliveryAt })} disabled={!!busy || toInputDt(rem.delivery.at) === deliveryAt}
                                 className="px-3 py-1.5 rounded-lg font-bold text-white bg-gray-700 disabled:opacity-40">{busy === 'delivery' ? '儲存中...' : '儲存時間'}</button>
+                            {rem.delivery.at && (
+                                <button onClick={() => { setDeliveryAt(''); handleDeliveryReminder({ at: '' }); }} disabled={!!busy}
+                                    className="px-3 py-1.5 rounded-lg font-bold text-gray-600 bg-gray-100 hover:bg-gray-200 disabled:opacity-40">清除時間</button>
+                            )}
                         </div>
                         {rem.delivery.on && (rem.delivery.problem
                             ? <p className="text-sm font-bold text-red-600">⚠️ {rem.delivery.problem}</p>
@@ -265,6 +290,12 @@ export default function NianfaiMailCard({ year, number, gas, showAlert, showConf
                                     <span className={`inline-block text-xs font-bold px-2 py-1 rounded-full ${st.cls}`}>{st.text}{r.at && r.status !== 'skip' ? ` ${short(r.at)}` : ''}</span>
                                     {r.reason && <div className={`text-xs mt-1 ${r.status === 'failed' || /託運單號|出貨日/.test(r.reason) ? 'text-red-600 font-bold' : 'text-gray-400'}`}>{r.reason}</div>}
                                 </div>
+                                {['sent', 'opened', 'acked'].includes(r.status) && (
+                                    <button onClick={(e) => { e.preventDefault(); handleResend(r); }} disabled={!!busy}
+                                        className="flex-shrink-0 px-2.5 py-1 rounded-lg text-xs font-bold text-[#C1032F] border border-[#C1032F]/40 hover:bg-[#C1032F]/5 disabled:opacity-40">
+                                        {busy === 'resend:' + r.id ? '寄送中...' : '補寄'}
+                                    </button>
+                                )}
                             </label>
                         );
                     })}

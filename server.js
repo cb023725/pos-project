@@ -2982,10 +2982,10 @@ app.get('/api/nianfai/gas/mail-overview', nianfaiGasRoute(async (year) => {
     return { ok: true, ...r.result };
 }));
 app.post('/api/nianfai/gas/mail-send', nianfaiGasRoute(async (year, req) => {
-    const { type, date, ids } = req.body || {};
+    const { type, date, ids, resend } = req.body || {};
     if (!NIANFAI_MAIL_TYPES.includes(type)) throw new Error('未知的信件類型');
     if (!Array.isArray(ids) || !ids.length) throw new Error('沒有要寄的訂單');
-    const r = await callNianfaiGas('mailSend', { year, type, date: date || null, ids }, { timeoutMs: 300000 });
+    const r = await callNianfaiGas('mailSend', { year, type, date: date || null, ids, resend: !!resend }, { timeoutMs: 300000 });
     return { ok: true, result: r.result };
 }));
 app.post('/api/nianfai/gas/mail-sample', nianfaiGasRoute(async (year, req) => {

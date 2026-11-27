@@ -14,7 +14,7 @@
  *   rebuildTabs       依目前「設定」重建宅配／自取（保留手動欄）、查詢、統計、備料表（不動表單回應）
  *   syncOrders        重新整理宅配／自取（平常表單送出、修改表單回應時會自動做）
  *   mailPreview       寄信預覽：{ type: preShip｜shipped｜pickupReminder, date }→ 可寄名單、跳過原因、剩餘額度
- *   mailSend          寄信：{ type, ids, date }（ids 為預覽確認過的訂單編號）
+ *   mailSend          寄信：{ type, ids, date, resend }（ids 為預覽確認過的訂單編號；resend＝補寄已寄過的）
  *   setReminder       取貨提醒自動寄送開關 { on }
  *   diagnose          回傳回應分頁、觸發條件、各分頁前幾列的計算結果（排查用）
  *   resetTestData     只限 dev：清空表單回應、修改紀錄與送單紀錄（WebPOS「一鍵清空測試資料」）
@@ -74,7 +74,7 @@ function doPost(e) {
       case 'mailPreview':
         return nfJson_({ ok: true, result: nfMailPreview_(body.type, body.date) });
       case 'mailSend':
-        return nfJson_({ ok: true, result: nfMailSend_(body.type, body.ids, body.date) });
+        return nfJson_({ ok: true, result: nfMailSend_(body.type, body.ids, body.date, { resend: !!body.resend }) });
       case 'testSubmit':
         return nfJson_({ ok: true, result: nfTestSubmit_(body.order) });
       case 'testStatus':
@@ -262,6 +262,9 @@ function nfGoLive_(accepting) {
   var bankMissing = nfBankMissing_();
   if (bankMissing.length) throw new Error('請先在試算表「設定」填好匯款資訊：' + bankMissing.join('、') + '（確認信會用到，沒填客人看不到匯款帳號）');
   var result = nfClearAllResponses_();
+  // 測試時填的寄出前確認時間（通常是今天）一定要清掉：不然上線後第一次檢查就會在還沒有宅配客時「寄出 0 封」並記成已寄過，
+  // 真正的客人反而收不到。清空後 WebPOS 會提醒「還沒指定寄出時間」，到時再填實際日期
+  nfSetKvText_('寄出前確認時間', '');
   NF_CTX.meta.live = true;
   NF_CTX.meta.liveAt = nfFormatTimestamp_(new Date());
   nfSaveMeta_(NF_CTX.env, NF_CTX.year, NF_CTX.meta);
@@ -283,6 +286,7 @@ function nfClearAllResponses_() {
   var prefix = 'SUB_' + NF_CTX.env + ':' + NF_CTX.year + ':';
   var props = nfProps_();
   Object.keys(props.getProperties()).forEach(function (k) { if (k.indexOf(prefix) === 0) props.deleteProperty(k); });
+  props.deleteProperty('PRESHIP_AUTO_' + NF_CTX.env + ':' + NF_CTX.year); // 自動寄出前確認的「已寄過」紀錄也歸零
   return { cleared: Math.max(last - 1, 0) };
 }
 

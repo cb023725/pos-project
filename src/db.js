@@ -370,8 +370,8 @@ export async function getNianfaiMailOverview(year) {
 export async function previewNianfaiMail(year, type, date) {
     return api('POST', '/api/nianfai/gas/mail-preview', { year, type, date });
 }
-export async function sendNianfaiMail(year, type, ids, date) {
-    return api('POST', '/api/nianfai/gas/mail-send', { year, type, ids, date });
+export async function sendNianfaiMail(year, type, ids, date, { resend = false } = {}) {
+    return api('POST', '/api/nianfai/gas/mail-send', { year, type, ids, date, resend });
 }
 export async function setNianfaiReminder(year, on) {
     return api('POST', '/api/nianfai/gas/set-reminder', { year, on });

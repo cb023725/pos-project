@@ -106,7 +106,7 @@ function nfReadOrderSheets_(ss, settings) {
       var r = { _kind: kind };
       head.forEach(function (h, j) { var d = byHeader[h]; if (d) r[d.key] = row[j]; });
       if (!r.id) return;
-      r.id = String(r.id);
+      r.id = nfIdStr_(r.id);
       out.rows[kind].push(r);
       var st = out.state[r.id] || {};
       defs.forEach(function (d) { if (d.state && r[d.key] !== undefined) st[d.key] = r[d.key]; });
@@ -481,9 +481,11 @@ function nfMailState_(id) {
   try { return raw ? JSON.parse(raw) : {}; } catch (e) { return {}; }
 }
 
-function nfSetMailState_(id, type, status) {
+function nfSetMailState_(id, type, status, opts) {
   var st = nfMailState_(id);
+  var old = st[type] || {};
   st[type] = { status: status, at: nfFormatTimestamp_(new Date()) }; // 重寄會清掉舊的開信時間
+  if (opts && opts.keepAck && old.ackAt) { st[type].ackAt = old.ackAt; if (old.ackFast) st[type].ackFast = old.ackFast; } // 補寄：客人之前的確認保留
   nfProps_().setProperty(nfMailKey_(id), JSON.stringify(st));
   return st[type];
 }

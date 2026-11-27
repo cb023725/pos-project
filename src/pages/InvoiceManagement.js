@@ -140,6 +140,8 @@ const InvoiceManagementPage = () => {
     };
 
     const formatOrderId = (inv) => {
+        // 年菜單沒有每日流水號（不佔一般單號），顯示年菜訂購編號；不能用訂單 id 末三碼，看起來會像一般單號
+        if (inv?.isNianfai) return String(inv.invoiceNumber || '').replace(/^NF-/, '') || '年菜';
         if (inv?.dailyOrderNo) return String(inv.dailyOrderNo).padStart(3, '0');
         if (!inv?.orderId) return '000';
         return inv.orderId.toString().slice(-3).padStart(3, '0');
@@ -191,7 +193,7 @@ const InvoiceManagementPage = () => {
     };
 
     const handleReprintCustomer = () => {
-        if (!selectedOrder) return;
+        if (!selectedOrder || selectedOrder.isNianfai) return; // 年菜單據格式不同，不從這裡用一般顧客聯補印
         fetch(`${BACKEND_URL}/print`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -226,7 +228,9 @@ const InvoiceManagementPage = () => {
                     displayInvoiceNumber: getDisplayInvoiceNumber(inv.id),
                     paymentTime: inv.paymentTime,
                     voidTime: inv.voidTime,
-                    invoiceStatus: inv.status
+                    invoiceStatus: inv.status,
+                    isNianfai: !!inv.isNianfai,
+                    nianfaiOrderNo: inv.isNianfai ? formatOrderId(inv) : null,
                 });
                 setIsDetailModalOpen(true);
             }
@@ -370,8 +374,8 @@ const InvoiceManagementPage = () => {
                                             {formatOrderId(inv)}
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-center align-middle">
-                                            <span className={`px-3 py-1 rounded-full font-bold text-xs ${inv.orderType === '外帶' ? 'bg-[#D47856]/15 text-[#D47856]' : 'bg-[#4A9A7A]/15 text-[#4A9A7A]'}`}>
-                                                {inv.orderType}
+                                            <span className={`px-3 py-1 rounded-full font-bold text-xs ${inv.isNianfai ? 'bg-[#C1032F]/10 text-[#C1032F]' : inv.orderType === '外帶' ? 'bg-[#D47856]/15 text-[#D47856]' : 'bg-[#4A9A7A]/15 text-[#4A9A7A]'}`}>
+                                                {inv.isNianfai ? '年菜' : inv.orderType}
                                             </span>
                                         </td>
                                         <td className="px-6 py-4 align-middle">
@@ -476,10 +480,17 @@ const InvoiceManagementPage = () => {
                                     <p className="text-gray-400 font-bold">發票號碼</p>
                                     <p className="font-mono font-bold text-[#4A9A7A]">{selectedOrder.displayInvoiceNumber}</p>
                                 </div>
-                                <div>
-                                    <p className="text-gray-400 font-bold">桌號</p>
-                                    <p className="font-bold text-gray-800">{selectedOrder.table || '外帶'}</p>
-                                </div>
+                                {selectedOrder.isNianfai ? (
+                                    <div>
+                                        <p className="text-gray-400 font-bold">年菜訂購編號</p>
+                                        <p className="font-mono font-bold text-[#C1032F]">{selectedOrder.nianfaiOrderNo}</p>
+                                    </div>
+                                ) : (
+                                    <div>
+                                        <p className="text-gray-400 font-bold">桌號</p>
+                                        <p className="font-bold text-gray-800">{selectedOrder.table || '外帶'}</p>
+                                    </div>
+                                )}
                                 <div className="col-span-2">
                                     <p className="text-gray-400 font-bold">結帳時間</p>
                                     <p className="text-gray-700">{formatDateTime24h(selectedOrder.paymentTime)}</p>
@@ -531,9 +542,13 @@ const InvoiceManagementPage = () => {
                         </div>
 
                         <div className="p-4 bg-gray-50 flex gap-3">
-                            <button onClick={handleReprintCustomer} className="flex-1 py-3 bg-[#4A9A7A] text-white rounded-xl font-bold hover:bg-[#3A8A6A] transition-colors">
-                                補印顧客聯
-                            </button>
+                            {selectedOrder.isNianfai ? (
+                                <p className="flex-1 py-3 text-center text-xs font-bold text-gray-500">年菜單據請到「年菜訂單」查看，這裡不補印</p>
+                            ) : (
+                                <button onClick={handleReprintCustomer} className="flex-1 py-3 bg-[#4A9A7A] text-white rounded-xl font-bold hover:bg-[#3A8A6A] transition-colors">
+                                    補印顧客聯
+                                </button>
+                            )}
                             <button onClick={() => setIsDetailModalOpen(false)} className="flex-1 py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-gray-800 transition-colors">
                                 關閉
                             </button>

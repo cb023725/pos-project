@@ -12,7 +12,13 @@ const chain = (obj) => new Proxy(obj, { get: (t, k) => (k in t ? t[k] : () => ch
 
 // ── Spreadsheet mock ──
 function makeSheet(name) {
-  const data = []; const notes = {}; let formUrl = null;
+  const data = []; const notes = {}; const fmts = {}; let formUrl = null;
+  // 跟真的試算表一樣：沒有設純文字格式（@）的儲存格，寫入「2026/11/27 14:43:53」這類字串會被自動轉成日期
+  const autoType = (rr, cc, v) => {
+    if (typeof v !== 'string' || fmts[rr + ',' + cc] === '@') return v;
+    const m = /^(\d{4})\/(\d{1,2})\/(\d{1,2}) (\d{1,2}):(\d{2}):(\d{2})$/.exec(v);
+    return m && typeof ctx !== 'undefined' && ctx._Date ? new ctx._Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : v;
+  };
   const sh = {
     _data: data, name,
     getName: () => sh.name, setName: (n) => { sh.name = n; return sh; },
@@ -22,7 +28,7 @@ function makeSheet(name) {
     getRange: (r, c, nr = 1, nc = 1) => {
       if (typeof r === 'string') { const m = /^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/.exec(r); const col = (L) => L.split('').reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0); const c1 = col(m[1]), r1 = +m[2]; return sh.getRange(r1, c1, m[4] ? (+m[4] - r1 + 1) : 1, m[3] ? (col(m[3]) - c1 + 1) : 1); }
       const get = (i, j) => ((data[r - 1 + i] || [])[c - 1 + j]);
-      const set = (i, j, v) => { const rr = r - 1 + i; data[rr] = data[rr] || []; data[rr][c - 1 + j] = v; };
+      const set = (i, j, v) => { const rr = r - 1 + i; data[rr] = data[rr] || []; data[rr][c - 1 + j] = autoType(rr, c - 1 + j, v); };
       const rg = chain({
         getValues: () => Array.from({ length: nr }, (_, i) => Array.from({ length: nc }, (_, j) => get(i, j) ?? '')),
         setValues: (vals) => { vals.forEach((row, i) => row.forEach((v, j) => set(i, j, v))); return rg; },
@@ -32,6 +38,7 @@ function makeSheet(name) {
         getNote: () => notes[`${r},${c}`] || '', setNote: (n) => { notes[`${r},${c}`] = n; return rg; },
         getA1Notation: () => { let n = c, L = ''; while (n > 0) { const m = (n - 1) % 26; L = String.fromCharCode(65 + m) + L; n = Math.floor((n - 1) / 26); } return L + r; },
         getRow: () => r, getColumn: () => c, getNumRows: () => nr, getNumColumns: () => nc, getSheet: () => sh,
+        setNumberFormat: (f) => { for (let i = 0; i < nr; i++) for (let j = 0; j < nc; j++) fmts[(r - 1 + i) + ',' + (c - 1 + j)] = f; return rg; },
         clearContent: () => { for (let i = 0; i < nr; i++) for (let j = 0; j < nc; j++) set(i, j, ''); return rg; },
         protect: () => chain({ addEditor: () => {}, getEditors: () => [], removeEditors: () => {}, canDomainEdit: () => false }),
       });
@@ -182,7 +189,11 @@ run('goLive：匯款資訊沒填完 → 擋下', () => { ['匯款戶名','匯款
   [['匯款戶名','測試戶名'],['匯款銀行','測試銀行'],['匯款分行','測試分行'],['匯款帳號','000123456789']].forEach(([k, v]) => ctx.nfSetKv_(k, v));
   return { msg, live: !!ctx.NF_CTX.meta.live, missingAfterFill: ctx.nfBankMissing_() }; });
 run('goLive (第一次)', () => { ctx.nfSubmitWebposOrder_({ orderId: 303, seqLabel: '27002', customerName: 't', customerPhone: '1', email: 'goodgoodeatrestaurant@gmail.com', deliveryMethod: 'pickup', pickupDate: '2027-01-29', items: [{ name: '花雕雞', qty: 1 }] });
-  const r = ctx.nfGoLive_(false); return { ...r, rows: respSheet.getLastRow(), accepting: ctx.NF_CTX.form.isAcceptingResponses(), responses: ctx.NF_CTX.form.getResponses().length }; });
+  ctx.nfSetDeliveryReminder_(true, '2026/11/27 15:30'); // 測試時填的今天時間
+  const r = ctx.nfGoLive_(false);
+  const rem = ctx.nfReminderStatus_().delivery;
+  if (rem.at !== '' || !rem.on) throw new Error('正式上線應清空寄出前確認時間、開關保留：' + JSON.stringify(rem));
+  return { ...r, rows: respSheet.getLastRow(), accepting: ctx.NF_CTX.form.isAcceptingResponses(), responses: ctx.NF_CTX.form.getResponses().length, preShipAtCleared: rem.at === '' }; });
 run('goLive (第二次) → 應該拒絕', () => { try { ctx.nfGoLive_(true); return 'NO ERROR (bad)'; } catch (e) { return 'error: ' + e.message; } });
 run('ping live flag', () => { const p = ctx.nfPing_('dev', 2027); return { live: p.live, liveAt: !!p.liveAt }; });
 run('正式上線後第一筆從第 2 列開始', () => { ctx.NF_CTX.form.setAcceptingResponses(true); ctx.nfSubmitWebposOrder_({ orderId: 404, seqLabel: '27001', customerName: '正式', customerPhone: '1', email: 'goodgoodeatrestaurant@gmail.com', deliveryMethod: 'pickup', pickupDate: '2027-01-29', items: [{ name: '花雕雞', qty: 1 }] }); return respSheet.getRange(2, 1, 1, 1).getValues()[0][0] ? 'row 2 filled' : 'row 2 empty (bad)'; });
@@ -381,7 +392,25 @@ run('寄信分頁：選種類→列名單→①準備→②確定寄出（2 分�
   const noPrep = (() => { sh.getRange('B6').setValue(true); ctx.nfOnEdit({ range: sh.getRange('B6'), source: ss() }); return sh.getRange('C6').getValue(); })();
   sh.getRange('B5').setValue(true); ctx.nfOnEdit({ range: sh.getRange('B5'), source: ss() }); const prep = sh.getRange('C5').getValue();
   sh.getRange('B6').setValue(true); ctx.nfOnEdit({ range: sh.getRange('B6'), source: ss() });
-  return { list, noPrep, prep: String(prep).slice(0, 40), result: String(sh.getRange('C6').getValue()).slice(12), mails: ctx._mails.filter(m => m.html).length };
+  const mails = ctx._mails.filter(m => m.html).length;
+  if (mails !== 1) throw new Error('寄信分頁應該寄出 1 封，實際 ' + mails + ' 封（訂單編號被轉成日期就會對不到）');
+  return { list, noPrep, prep: String(prep).slice(0, 40), result: String(sh.getRange('C6').getValue()).slice(12), mails };
+});
+run('寄信分頁補寄：已寄過的預設不勾，勾了才補寄；客人確認保留', () => {
+  const sh = ss().getSheetByName('寄信'); ctx._mails = [];
+  const row = sh.getRange(9, 1, 1, 8).getValues()[0];
+  if (row[0] !== false || row[4] !== '已寄出') throw new Error('已寄過的應該可勾但預設不勾：' + JSON.stringify(row));
+  const id = row[7]; const st = ctx.nfMailState_(id); st.pickupReminder.ackAt = '2026/11/27 15:00:00'; ctx._props[ctx.nfMailKey_(id)] = JSON.stringify(st);
+  sh.getRange('B5').setValue(true); ctx.nfOnEdit({ range: sh.getRange('B5'), source: ss() }); const none = sh.getRange('C5').getValue();
+  sh.getRange(9, 1).setValue(true); ctx.nfOnEdit({ range: sh.getRange(9, 1), source: ss() });
+  sh.getRange('B5').setValue(true); ctx.nfOnEdit({ range: sh.getRange('B5'), source: ss() }); const prep = String(sh.getRange('C5').getValue());
+  sh.getRange('B6').setValue(true); ctx.nfOnEdit({ range: sh.getRange('B6'), source: ss() });
+  const result = String(sh.getRange('C6').getValue()); const mails = ctx._mails.filter(m => m.html).length;
+  if (mails !== 1 || !/補寄 1 封/.test(result) || !/補寄：/.test(prep)) throw new Error('補寄失敗：' + prep + ' / ' + result);
+  const after = ctx.nfMailState_(id).pickupReminder;
+  if (after.ackAt !== '2026/11/27 15:00:00') throw new Error('補寄後客人確認不見了');
+  const api = ctx.nfMailSend_('pickupReminder', [id], null, {}); // 沒有 resend 不會重寄
+  return { none, prep: prep.slice(0, 40), result: result.slice(12), noResendByDefault: api.sent.length === 0 && /^已寄過/.test(api.skipped[0].reason) };
 });
 run('分頁', () => ss().getSheets().map(s => s.getName()).join(' | '));
 run('統計／備料表公式（取樣）', () => ({ stats: ss().getSheetByName('統計').getRange(2, 2).getValue().slice(0, 160), prepHead: ss().getSheetByName('備料表').getRange(1, 1, 1, 4).getValues()[0].join(' | '),

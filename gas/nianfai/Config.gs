@@ -133,6 +133,11 @@ function nfFormDateLabel_(iso) {
   return +m[1] + '/' + (+m[2]) + '/' + (+m[3]) + ' (' + wd + ')';
 }
 
+/** 訂單編號（表單送出時間戳記）→ 字串。儲存格沒設純文字格式時，試算表會把它自動轉成日期，讀回來要轉回原本的格式 */
+function nfIdStr_(v) {
+  return v instanceof Date ? nfFormatTimestamp_(v) : String(v == null ? '' : v).trim();
+}
+
 // 從表單選項或 Sheet 儲存格解析日期 → 'YYYY-MM-DD'（比對用）
 function nfIsoDate_(v) {
   if (v instanceof Date) return Utilities.formatDate(v, NF.TZ, 'yyyy-MM-dd');

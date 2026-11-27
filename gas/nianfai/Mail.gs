@@ -17,13 +17,14 @@
  * 自動取貨提醒時小卡ID 必填（沒填不寄、通知店家）；自動寄出前確認不需要小卡。
  */
 /** ids：只看這些訂單（Sheet 選單選取的列）；取貨提醒有指定 ids 時不限日期 */
-function nfMailPlan_(type, dateIso, ids) {
+function nfMailPlan_(type, dateIso, ids, opts) { // opts.resend：指定的訂單已寄過也再寄一次（補寄），其他條件照樣檢查
   var T = NF_MAIL_TYPES[type];
   if (!T) throw new Error('未知的信件類型：' + type);
   nfSyncOrderSheets_();
   var settings = nfReadSettings_();
   var prev = nfReadOrderSheets_(nfSpreadsheet_(), settings);
-  var only = ids && ids.length ? ids.map(String) : null;
+  var only = ids && ids.length ? ids.map(nfIdStr_) : null;
+  var resend = !!(opts && opts.resend && only);
   var target = type === 'pickupReminder' ? (dateIso || (only ? null : nfTomorrowIso_())) : null;
   var list = [];
   prev.rows[T.kind].forEach(function (r) {
@@ -33,11 +34,11 @@ function nfMailPlan_(type, dateIso, ids) {
     var ms = nfMailState_(r.id)[type];
     var email = String(r.email || '').trim();
     var reason = '';
-    if (ms && ms.status === '已寄出') reason = '已寄過（' + ms.at + '）';
+    if (ms && ms.status === '已寄出' && !resend) reason = '已寄過（' + ms.at + '）';
     else if (!email || email.toLowerCase() === NF.STORE_EMAIL.toLowerCase()) reason = '沒有 email';
     else if (type === 'shipped' && !r.shipDate) reason = '缺出貨日';
     else if (type === 'shipped') reason = nfTrackNoProblem_(r, prev.rows.delivery);
-    list.push({ id: r.id, name: String(r.name || ''), email: email, reason: reason, failed: !!(ms && ms.status !== '已寄出'), row: r });
+    list.push({ id: r.id, name: String(r.name || ''), email: email, reason: reason, failed: !!(ms && ms.status !== '已寄出'), resend: !!(resend && ms && ms.status === '已寄出'), row: r });
   });
   return { type: type, label: T.label, date: target, list: list, settings: settings };
 }
@@ -106,8 +107,8 @@ function nfMailQuota_() {
 function nfMailSend_(type, ids, dateIso, opts) {
   opts = opts || {};
   var result = nfWithLock_(function () { // 避免兩邊同時按寄出造成重寄
-    var p = nfMailPlan_(type, dateIso, ids);
-    var want = ids && ids.length ? ids.map(String) : null;
+    var p = nfMailPlan_(type, dateIso, ids, { resend: opts.resend });
+    var want = ids && ids.length ? ids.map(nfIdStr_) : null;
     var todo = p.list.filter(function (x) { return !x.reason && (!want || want.indexOf(x.id) >= 0); });
     var quota = nfMailQuota_();
     var overQuota = [];
@@ -116,7 +117,7 @@ function nfMailSend_(type, ids, dateIso, opts) {
     var sent = [], failed = [];
     todo.forEach(function (x) {
       var cur = nfMailState_(x.id)[type]; // 寄之前再確認一次（WebPOS 與 Sheet 選單同時寄也不會重複）
-      if (cur && cur.status === '已寄出') return;
+      if (cur && cur.status === '已寄出' && !x.resend) return;
       var tries = opts.retry ? 2 : 1, err = null;
       for (var t = 0; t < tries; t++) {
         try { nfSendNotice_(type, x.row, p.settings, attachment); err = null; break; } catch (e) { err = e; Utilities.sleep(1000); }
@@ -126,8 +127,8 @@ function nfMailSend_(type, ids, dateIso, opts) {
         nfSetMailState_(x.id, type, '失敗：' + msg);
         failed.push({ id: x.id, name: x.name, error: msg });
       } else {
-        nfSetMailState_(x.id, type, '已寄出');
-        sent.push({ id: x.id, name: x.name, email: x.email });
+        nfSetMailState_(x.id, type, '已寄出', { keepAck: x.resend });
+        sent.push({ id: x.id, name: x.name, email: x.email, resend: x.resend });
       }
       Utilities.sleep(300);
     });
@@ -137,7 +138,10 @@ function nfMailSend_(type, ids, dateIso, opts) {
       sent: sent,
       failed: failed,
       overQuota: overQuota.map(function (x) { return { id: x.id, name: x.name }; }),
-      skipped: p.list.filter(function (x) { return x.reason; }).map(function (x) { return { id: x.id, name: x.name, reason: x.reason }; }),
+      skipped: p.list.filter(function (x) { return x.reason; }).map(function (x) { return { id: x.id, name: x.name, reason: x.reason }; })
+        // 指定的訂單在名單裡找不到（已取消、取貨日不符、編號對不上）：也列出來，不要默默寄出 0 封
+        .concat((want || []).filter(function (id) { return !p.list.some(function (x) { return x.id === id; }); })
+          .map(function (id) { return { id: id, name: id, reason: '找不到這張訂單（已取消或取貨日不符）' }; })),
     };
   });
   nfSyncOrderSheets_(); // 把寄信狀態顯示到工作表

@@ -41,17 +41,23 @@ function nfMenuSend(type) {
   sh.getActiveRangeList().getRanges().forEach(function (rg) {
     var r0 = Math.max(rg.getRow(), 2), r1 = rg.getRow() + rg.getNumRows() - 1;
     if (r1 < r0) return;
-    sh.getRange(r0, idCol, r1 - r0 + 1, 1).getValues().forEach(function (v) { if (v[0] && ids.indexOf(String(v[0])) < 0) ids.push(String(v[0])); });
+    sh.getRange(r0, idCol, r1 - r0 + 1, 1).getValues().forEach(function (v) { var id = nfIdStr_(v[0]); if (id && ids.indexOf(id) < 0) ids.push(id); });
   });
   if (!ids.length) {
     ui.alert(T.label, '請先選取要寄的訂單列（點列號可以選整列，按住 ⌘ 可以多選）。', ui.ButtonSet.OK);
     return;
   }
   var plan = nfMailPlan_(type, null, ids);
+  var sentBefore = plan.list.filter(function (x) { return /^已寄過/.test(x.reason); });
+  if (sentBefore.length && ui.alert('補寄？', '選取的訂單裡有 ' + sentBefore.length + ' 位已經寄過：\n' +
+      sentBefore.map(function (x) { return '・' + x.name + '（' + x.reason + '）'; }).join('\n') + '\n\n要再寄一次（補寄）嗎？按「否」就只寄還沒寄過的。', ui.ButtonSet.YES_NO) === ui.Button.YES) {
+    plan = nfMailPlan_(type, null, ids, { resend: true });
+  }
+  var resend = plan.list.some(function (x) { return x.resend; });
   var ok = plan.list.filter(function (x) { return !x.reason; });
   var skip = plan.list.filter(function (x) { return x.reason; });
   var lines = [];
-  if (ok.length) lines.push('會寄給 ' + ok.length + ' 位：\n' + ok.map(function (x) { return '・' + x.name + '（' + x.email + '）'; }).join('\n'));
+  if (ok.length) lines.push('會寄給 ' + ok.length + ' 位：\n' + ok.map(function (x) { return '・' + x.name + '（' + x.email + '）' + (x.resend ? '［補寄］' : ''); }).join('\n'));
   if (skip.length) lines.push('不寄 ' + skip.length + ' 位：\n' + skip.map(function (x) { return '・' + x.name + '：' + x.reason; }).join('\n'));
   var quota = nfMailQuota_();
   if (quota !== null) lines.push('今天 Gmail 還能寄 ' + quota + ' 封。');
@@ -60,7 +66,7 @@ function nfMenuSend(type) {
     return;
   }
   if (ui.alert('寄出「' + T.label + '」？', lines.join('\n\n'), ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
-  var res = nfMailSend_(type, ok.map(function (x) { return x.id; }), null, {});
+  var res = nfMailSend_(type, ok.map(function (x) { return x.id; }), null, { resend: resend });
   var out = ['已寄出 ' + res.sent.length + ' 封。'];
   if (res.failed.length) out.push('寄送失敗：\n' + res.failed.map(function (x) { return '・' + x.name + '：' + x.error; }).join('\n'));
   if (res.overQuota.length) out.push('今天額度用完，明天再寄：' + res.overQuota.map(function (x) { return x.name; }).join('、'));

@@ -19,7 +19,7 @@ function nfBuildMailSheet_(ss, s) {
   sh.setRowHeight(1, 40);
   sh.getRange('A1').setValue('📧 寄信').setFontSize(16).setFontWeight('bold');
   sh.getRange(C.first, 1, 300, 1).setHorizontalAlignment('center');
-  sh.getRange('B1').setValue('選信件種類 → 勾選要寄的客人 → ① 準備寄出 → ② 確定寄出。和 WebPOS 寄信共用紀錄，寄過的不會重寄。').setFontColor('#6b7280').setFontSize(10).setWrapStrategy(SpreadsheetApp.WrapStrategy.OVERFLOW);
+  sh.getRange('B1').setValue('選信件種類 → 勾選要寄的客人 → ① 準備寄出 → ② 確定寄出。和 WebPOS 寄信共用紀錄；已寄過的預設不勾，要補寄再勾選。').setFontColor('#6b7280').setFontSize(10).setWrapStrategy(SpreadsheetApp.WrapStrategy.OVERFLOW);
   var labels = [['信件種類'], ['取貨日（取貨提醒用）'], ['① 準備寄出'], ['② 確定寄出']];
   sh.getRange(3, 1, 4, 1).setValues(labels).setFontWeight('bold').setHorizontalAlignment('right');
   var input = function (a1) { return sh.getRange(a1).setBackground('#fef3c7').setFontWeight('bold').setHorizontalAlignment('center'); };
@@ -61,24 +61,30 @@ function nfMailSheetRefresh_(sh) {
     return 0;
   }
   var values = rows.map(function (r) {
-    var can = r.status === 'ready' || r.status === 'failed';
+    var can = r.status !== 'skip'; // 已寄過的也可以勾（＝補寄），預設只勾「可寄」
+    var note = r.reason || (nfMailSheetIsSent_(r.status) ? '已寄過，要補寄請勾選' : '');
     return [can ? r.status === 'ready' : '', r.name + (r.onsite ? '（現場單）' : ''), r.phone, r.email, NF_MAIL_STATUS_TEXT[r.status] || r.status,
-      r.at ? String(r.at).slice(5, 16) : '', r.reason || '', r.id];
+      r.at ? String(r.at).slice(5, 16) : '', note, r.id];
   });
-  sh.getRange(C.first, 3, values.length, 1).setNumberFormat('@'); // 先設文字格式，電話開頭的 0 才不會被吃掉
+  // 先設文字格式：電話開頭的 0 才不會被吃掉；訂單編號（時間戳記）才不會被轉成日期而對不到訂單
+  sh.getRange(C.first, 3, values.length, 1).setNumberFormat('@');
+  sh.getRange(C.first, 8, values.length, 1).setNumberFormat('@');
   sh.getRange(C.first, 1, values.length, 8).setValues(values);
   var check = SpreadsheetApp.newDataValidation().requireCheckbox().build();
-  rows.forEach(function (r, i) { if (r.status === 'ready' || r.status === 'failed') sh.getRange(C.first + i, 1).setDataValidation(check); });
+  rows.forEach(function (r, i) { if (r.status !== 'skip') sh.getRange(C.first + i, 1).setDataValidation(check); });
   return rows.length;
 }
+
+function nfMailSheetIsSent_(status) { return status === 'sent' || status === 'opened' || status === 'acked'; }
 
 function nfMailSheetSelected_(sh) {
   var C = NF_MAIL_SHEET;
   var last = sh.getLastRow();
   if (last < C.first) return [];
+  var sentText = [NF_MAIL_STATUS_TEXT.sent, NF_MAIL_STATUS_TEXT.opened, NF_MAIL_STATUS_TEXT.acked];
   return sh.getRange(C.first, 1, last - C.first + 1, 8).getValues()
     .filter(function (r) { return r[0] === true && r[7]; })
-    .map(function (r) { return { id: String(r[7]), name: String(r[1]) }; });
+    .map(function (r) { return { id: nfIdStr_(r[7]), name: String(r[1]), resend: sentText.indexOf(String(r[4])) >= 0 }; });
 }
 
 function nfMailSheetEdit_(e) {
@@ -100,9 +106,13 @@ function nfMailSheetEdit_(e) {
     sh.getRange(C.prepareCell).setValue(false);
     var sel = nfMailSheetSelected_(sh);
     if (!sel.length) { sh.getRange(C.msgPrepare).setValue('沒有勾選要寄的客人'); props.deleteProperty(pendingKey); return; }
-    props.setProperty(pendingKey, JSON.stringify({ type: type, date: dateIso, ids: sel.map(function (x) { return x.id; }), at: Date.now() }));
+    var first = sel.filter(function (x) { return !x.resend; }), again = sel.filter(function (x) { return x.resend; });
+    props.setProperty(pendingKey, JSON.stringify({ type: type, date: dateIso, ids: first.map(function (x) { return x.id; }), resendIds: again.map(function (x) { return x.id; }), at: Date.now() }));
     var quota = nfMailQuota_();
-    sh.getRange(C.msgPrepare).setValue('將寄出 ' + sel.length + ' 封「' + NF_MAIL_TYPES[type].label + '」給：' + sel.map(function (x) { return x.name; }).join('、') +
+    var parts = [];
+    if (first.length) parts.push(first.map(function (x) { return x.name; }).join('、'));
+    if (again.length) parts.push('補寄：' + again.map(function (x) { return x.name; }).join('、'));
+    sh.getRange(C.msgPrepare).setValue('將寄出 ' + sel.length + ' 封「' + NF_MAIL_TYPES[type].label + '」給：' + parts.join('；') +
       (quota !== null ? '（今天還能寄 ' + quota + ' 封）' : '') + '。請在 2 分鐘內勾選「② 確定寄出」。');
     return;
   }
@@ -116,8 +126,14 @@ function nfMailSheetEdit_(e) {
     }
     props.deleteProperty(pendingKey);
     sh.getRange(C.msgResult).setValue('寄送中…');
-    var r = nfMailSend_(type, p.ids, p.date, {});
-    var msg = nfFormatTimestamp_(new Date()).slice(5, 16) + '　已寄出 ' + r.sent.length + ' 封「' + r.label + '」';
+    var empty = { label: NF_MAIL_TYPES[type].label, sent: [], failed: [], overQuota: [], skipped: [] };
+    var r = p.ids && p.ids.length ? nfMailSend_(type, p.ids, p.date, {}) : empty;
+    var r2 = p.resendIds && p.resendIds.length ? nfMailSend_(type, p.resendIds, p.date, { resend: true }) : empty;
+    ['sent', 'failed', 'overQuota', 'skipped'].forEach(function (k) { r[k] = r[k].concat(r2[k]); });
+    var nAgain = r.sent.filter(function (x) { return x.resend; }).length;
+    var msg = nfFormatTimestamp_(new Date()).slice(5, 16) + '　已寄出 ' + r.sent.length + ' 封「' + r.label + '」' + (nAgain ? '（其中補寄 ' + nAgain + ' 封）' : '');
+    var miss = r.skipped.filter(function (x) { return (p.ids || []).concat(p.resendIds || []).indexOf(x.id) >= 0 && !/^已寄過/.test(x.reason); });
+    if (miss.length) msg += '；沒有寄：' + miss.map(function (x) { return x.name + '（' + x.reason + '）'; }).join('、');
     if (r.failed.length) msg += '；失敗：' + r.failed.map(function (x) { return x.name + '（' + x.error + '）'; }).join('、');
     if (r.overQuota.length) msg += '；今天額度用完，明天再寄：' + r.overQuota.map(function (x) { return x.name; }).join('、');
     var already = r.skipped.filter(function (x) { return p.ids.indexOf(x.id) >= 0 && /^已寄過/.test(x.reason); });
