@@ -251,3 +251,4 @@ where id in ('inv_1775499142948','inv_1775499157078','inv_1775499177326','inv_17
 - **已部署（Yw 同意）：** 16:40 正式 GAS @2；`pos-project` fast-forward 到 92e1aeb（配色修改保留），`build_next` 換上（上一版在 `build_prev`，13:07 那版在 `build_prev_1307`），16:42 重啟 → 單一程序、前端 main.df4febe7.js、GAS 連線正常。發票頁年菜原始單號只顯示流水號末三碼（001 起），明細顯示完整訂購編號。
 - **17:01 部署（Yw 同意）：** 年菜管理頁依操作順序重排＋「現在要做的事」、修正 iPad（http）無法複製短網址。`pos-project` → 775d496，前端 main.ec793c91.js，上一版在 `build_prev`；單一程序、GAS 連線正常。
 - **17:08 換上（Yw 同意，不重啟）：** 正式環境分類設定沒有「年菜」（年菜功能上線前存的），菜單管理看不到年菜 tab → 讀取時自動補預設值（2bfc6bc）。只換 build 資料夾（express.static 每次從磁碟讀，不用重啟），前端 main.4abbe504.js。
+- **17:3x 部署（Yw 同意，不重啟）：** 正式 GAS @3（新年度沿用去年匯款／小卡／店家資料、生肖依年度）；前端 c6d8731（年菜庫存新增自動給年度 id、菜單年菜 tab 只顯示今年）main.6d028fa6.js。`MenuManagement.js` 與未提交的配色修改重疊 → stash、fast-forward、stash pop 無衝突（配色 patch 另存在備份資料夾）。
