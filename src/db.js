@@ -129,7 +129,15 @@ export const DEFAULT_CATEGORY_SETTINGS = [
 export async function getCategorySettings() {
     try {
         const { value } = await api('GET', '/api/settings/category_settings');
-        if (value) return JSON.parse(value);
+        if (value) {
+            const saved = JSON.parse(value);
+            // 「年菜」分類在年菜功能上線前存的分類設定裡沒有（正式環境就是），缺了就補預設值：
+            // 一般點餐頁不顯示、不計入營業額與 KPI；菜單管理頁的年菜 tab 才會出現（顯示與否另外看年菜年度狀態）
+            if (Array.isArray(saved) && !saved.some(c => c.name === '年菜')) {
+                return [...saved, DEFAULT_CATEGORY_SETTINGS.find(c => c.name === '年菜')];
+            }
+            return saved;
+        }
     } catch {}
     return DEFAULT_CATEGORY_SETTINGS;
 }
