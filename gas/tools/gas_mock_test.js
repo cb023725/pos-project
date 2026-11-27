@@ -431,6 +431,23 @@ run('品項改成 8 項（套餐＋7 單點）→ 宅配／自取欄位、統計
     statsUsesNewColumns: statsF.includes(ctx.nfColLetter_(hdr.indexOf('富貴套餐') + 1)), noOldItems: !hdr.includes('海味XO醬') && !prepNames.join().includes('海味XO醬') };
 });
 run('測試清空 → 宅配／自取與寄信狀態歸零', () => { ctx.NF_CTX.meta.live = false; ctx.nfResetTestData_(); return { d: ss().getSheetByName('宅配').getLastRow(), p: ss().getSheetByName('自取').getLastRow(), ml: Object.keys(ctx._props).filter(k => k.startsWith('ML_')).length }; });
+run('清空測試資料（正式環境也可用）：測試中可清、清完同一個編號可重新送單；上線後拒絕', () => {
+  ctx.NF_CTX.meta.live = false;
+  const env0 = ctx.NF_CTX.env; ctx.NF_CTX.env = 'prod'; // 正式環境也要能清（resetTestData 只限 dev）
+  try {
+    try { ctx.nfResetTestData_(); throw new Error('resetTestData 在正式環境沒擋'); } catch (e) { if (!/只有測試環境/.test(e.message)) throw e; }
+  } finally { ctx.NF_CTX.env = env0; }
+  ctx.nfSubmitWebposOrder_({ orderId: 201, seqLabel: '27001', customerName: 'A', customerPhone: '0900', email: 'a@example.com', deliveryMethod: 'pickup', pickupDate: '2027-01-30', items: [{ name: '花雕雞', qty: 1 }] });
+  const r = ctx.nfClearTestData_();
+  const left = respSheet.getLastRow();
+  ctx.nfSubmitWebposOrder_({ orderId: 301, seqLabel: '27001', customerName: 'B', customerPhone: '0900', email: 'b@example.com', deliveryMethod: 'pickup', pickupDate: '2027-01-30', items: [{ name: '花雕雞', qty: 1 }] });
+  ctx.NF_CTX.meta.live = true;
+  let blocked = false; try { ctx.nfClearTestData_(); } catch (e) { blocked = /已經正式上線/.test(e.message); }
+  ctx.NF_CTX.meta.live = false;
+  if (left !== 1 || !blocked) throw new Error(JSON.stringify({ left, blocked }));
+  ctx.nfClearTestData_();
+  return { cleared: r.cleared, rowsAfterClear: left, resubmitSameSeqOk: true, blockedWhenLive: blocked };
+});
 run('明年建立 2028：沿用 2027 的匯款資訊／小卡、生肖換成猴年', () => {
   ctx.nfUseYear_('dev', 2027);
   [['匯款戶名', '測試戶名'], ['匯款銀行', '測試銀行'], ['匯款分行', '測試分行'], ['加熱說明小卡ID', 'card123']].forEach(([k, v]) => ctx.nfSetKv_(k, v));

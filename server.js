@@ -3056,6 +3056,19 @@ app.post('/api/nianfai/gas/go-live', nianfaiGasRoute(async (year) => {
     return { ok: true, sheetCleared: g.result?.cleared || 0, liveAt: g.result?.liveAt, ...cleared };
 }));
 
+// 清空測試資料（只限測試中，正式環境也可用）：Google 端清空表單回覆／表單回應／宅配自取／寄信與送單紀錄，
+// WebPOS 只清這個年度的年菜單／發票／保留流水號、流水號歸 1。一般營業資料完全不碰；年度維持測試中。
+app.post('/api/nianfai/gas/clear-test', nianfaiGasRoute(async (year) => {
+    const { data: ph } = await supabase.from('app_settings').select('value').eq('key', `nianfai_${year}_phase`).maybeSingle();
+    if (ph?.value === 'live') throw new Error(`${year} 年已經正式上線，不能清空測試資料`);
+    const g = await callNianfaiGas('clearTestData', { year }, { timeoutMs: 330000 }); // GAS 也會再檢查一次是否已上線
+    const cleared = await clearNianfaiYearOrders(year);
+    await supabase.from('app_settings').upsert({ key: `nianfai_${year}_next_seq`, value: '1', updated_at: new Date().toISOString() });
+    nianfaiDemandCache.delete(year);
+    nianfaiStatusCache.delete(year);
+    return { ok: true, sheetCleared: g.result?.cleared || 0, ...cleared };
+}));
+
 // 只限 dev：解除目前年度測試試算表與表單的連結（檔案保留、改名加「舊」），用來從零重新模擬建立年度
 app.post('/api/nianfai/gas/dev-archive-year', nianfaiGasRoute(async (year) => {
     if (!IS_DEV) throw new Error('只有測試環境可以解除連結');

@@ -393,6 +393,9 @@ export async function getNianfaiFormLinks(year) {
 export async function goLiveNianfai(year) {
     return api('POST', '/api/nianfai/gas/go-live', { year });
 }
+export async function clearNianfaiTestData(year) {
+    return api('POST', '/api/nianfai/gas/clear-test', { year });
+}
 export async function backToTestingNianfai(year) {
     return api('POST', '/api/nianfai/gas/back-to-testing', { year });
 }

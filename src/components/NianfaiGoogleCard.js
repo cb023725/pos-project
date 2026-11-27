@@ -6,7 +6,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
     getNianfaiGasStatus, createNianfaiSheet, syncNianfaiSettingsToSheet,
     nianfaiFormSync, checkNianfaiForm, checkNianfaiFormText, protectNianfaiSheet, rebuildNianfaiTabs,
-    goLiveNianfai, backToTestingNianfai, getNianfaiFormLinks,
+    goLiveNianfai, backToTestingNianfai, clearNianfaiTestData, getNianfaiFormLinks,
 } from '../db';
 
 // 複製文字：iPad 用 http://（不是 https）開 WebPOS 時瀏覽器不提供 navigator.clipboard，改用舊方法；都失敗回傳 false
@@ -134,6 +134,15 @@ export default function NianfaiGoogleCard({ year, number, part = 'steps', gasDat
         })) return;
         const r = await goLiveNianfai(year);
         await showAlert(`已清空 ${r.sheetCleared} 筆表單回應、${r.clearedOrders} 張 WebPOS 年菜單\n正式客人從表單回應第 2 列開始`, { title: '已正式上線', icon: 'success' });
+    });
+
+    const handleClearTest = () => run('cleartest', async () => {
+        if (!await showConfirm(`清空 ${year} 年菜的測試資料，從乾淨的表單重新測試`, {
+            title: '清空測試資料', icon: 'warning', confirmText: '清空', danger: true,
+            note: '會清空：Google 表單所有回覆、試算表表單回應／宅配／自取／修改紀錄、寄信紀錄，WebPOS 這個年度的年菜單與發票，訂購編號流水號回到 001。\n不會動：一般營業的訂單與發票、菜單、庫存、「設定」分頁、品項與日期。\n清完還是「測試中」，可以繼續測；正式上線時會再清一次。',
+        })) return;
+        const r = await clearNianfaiTestData(year);
+        await showAlert(`已清空 ${r.sheetCleared} 筆表單回應、${r.clearedOrders} 張 WebPOS 年菜單\n可以從乾淨的表單重新測試`, { title: '已清空測試資料', icon: 'success' });
     });
 
     const handleBackToTesting = () => run('back', async () => {
@@ -302,6 +311,12 @@ export default function NianfaiGoogleCard({ year, number, part = 'steps', gasDat
 
                         <Step n={4} title="真實測試" done={live} active={created && !live}>
                             <p>用 WebPOS 年菜點單、補資料送出，也可以直接在表單網頁填幾張，確認：表單回應有新增、確認信有收到、宅配／自取有出現、統計／備料表數字正確。</p>
+                            {created && !live && (
+                                <>
+                                    <p>想從乾淨的表單重新測：按下面清空測試資料（只清年菜，不動一般營業；清完還是測試中，可以按很多次）。</p>
+                                    <button onClick={handleClearTest} disabled={!!busy} className={`${btn} border border-[#C1032F] text-[#C1032F]`}>{busy === 'cleartest' ? '清空中...' : '清空測試資料'}</button>
+                                </>
+                            )}
                         </Step>
 
                         <Step n={5} title="測試完畢，正式上線" done={live} active={created && checked && !live}>

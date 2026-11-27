@@ -17,6 +17,7 @@
  *   mailSend          寄信：{ type, ids, date, resend }（ids 為預覽確認過的訂單編號；resend＝補寄已寄過的）
  *   setReminder       取貨提醒自動寄送開關 { on }
  *   diagnose          回傳回應分頁、觸發條件、各分頁前幾列的計算結果（排查用）
+ *   clearTestData     清空測試資料（只限測試中，正式環境也可用；年度維持測試中）
  *   resetTestData     只限 dev：清空表單回應、修改紀錄與送單紀錄（WebPOS「一鍵清空測試資料」）
  *   goLive            測試完畢正式上線：清空表單回覆、表單回應（刪列，正式客人從第 2 列開始）、修改紀錄、
  *                     送單紀錄並重建分頁；每個年度只能做一次（之後拒絕，避免誤刪正式訂單）
@@ -111,6 +112,8 @@ function doPost(e) {
         return nfJson_({ ok: true, result: nfDiagnose_() });
       case 'resetTestData':
         return nfJson_({ ok: true, result: nfResetTestData_() });
+      case 'clearTestData':
+        return nfJson_({ ok: true, result: nfClearTestData_() });
       case 'goLive':
         return nfJson_({ ok: true, result: nfGoLive_(body.accepting) });
       case 'backToTesting':
@@ -253,6 +256,15 @@ function nfDiagnose_() {
 /** 只限 dev：WebPOS「一鍵清空測試資料」時一起清空測試試算表，避免流水號重新開始後跟舊回應撞號 */
 function nfResetTestData_() {
   if (NF_CTX.env !== 'dev') throw new Error('只有測試環境可以清空回應');
+  return nfClearAllResponses_();
+}
+
+/**
+ * 清空測試資料（正式環境也可以用，但只限「測試中」）：和正式上線清的一樣，但年度維持測試中、表單照樣開放，
+ * 寄出前確認時間也不動（測試中不會自動寄）。正式上線時會再清一次，兩者互不影響。
+ */
+function nfClearTestData_() {
+  if (NF_CTX.meta.live) throw new Error(NF_CTX.year + ' 年已經正式上線，不能清空（會刪到正式客人的訂單）');
   return nfClearAllResponses_();
 }
 
