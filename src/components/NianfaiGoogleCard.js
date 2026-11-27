@@ -89,8 +89,14 @@ export default function NianfaiGoogleCard({ year, number, part = 'steps', gasDat
         if (!await showConfirm(`在雲端硬碟建立「${year} 年菜訂單」試算表與預購表單`, {
             title: '建立 Google 試算表與表單', icon: 'info', note: '建立後是「測試中」，可以真實送單測試', confirmText: '建立',
         })) return;
-        await createNianfaiSheet(year);
-        await showAlert('請進行第 ② 步：打開表單檢查文案、上傳圖片', { title: '已建立', icon: 'success' });
+        const r = await createNianfaiSheet(year);
+        const carried = r?.carriedKeys || [];
+        await showAlert('請進行第 ② 步：打開表單檢查文案、上傳圖片', {
+            title: '已建立', icon: 'success',
+            note: carried.length
+                ? `以下設定沿用 ${r.carriedFrom} 年，請打開試算表「設定」確認還正確（尤其匯款帳號）：\n${carried.join('、')}`
+                : '請打開試算表「設定」填寫：匯款戶名、銀行、分行、帳號、加熱說明小卡ID',
+        });
     });
 
     // 海報用短網址與 QR code

@@ -425,7 +425,7 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
                                 </div>
                             ) : (
                                 <div className="border-t border-orange-200 pt-3">
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">對應庫存（只顯示用，不會扣庫存；年節限定品項選同年度的年菜庫存）</label>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">對應庫存（只顯示用，不會扣庫存；年節限定品項選同年度的年菜庫存。新的年節限定品項請先到庫存管理新增類別「年菜庫存」的品項）</label>
                                     <select value={formData.nianfaiStockRef || ''}
                                         onChange={e => setFormData(prev => ({ ...prev, nianfaiStockRef: e.target.value || null }))}
                                         className="w-full border border-gray-300 rounded-lg p-2 text-sm">
@@ -580,7 +580,9 @@ const MenuManagementPage = () => {
     // 年菜改成真分類後，preparing/selling/closed 以外（archived）不顯示這個分類 tab，
     // 資料不受影響，明年初始化新年度時會依 useNianfaiSeason 重新出現
     const visibleCategories = showNianfaiCategory ? categories : categories.filter(c => c.name !== '年菜');
-    const filteredItems = menuItems.filter(item => item.category === filterCategory);
+    // 年菜 tab 只顯示目前年度的品項（往年的品項保留在資料庫裡，不顯示，避免明年新舊混在一起改錯）
+    const filteredItems = menuItems.filter(item => item.category === filterCategory
+        && (filterCategory !== '年菜' || !activeNianfaiYear || item.nianfaiYear === activeNianfaiYear));
     const currentCatSetting = categories.find(c => c.name === filterCategory);
 
     return (
@@ -651,6 +653,11 @@ const MenuManagementPage = () => {
                     <span className="px-2.5 py-1 rounded-full text-xs font-bold border bg-purple-50 text-purple-600 border-purple-200">
                         報表：{currentCatSetting.reportGroup}
                     </span>
+                    {filterCategory === '年菜' && activeNianfaiYear && (
+                        <span className="px-2.5 py-1 rounded-full text-xs font-bold border bg-orange-50 text-orange-700 border-orange-200">
+                            只顯示 {activeNianfaiYear} 年度的年菜（往年的保留但不顯示）
+                        </span>
+                    )}
                 </div>
             )}
 

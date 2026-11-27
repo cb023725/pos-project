@@ -26,6 +26,7 @@ function nfCreateYear_(p) {
   NF_CTX = { key: nfYearKey_(env, year), env: env, year: year, meta: {}, ss: ss, form: null };
   nfEnsureSettingsSheet_();
   nfWriteSettingsFromWebpos_(p);
+  var carried = nfCarryOverSettings_(env, year); // 生肖、去年的匯款資訊／小卡／店家資料
   var settings = nfReadSettings_();
 
   // 2. 表單
@@ -59,6 +60,8 @@ function nfCreateYear_(p) {
     spreadsheetUrl: ss.getUrl(),
     formUrl: form.getPublishedUrl(),
     formEditUrl: form.getEditUrl(),
+    carriedFrom: carried.from,
+    carriedKeys: carried.keys,
   };
 }
 

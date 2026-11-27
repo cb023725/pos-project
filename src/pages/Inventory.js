@@ -268,7 +268,7 @@ const StockOperationModal = ({ isOpen, onClose, item, onSave }) => {
 // ----------------------------------------------------------------------
 // AddItemModal - 新增庫存品項
 // ----------------------------------------------------------------------
-const AddItemModal = ({ isOpen, onClose, onSave, existingCategories }) => {
+const AddItemModal = ({ isOpen, onClose, onSave, existingCategories, nianfaiYear }) => {
     const [name, setName] = useState('');
     const [category, setCategory] = useState('');
     const [stock, setStock] = useState(0);
@@ -284,9 +284,12 @@ const AddItemModal = ({ isOpen, onClose, onSave, existingCategories }) => {
         if (!category.trim()) { alert('請輸入類別'); return; }
         const { full, low, urgent } = thresholds;
         if (!(urgent < low && low < full)) { alert('閾值設定錯誤：必須滿足 緊急 < 偏低 < 充足'); return; }
+        // 年菜庫存：id 一定要是 nfstock_<年度>_…，才會出現在庫存頁（只顯示目前年度）和菜單管理的「對應庫存」選單
+        const isNianfaiStock = category.trim() === '年菜庫存';
+        if (isNianfaiStock && !nianfaiYear) { alert('目前沒有進行中的年菜年度，請先到年菜管理頁建立年度'); return; }
         setSaving(true);
         try {
-            const id = 'inv_' + Date.now();
+            const id = isNianfaiStock ? `nfstock_${nianfaiYear}_${Date.now()}` : 'inv_' + Date.now();
             await onSave({ id, name: name.trim(), category: category.trim(), stock, thresholds, price: null, sortOrder: 99 });
             onClose();
         } finally {
@@ -320,7 +323,7 @@ const AddItemModal = ({ isOpen, onClose, onSave, existingCategories }) => {
                         <datalist id="category-list">
                             {existingCategories.map(c => <option key={c} value={c} />)}
                         </datalist>
-                        <p className="text-xs text-gray-400 mt-1">輸入現有類別或新建類別名稱</p>
+                        <p className="text-xs text-gray-400 mt-1">輸入現有類別或新建類別名稱。年節限定的年菜品項請選「年菜庫存」（會自動歸在今年的年度）</p>
                     </div>
                     <div>
                         <label className="block text-sm font-bold text-gray-700 mb-1">初始庫存（份）</label>
@@ -857,7 +860,7 @@ const InventoryPage = () => {
                 <ThresholdSettingModal isOpen={isThresholdModalOpen} onClose={() => setIsThresholdModalOpen(false)} item={selectedItem} onSave={handleThresholdSave} onSaveLinks={handleLinksUpdate} allMenuItems={allMenuItems} consumesMapping={inventoryConsumesMapping} />
             )}
             {isAddModalOpen && (
-                <AddItemModal isOpen={isAddModalOpen} onClose={() => setIsAddModalOpen(false)} onSave={handleAddItem} existingCategories={existingCategories} />
+                <AddItemModal isOpen={isAddModalOpen} onClose={() => setIsAddModalOpen(false)} onSave={handleAddItem} existingCategories={[...new Set([...existingCategories, ...(nianfaiYear && !nianfaiArchived ? ['年菜庫存'] : [])])]} nianfaiYear={nianfaiArchived ? null : nianfaiYear} />
             )}
             <LogModal isOpen={isLogModalOpen} onClose={() => setIsLogModalOpen(false)} item={selectedItem} logs={logModalLogs} isLoading={isLogLoading} />
 

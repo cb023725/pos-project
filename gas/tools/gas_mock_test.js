@@ -431,6 +431,17 @@ run('品項改成 8 項（套餐＋7 單點）→ 宅配／自取欄位、統計
     statsUsesNewColumns: statsF.includes(ctx.nfColLetter_(hdr.indexOf('富貴套餐') + 1)), noOldItems: !hdr.includes('海味XO醬') && !prepNames.join().includes('海味XO醬') };
 });
 run('測試清空 → 宅配／自取與寄信狀態歸零', () => { ctx.NF_CTX.meta.live = false; ctx.nfResetTestData_(); return { d: ss().getSheetByName('宅配').getLastRow(), p: ss().getSheetByName('自取').getLastRow(), ml: Object.keys(ctx._props).filter(k => k.startsWith('ML_')).length }; });
+run('明年建立 2028：沿用 2027 的匯款資訊／小卡、生肖換成猴年', () => {
+  ctx.nfUseYear_('dev', 2027);
+  [['匯款戶名', '測試戶名'], ['匯款銀行', '測試銀行'], ['匯款分行', '測試分行'], ['加熱說明小卡ID', 'card123']].forEach(([k, v]) => ctx.nfSetKv_(k, v));
+  ctx.nfSetKvText_('匯款帳號', '0012345678');
+  const r = ctx.nfCreateYear_({ ...payload, year: 2028 });
+  const kv = ctx.nfReadSettings_().kv;
+  if (r.carriedFrom !== 2027 || kv['匯款帳號'] !== '0012345678' || kv['加熱說明小卡ID'] !== 'card123') throw new Error('沒有沿用：' + JSON.stringify({ r: r.carriedKeys, acct: kv['匯款帳號'] }));
+  if (kv['祝賀語'] !== '猴年行大運' || !/嶄新猴年/.test(kv['表單問候語'])) throw new Error('生肖沒換：' + kv['祝賀語']);
+  ctx.nfUseYear_('dev', 2027);
+  return { carriedFrom: r.carriedFrom, keys: r.carriedKeys, greet: kv['祝賀語'], z2027: ctx.nfZodiac_(2027), z2028: ctx.nfZodiac_(2028) };
+});
 if (process.argv.includes('--texts')) {
   const f = ctx.NF_CTX.form;
   console.log('\n===== 表單說明 =====\n' + ctx.nfFormTexts_(ctx.nfReadSettings_()).description);

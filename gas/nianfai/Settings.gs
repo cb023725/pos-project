@@ -43,6 +43,47 @@ var NF_SETTINGS_DEFAULTS = [
 ];
 
 var NF_MONEY_KEYS = ['運費', '免運門檻'];
+
+// ── 新年度：生肖祝賀語、沿用去年的設定（明年建立年度時不用重填） ──
+var NF_ZODIAC = '鼠牛虎兔龍蛇馬羊猴雞狗豬';
+/** 年菜年度＝那一年的農曆新年（2027 年菜＝2027 年 2 月的新年＝羊年） */
+function nfZodiac_(year) { return NF_ZODIAC.charAt(((Number(year) - 4) % 12 + 12) % 12); }
+
+/** 每年不變、去年填過就沿用的設定（匯款資訊仍會在 WebPOS 提醒確認） */
+var NF_CARRY_KEYS = ['匯款戶名', '匯款銀行', '匯款分行', '匯款帳號', '加熱說明小卡ID', '店址', '電話', 'LINE', '地圖連結'];
+
+/**
+ * 建立新年度時呼叫：祝賀語、表單問候語換成今年的生肖；從同環境最近一個年度的試算表沿用 NF_CARRY_KEYS。
+ * 回傳沿用了哪些項目（讀不到去年就回傳空陣列，照常建立）
+ */
+function nfCarryOverSettings_(env, year) {
+  var z = nfZodiac_(year);
+  var kv = nfReadSettings_().kv;
+  nfSetKv_('祝賀語', String(kv['祝賀語'] || '').replace(/[鼠牛虎兔龍蛇馬羊猴雞狗豬](?=年)/g, z));
+  nfSetKv_('表單問候語', String(kv['表單問候語'] || '').replace(/[鼠牛虎兔龍蛇馬羊猴雞狗豬](?=年)/g, z));
+  var prevYear = null;
+  Object.keys(nfProps_().getProperties()).forEach(function (k) {
+    var m = /^YEAR_([^:]+):(\d{4})$/.exec(k);
+    if (m && m[1] === env && Number(m[2]) < Number(year) && (!prevYear || Number(m[2]) > prevYear)) prevYear = Number(m[2]);
+  });
+  if (!prevYear) return { from: null, keys: [] };
+  var carried = [];
+  try {
+    var meta = JSON.parse(nfProps_().getProperty(nfYearKey_(env, prevYear)));
+    var prevSh = SpreadsheetApp.openById(meta.ssId).getSheetByName(NF.SHEET_SETTINGS);
+    var prev = {};
+    prevSh.getRange(1, 1, Math.max(prevSh.getLastRow(), 1), 2).getValues().forEach(function (r) { if (r[0]) prev[String(r[0]).trim()] = r[1]; });
+    NF_CARRY_KEYS.forEach(function (k) {
+      var v = prev[k];
+      if (v === undefined || v === null || String(v).trim() === '') return;
+      if (k === '匯款帳號') nfSetKvText_(k, String(v)); else nfSetKv_(k, v); // 帳號存文字，開頭的 0 才不會不見
+      carried.push(k);
+    });
+  } catch (e) {
+    console.error('沿用去年設定失敗：' + e);
+  }
+  return { from: prevYear, keys: carried };
+}
 var NF_BANK_KEYS = ['匯款戶名', '匯款銀行', '匯款分行', '匯款帳號'];
 /** 「設定」還沒填的匯款資訊（確認信要用，沒填完不能正式上線／開賣） */
 function nfBankMissing_(settings) {
