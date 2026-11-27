@@ -233,3 +233,10 @@ where id in ('inv_1775499142948','inv_1775499157078','inv_1775499177326','inv_17
 6. 發現舊資料：訂單 #449（2026/6/2 內用、已付款）狀態一直是 paid 沒歸檔，所以出現在「進行中訂單」API；與部署無關，未動。
 
 **還原：** `mv build build_new && mv build_prev build`，`git reset --hard dcb13d5` 後 `git apply ~/pos-project-deploy-backup-20261127/uncommitted.patch`（或 stash pop），重啟。資料庫不用還原。
+
+### 2026-11-27 正式 GAS 專案
+
+- Apps Script 專案「咕咕義年菜系統」（店家帳號 goodgoodeatrestaurant@gmail.com 建立），指令碼 ID `1jj_51YJVH7qAbMckxYmekGZCjvuTGT2wuBc6E3gefm0szPUZLfDDVWEd`，網頁應用程式部署 @1（程式同 dev @55）。
+- Yw 執行 `nfAuthorize` 授權、在指令碼屬性設定 `WEBPOS_SECRET`；正式 `.env` 由 Yw 用 `cat ~/.nianfai-prod-gas.env >> ~/pos-project/.env` 加入 GAS 網址／密鑰／指令碼 ID（Claude 沒讀 `.env`、密鑰沒出現在對話）。
+- 13:35 重啟正式機 → `/api/nianfai/gas/status`：configured、ok、env=prod、尚未建立試算表。
+- **之後更新正式 GAS 程式：** dev 驗證完後 `gas/tools/deploy_gas.sh .env.prod-gas "說明"`（`.env.prod-gas` 只有指令碼 ID 與網址、不含密鑰、git 忽略），網址不變。需要 clasp 登入與 Apps Script API 開啟；用完 `npx -y @google/clasp@3.4.1 logout` 並關閉 API。
