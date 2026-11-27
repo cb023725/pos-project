@@ -140,8 +140,8 @@ const InvoiceManagementPage = () => {
     };
 
     const formatOrderId = (inv) => {
-        // 年菜單沒有每日流水號（不佔一般單號），顯示年菜訂購編號；不能用訂單 id 末三碼，看起來會像一般單號
-        if (inv?.isNianfai) return String(inv.invoiceNumber || '').replace(/^NF-/, '') || '年菜';
+        // 年菜單沒有每日流水號（不佔一般單號）：顯示年菜訂購編號的流水號末三碼（從 001 開始）；不能用訂單 id 末三碼
+        if (inv?.isNianfai) return String(inv.invoiceNumber || '').replace(/^NF-/, '').slice(-3) || '年菜';
         if (inv?.dailyOrderNo) return String(inv.dailyOrderNo).padStart(3, '0');
         if (!inv?.orderId) return '000';
         return inv.orderId.toString().slice(-3).padStart(3, '0');
@@ -230,7 +230,7 @@ const InvoiceManagementPage = () => {
                     voidTime: inv.voidTime,
                     invoiceStatus: inv.status,
                     isNianfai: !!inv.isNianfai,
-                    nianfaiOrderNo: inv.isNianfai ? formatOrderId(inv) : null,
+                    nianfaiOrderNo: inv.isNianfai ? (String(inv.invoiceNumber || '').replace(/^NF-/, '') || '—') : null, // 明細顯示完整訂購編號
                 });
                 setIsDetailModalOpen(true);
             }
