@@ -8,14 +8,20 @@ const LONG_PRESS_MS = 600;
 // 本機 /images/... 的靜態圖本來就小、同源，不需要代理
 const toDisplaySrc = (url) => (/^https?:\/\//.test(url) ? `/api/image-proxy?url=${encodeURIComponent(url)}&w=300` : url);
 
-const MenuCard = React.memo(({ item, onAddItem, onLongPress }) => {
+// allowOverride：停售時外觀仍顯示鎖住樣式，但點擊還是會呼叫 onAddItem，交給呼叫端自己決定
+// 要不要跳確認視窗後放行（例如年菜訂購允許「確認後仍要加入已停售品項」）。
+// 預設 false，一般點餐頁維持原本「停售就完全點不動」的行為不變。
+// hideStock：不顯示右上角庫存數量（年菜點單頁用，年菜不扣庫存，數量只會造成誤解）。
+// fillHeight：卡片撐滿格子高度（搭配 grid auto-rows-fr，所有卡片取最高那張的高度、大小一致）。
+// priceClassName：金額顏色（年菜點單頁用紅色），預設藍色不變。
+const MenuCard = React.memo(({ item, onAddItem, onLongPress, allowOverride = false, hideStock = false, fillHeight = false, priceClassName = 'text-blue-600' }) => {
     const hasInventoryLink = !!(item.consumes?.length); // 有庫存連動才顯示售完/庫存數
     const isSoldOut  = !!item.soldOut;
     const isDepleted = hasInventoryLink && !!item.depleted; // 只有連動品項才有售完狀態
-    const isDisabled = isSoldOut;                           // 停售才完全鎖住
+    const isDisabled = isSoldOut;                           // 停售才完全鎖住（視覺樣式用，allowOverride 不影響外觀）
 
     // 右上角庫存數量：有連動、有數值、且尚未售完時顯示
-    const showStockBadge = hasInventoryLink && item.linkedStock != null && !isDepleted;
+    const showStockBadge = !hideStock && hasInventoryLink && item.linkedStock != null && !isDepleted;
     const linkedStock    = item.linkedStock ?? 0;
 
     const timerRef       = useRef(null);
@@ -33,7 +39,7 @@ const MenuCard = React.memo(({ item, onAddItem, onLongPress }) => {
 
     const handleClick = () => {
         if (didLongPress.current) return;
-        if (isDisabled) return;
+        if (isDisabled && !allowOverride) return;
         onAddItem(item);
     };
 
@@ -47,7 +53,7 @@ const MenuCard = React.memo(({ item, onAddItem, onLongPress }) => {
             onTouchEnd={cancelPress}
             onContextMenu={e => e.preventDefault()}
             className={`
-                w-full bg-white rounded-xl shadow-lg transition-all text-left flex flex-col overflow-hidden relative select-none
+                w-full ${fillHeight ? 'h-full' : ''} bg-white rounded-xl shadow-lg transition-all text-left flex flex-col overflow-hidden relative select-none
                 ${isDisabled
                     ? 'opacity-60 cursor-not-allowed ring-4 ring-inset ring-red-300'
                     : isDepleted
@@ -93,7 +99,7 @@ const MenuCard = React.memo(({ item, onAddItem, onLongPress }) => {
                 {/* 右上角庫存數量（僅有庫存連動且未售完時顯示） */}
                 {showStockBadge && (
                     <span className={`absolute top-1 right-1 px-2 py-0.5 rounded-full text-xs font-bold shadow-md z-10 ${
-                        linkedStock < 5 ? 'bg-orange-500 text-white' : 'bg-green-700 text-white'
+                        linkedStock < 5 ? 'bg-orange-100/90 text-orange-700 border border-orange-300' : 'bg-green-100/90 text-green-700 border border-green-300'
                     }`}>
                         庫存：{linkedStock}
                     </span>
@@ -101,7 +107,7 @@ const MenuCard = React.memo(({ item, onAddItem, onLongPress }) => {
             </div>
 
             {/* 底部資訊 */}
-            <div className="py-1 px-0.5 flex flex-col h-25 justify-center">
+            <div className={`py-1 px-0.5 flex flex-col ${fillHeight ? 'flex-grow justify-between' : 'h-25 justify-center'}`}>
                 <div className="relative w-full mb-1">
                     {item.category === '主餐' && item.sortOrder && (
                         <div className="absolute left-0 top-0.5 flex items-center justify-center w-5 h-5 bg-black rounded-md z-10">
@@ -116,7 +122,7 @@ const MenuCard = React.memo(({ item, onAddItem, onLongPress }) => {
                     </p>
                 </div>
                 <div className="flex justify-between items-center">
-                    <span className="text-xl font-extrabold text-blue-600">NT$ {formatCurrency(item.price)}</span>
+                    <span className={`text-xl font-extrabold ${priceClassName}`}>NT$ {formatCurrency(item.price)}</span>
                 </div>
             </div>
         </button>

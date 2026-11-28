@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getInvoices, getInvoiceSequence, voidInvoice, getOrderById, getTableStatuses } from '../db';
+import { getInvoices, getInvoiceSequence, voidInvoice, getOrderById, getTableStatuses, getNianfaiOrderStatus } from '../db';
 
 const BACKEND_URL = '';
 
@@ -32,6 +32,7 @@ const InvoiceManagementPage = () => {
 
     // UI 狀態控制
     const [activeTab, setActiveTab] = useState('active'); // 'active' | 'voided'
+    const [showNianfai, setShowNianfai] = useState(false); // 預設隱藏年菜發票，跟報表頁「顯示店休日」同樣做法
     const [startDate, setStartDate] = useState(getLocalDateString(new Date()));
     const [endDate, setEndDate] = useState(getLocalDateString(new Date()));
     
@@ -71,16 +72,22 @@ const InvoiceManagementPage = () => {
     /**
      * 過濾與排序發票數據
      */
-    const filteredInvoices = useMemo(() => {
-        return invoices
-            .filter(inv => {
-                const statusMatch = activeTab === 'active' ? inv.status === '已開立' : inv.status === '已作廢';
-                if (!statusMatch) return false;
-                const dateStr = getLocalDateString(new Date(inv.paymentTime));
-                return dateStr >= startDate && dateStr <= endDate;
-            })
-            .sort((a, b) => new Date(b.paymentTime).getTime() - new Date(a.paymentTime).getTime());
+    const dateFilteredInvoices = useMemo(() => {
+        return invoices.filter(inv => {
+            const statusMatch = activeTab === 'active' ? inv.status === '已開立' : inv.status === '已作廢';
+            if (!statusMatch) return false;
+            const dateStr = getLocalDateString(new Date(inv.paymentTime));
+            return dateStr >= startDate && dateStr <= endDate;
+        });
     }, [invoices, startDate, endDate, activeTab]);
+
+    const nianfaiCount = useMemo(() => dateFilteredInvoices.filter(inv => inv.isNianfai).length, [dateFilteredInvoices]);
+
+    const filteredInvoices = useMemo(() => {
+        return dateFilteredInvoices
+            .filter(inv => showNianfai || !inv.isNianfai)
+            .sort((a, b) => new Date(b.paymentTime).getTime() - new Date(a.paymentTime).getTime());
+    }, [dateFilteredInvoices, showNianfai]);
 
     /**
      * 財務統計計算
@@ -88,7 +95,8 @@ const InvoiceManagementPage = () => {
     const stats = useMemo(() => {
         const rangeInvoices = invoices.filter(inv => {
             const dateStr = getLocalDateString(new Date(inv.paymentTime));
-            return dateStr >= startDate && dateStr <= endDate;
+            if (!(dateStr >= startDate && dateStr <= endDate)) return false;
+            return showNianfai || !inv.isNianfai; // 跟下面清單的顯示範圍保持一致，金額才對得起來
         });
 
         const activeInvs = rangeInvoices.filter(i => i.status === '已開立');
@@ -100,7 +108,7 @@ const InvoiceManagementPage = () => {
             activeCount: activeInvs.length,
             voidedCount: voidedInvs.length
         };
-    }, [invoices, startDate, endDate]);
+    }, [invoices, startDate, endDate, showNianfai]);
 
     // 以 invoiceId 為 key 的 adjustments map
     const adjByInvoice = useMemo(() => {
@@ -132,6 +140,8 @@ const InvoiceManagementPage = () => {
     };
 
     const formatOrderId = (inv) => {
+        // 年菜單沒有每日流水號（不佔一般單號）：顯示年菜訂購編號的流水號末三碼（從 001 開始）；不能用訂單 id 末三碼
+        if (inv?.isNianfai) return String(inv.invoiceNumber || '').replace(/^NF-/, '').slice(-3) || '年菜';
         if (inv?.dailyOrderNo) return String(inv.dailyOrderNo).padStart(3, '0');
         if (!inv?.orderId) return '000';
         return inv.orderId.toString().slice(-3).padStart(3, '0');
@@ -161,6 +171,13 @@ const InvoiceManagementPage = () => {
             return;
         }
         const displayNum = getDisplayInvoiceNumber(invoice.id);
+        if (invoice.isNianfai) {
+            // 年菜單（修正單 #01 第 6 節）：已送出表單的要提醒同時到表單回應取消
+            getNianfaiOrderStatus(invoice.orderId)
+                .then(nf => setVoidModal({ invoice, displayNum, nianfai: nf }))
+                .catch(() => setVoidModal({ invoice, displayNum, nianfai: { status: 'unknown' } }));
+            return;
+        }
         setVoidModal({ invoice, displayNum });
     };
 
@@ -176,7 +193,7 @@ const InvoiceManagementPage = () => {
     };
 
     const handleReprintCustomer = () => {
-        if (!selectedOrder) return;
+        if (!selectedOrder || selectedOrder.isNianfai) return; // 年菜單據格式不同，不從這裡用一般顧客聯補印
         fetch(`${BACKEND_URL}/print`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -211,7 +228,9 @@ const InvoiceManagementPage = () => {
                     displayInvoiceNumber: getDisplayInvoiceNumber(inv.id),
                     paymentTime: inv.paymentTime,
                     voidTime: inv.voidTime,
-                    invoiceStatus: inv.status
+                    invoiceStatus: inv.status,
+                    isNianfai: !!inv.isNianfai,
+                    nianfaiOrderNo: inv.isNianfai ? (String(inv.invoiceNumber || '').replace(/^NF-/, '') || '—') : null, // 明細顯示完整訂購編號
                 });
                 setIsDetailModalOpen(true);
             }
@@ -292,19 +311,32 @@ const InvoiceManagementPage = () => {
             </div>
 
             {/* Tabs */}
-            <div className="flex gap-2 mb-4">
-                <button 
-                    onClick={() => setActiveTab('active')}
-                    className={`px-6 py-2 rounded-t-xl font-black transition-all ${activeTab === 'active' ? 'bg-white text-[#4A9A7A] border-t-2 border-[#4A9A7A] shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
-                >
-                    結帳紀錄
-                </button>
-                <button 
-                    onClick={() => setActiveTab('voided')}
-                    className={`px-6 py-2 rounded-t-xl font-black transition-all ${activeTab === 'voided' ? 'bg-white text-red-600 border-t-2 border-red-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
-                >
-                    作廢紀錄
-                </button>
+            <div className="flex items-center justify-between mb-4">
+                <div className="flex gap-2">
+                    <button
+                        onClick={() => setActiveTab('active')}
+                        className={`px-6 py-2 rounded-t-xl font-black transition-all ${activeTab === 'active' ? 'bg-white text-[#4A9A7A] border-t-2 border-[#4A9A7A] shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                    >
+                        結帳紀錄
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('voided')}
+                        className={`px-6 py-2 rounded-t-xl font-black transition-all ${activeTab === 'voided' ? 'bg-white text-red-600 border-t-2 border-red-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                    >
+                        作廢紀錄
+                    </button>
+                </div>
+                {nianfaiCount > 0 && (
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                        <span className="text-xs font-bold text-gray-500">顯示年菜發票（{nianfaiCount}）</span>
+                        <div
+                            onClick={() => setShowNianfai(v => !v)}
+                            className={`relative w-9 h-5 rounded-full transition-colors ${showNianfai ? 'bg-[#4A9A7A]' : 'bg-gray-300'}`}
+                        >
+                            <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${showNianfai ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                        </div>
+                    </label>
+                )}
             </div>
 
             {/* Main Table */}
@@ -342,8 +374,8 @@ const InvoiceManagementPage = () => {
                                             {formatOrderId(inv)}
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-center align-middle">
-                                            <span className={`px-3 py-1 rounded-full font-bold text-xs ${inv.orderType === '外帶' ? 'bg-[#D47856]/15 text-[#D47856]' : 'bg-[#4A9A7A]/15 text-[#4A9A7A]'}`}>
-                                                {inv.orderType}
+                                            <span className={`px-3 py-1 rounded-full font-bold text-xs ${inv.isNianfai ? 'bg-[#C1032F]/10 text-[#C1032F]' : inv.orderType === '外帶' ? 'bg-[#D47856]/15 text-[#D47856]' : 'bg-[#4A9A7A]/15 text-[#4A9A7A]'}`}>
+                                                {inv.isNianfai ? '年菜' : inv.orderType}
                                             </span>
                                         </td>
                                         <td className="px-6 py-4 align-middle">
@@ -391,6 +423,30 @@ const InvoiceManagementPage = () => {
                     <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full">
                         <h3 className="text-xl font-black text-gray-800 mb-2">確認作廢發票</h3>
                         <p className="text-gray-600 mb-1">發票 <span className="font-mono font-bold text-red-600">{voidModal.displayNum}</span></p>
+                        {voidModal.nianfai ? (
+                            <>
+                                {voidModal.nianfai.status === 'sent' ? (
+                                    <p className="text-red-600 font-bold bg-red-50 rounded-xl p-3 my-3">
+                                        此單已送出表單，請同時到 Sheet「表單回應」找到「現結＋訂購編號」那一列，清除整列內容來取消訂單。
+                                    </p>
+                                ) : voidModal.nianfai.status === 'unknown' ? (
+                                    <p className="text-orange-600 font-bold bg-orange-50 rounded-xl p-3 my-3">
+                                        無法確認此年菜單是否已送出表單；如已送出，請同時到 Sheet「表單回應」找到「現結＋訂購編號」那一列，清除整列內容來取消訂單。
+                                    </p>
+                                ) : (
+                                    <p className="text-gray-600 my-3">此年菜單尚未送出表單，作廢後請重新點單。</p>
+                                )}
+                                <div className="flex flex-col gap-3">
+                                    <button onClick={() => handleVoidConfirm(false)} className="w-full py-3 bg-red-500 text-white rounded-xl font-bold hover:bg-red-600 transition-colors">
+                                        確認作廢
+                                    </button>
+                                    <button onClick={() => setVoidModal(null)} className="w-full py-3 bg-gray-200 text-gray-700 rounded-xl font-bold hover:bg-gray-300 transition-colors">
+                                        取消
+                                    </button>
+                                </div>
+                            </>
+                        ) : (
+                        <>
                         <p className="text-gray-600 mb-6">作廢後是否要將此筆訂單消耗的庫存歸還？</p>
                         <div className="flex flex-col gap-3">
                             <button onClick={() => handleVoidConfirm(true)} className="w-full py-3 bg-green-600 text-white rounded-xl font-bold hover:bg-green-700 transition-colors">
@@ -403,6 +459,8 @@ const InvoiceManagementPage = () => {
                                 取消
                             </button>
                         </div>
+                        </>
+                        )}
                     </div>
                 </div>
             )}
@@ -422,10 +480,17 @@ const InvoiceManagementPage = () => {
                                     <p className="text-gray-400 font-bold">發票號碼</p>
                                     <p className="font-mono font-bold text-[#4A9A7A]">{selectedOrder.displayInvoiceNumber}</p>
                                 </div>
-                                <div>
-                                    <p className="text-gray-400 font-bold">桌號</p>
-                                    <p className="font-bold text-gray-800">{selectedOrder.table || '外帶'}</p>
-                                </div>
+                                {selectedOrder.isNianfai ? (
+                                    <div>
+                                        <p className="text-gray-400 font-bold">年菜訂購編號</p>
+                                        <p className="font-mono font-bold text-[#C1032F]">{selectedOrder.nianfaiOrderNo}</p>
+                                    </div>
+                                ) : (
+                                    <div>
+                                        <p className="text-gray-400 font-bold">桌號</p>
+                                        <p className="font-bold text-gray-800">{selectedOrder.table || '外帶'}</p>
+                                    </div>
+                                )}
                                 <div className="col-span-2">
                                     <p className="text-gray-400 font-bold">結帳時間</p>
                                     <p className="text-gray-700">{formatDateTime24h(selectedOrder.paymentTime)}</p>
@@ -477,9 +542,13 @@ const InvoiceManagementPage = () => {
                         </div>
 
                         <div className="p-4 bg-gray-50 flex gap-3">
-                            <button onClick={handleReprintCustomer} className="flex-1 py-3 bg-[#4A9A7A] text-white rounded-xl font-bold hover:bg-[#3A8A6A] transition-colors">
-                                補印顧客聯
-                            </button>
+                            {selectedOrder.isNianfai ? (
+                                <p className="flex-1 py-3 text-center text-xs font-bold text-gray-500">年菜單據請到「年菜訂單」查看，這裡不補印</p>
+                            ) : (
+                                <button onClick={handleReprintCustomer} className="flex-1 py-3 bg-[#4A9A7A] text-white rounded-xl font-bold hover:bg-[#3A8A6A] transition-colors">
+                                    補印顧客聯
+                                </button>
+                            )}
                             <button onClick={() => setIsDetailModalOpen(false)} className="flex-1 py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-gray-800 transition-colors">
                                 關閉
                             </button>

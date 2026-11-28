@@ -1,0 +1,182 @@
+From ee0d8c87866f3b7378cd642422186ee5988814b4 Mon Sep 17 00:00:00 2001
+From: Kai <kai@Kaide-MacBook-Pro.local>
+Date: Tue, 24 Nov 2026 14:02:20 +0800
+Subject: [PATCH] =?UTF-8?q?fix:=20=E7=B5=90=E5=B8=B3=E6=94=B9=E6=88=90?=
+ =?UTF-8?q?=E5=85=88=E5=AD=98=E6=9C=AA=E4=BB=98=E6=AC=BE=E3=80=81=E5=86=8D?=
+ =?UTF-8?q?=E4=B8=80=E6=AC=A1=E5=AE=8C=E6=88=90=E4=BB=98=E6=AC=BE=E6=A8=99?=
+ =?UTF-8?q?=E8=A8=98=EF=BC=8B=E7=99=BC=E7=A5=A8=EF=BC=8C=E9=81=BF=E5=85=8D?=
+ =?UTF-8?q?=E3=80=8C=E5=B7=B2=E4=BB=98=E6=AC=BE=E4=BD=86=E6=B2=92=E6=9C=89?=
+ =?UTF-8?q?=E7=99=BC=E7=A5=A8=E3=80=8D=E7=9A=84=E6=B8=B8=E9=9B=A2=E8=A8=82?=
+ =?UTF-8?q?=E5=96=AE?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+問題：executeCheckout 分兩個 request——
+  1) saveOrderBeforeNavigate：品項標 isPaid、訂單標 paid
+  2) completeOrderAndReport（/api/orders/:id/complete）：開發票、扣庫存
+1) 成功後若 2) 沒送到或失敗（重新整理、斷網、關分頁、伺服器錯誤），訂單會
+停在「已付款」但沒有發票：營收不進發票／關帳、庫存沒扣，而且畫面上品項已
+全部付清，無法再結帳補開。另外前端傳給 completeOrderAndReport 的是
+itemsToCheckout，但該函式只認 newItems，等於沒傳。
+
+修正：
+- Order.js executeCheckout：第 1 步改成存「未付款」的訂單（沒有就建立、
+  有就更新品項與顧客資料，狀態 served）；付款標記改由第 2 步帶 newItems
+  （含 isPaid、出單批次）在 /complete 同一個 request 完成，並帶 finishTime
+- db.js completeOrderAndReport 多傳 finishTime
+- server.js /api/orders/:id/complete：先開發票／扣庫存，最後才把訂單標成
+  已付款；發票或訂單更新失敗回 500。已付金額改用有效發票加總計算。
+  任何一步中斷，訂單都維持未付款，重新結帳時 alreadyCounted 會扣掉已開立
+  數量，不會重複開發票也不會漏開
+
+實測（3001）：API 模擬中斷→訂單仍未付款且出現在外帶清單、無發票；重新
+結帳→補開發票、訂單已付款；重送 complete→不重複開發票。畫面實際跑一次
+外帶點餐＋全部結帳，訂單 paid、品項 isPaid/isSent/出單批次、finish_time、
+發票皆正確。測試訂單與發票已刪除。
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ server.js          | 31 ++++++++++++++++++++-----------
+ src/db.js          |  4 ++--
+ src/pages/Order.js | 21 ++++++++++++++++-----
+ 3 files changed, 38 insertions(+), 18 deletions(-)
+
+diff --git a/server.js b/server.js
+index 52b166a..d086744 100644
+--- a/server.js
++++ b/server.js
+@@ -2318,7 +2318,7 @@ app.patch('/api/orders/:id', async (req, res) => {
+ // completeOrderAndReport
+ app.post('/api/orders/:id/complete', async (req, res) => {
+     const orderId = parseInt(req.params.id);
+-    const { newItems, tableNumber, isFullyPaid, sendTime } = req.body;
++    const { newItems, tableNumber, isFullyPaid, sendTime, finishTime } = req.body;
+     const now = new Date().toISOString();
+     const { data: existing, error: fetchErr } = await supabase.from('orders').select('*').eq('id', orderId).single();
+     if (fetchErr || !existing) return res.status(404).json({ error: '找不到訂單' });
+@@ -2352,19 +2352,14 @@ app.post('/api/orders/:id/complete', async (req, res) => {
+     });
+ 
+     const amountNow = snapshot.reduce((s, it) => s + (it.price||0) * (it.quantity||1), 0);
+-    const newPaidAmount = prevPaid + amountNow;
+-
+-    await supabase.from('orders').update({
+-        status: isFullyPaid ? 'paid' : 'served',
+-        items: finalItems, total: currentTotal,
+-        paid_amount: newPaidAmount,
+-        send_time: sendTime || existing.send_time || Date.now(),
+-        updated_at: now,
+-    }).eq('id', orderId);
++    // 已付金額＝所有有效發票加總（不用 orders.paid_amount 累加：若上次發票已開、訂單卻沒更新成功，
++    // 重新結帳時 amountNow 為 0，用累加會少算）
++    const invoicedBefore = (prevInvs||[]).reduce((s, inv) => s + (inv.amount || inv.total || 0), 0);
++    const newPaidAmount = Math.max(prevPaid, invoicedBefore + amountNow);
+ 
+     if (amountNow > 0) {
+         // 建立發票（部分結帳也會建立，每次結帳一張）
+-        await supabase.from('invoices').insert({
++        const { error: invErr } = await supabase.from('invoices').insert({
+             invoice_number: `INV-${Date.now()}`,
+             payment_time: now,
+             order_id: orderId, daily_order_no: existing.daily_order_no,
+@@ -2373,6 +2368,8 @@ app.post('/api/orders/:id/complete', async (req, res) => {
+             total: amountNow, amount: amountNow,
+             items_snapshot: snapshot, status: '已開立', void_time: null,
+         });
++        // 發票沒開成功就不要把訂單標成已付款：訂單維持未付款，重新結帳即可（不會重複開立，見上方 alreadyCounted）
++        if (invErr) return res.status(500).json({ error: `建立發票失敗：${invErr.message}` });
+         // 扣庫存 + 寫紀錄
+         for (const it of snapshot) {
+             const { data: mi } = await supabase.from('menu_items').select('stock,consumes').eq('id', it.id).single();
+@@ -2390,6 +2387,18 @@ app.post('/api/orders/:id/complete', async (req, res) => {
+             }
+         }
+     }
++    // 先開發票／扣庫存，最後才把訂單標成已付款：任何一步中斷，訂單都還是「未付款」，
++    // 重新結帳時 alreadyCounted 會扣掉已開立的數量，不會重複開發票也不會漏開
++    const { error: ordErr } = await supabase.from('orders').update({
++        status: isFullyPaid ? 'paid' : 'served',
++        items: finalItems, total: currentTotal,
++        paid_amount: newPaidAmount,
++        send_time: sendTime || existing.send_time || Date.now(),
++        ...(finishTime !== undefined ? { finish_time: finishTime } : {}),
++        updated_at: now,
++    }).eq('id', orderId);
++    if (ordErr) return res.status(500).json({ error: `更新訂單失敗：${ordErr.message}` });
++
+     if (tableNumber && tableNumber !== '外帶') {
+         await supabase.from('tables').upsert({ table_number: tableNumber, status: isFullyPaid ? 'paid' : 'served', order_id: orderId, updated_at: now });
+     }
+diff --git a/src/db.js b/src/db.js
+index cc2f45c..37e9362 100644
+--- a/src/db.js
++++ b/src/db.js
+@@ -417,9 +417,9 @@ export async function assignOrderNo(orderId) {
+     const result = await api('POST', `/api/orders/${orderId}/assign-no`, {});
+     return result?.dailyOrderNo || null;
+ }
+-export async function completeOrderAndReport({ orderId, newItems, tableNumber, isFullyPaid, sendTime }) {
++export async function completeOrderAndReport({ orderId, newItems, tableNumber, isFullyPaid, sendTime, finishTime }) {
+     if (!orderId) return false;
+-    await api('POST', `/api/orders/${orderId}/complete`, { newItems, tableNumber, isFullyPaid, sendTime });
++    await api('POST', `/api/orders/${orderId}/complete`, { newItems, tableNumber, isFullyPaid, sendTime, finishTime });
+     return true;
+ }
+ export async function payOrder(orderData) {
+diff --git a/src/pages/Order.js b/src/pages/Order.js
+index c2b5e83..f2b9dc5 100644
+--- a/src/pages/Order.js
++++ b/src/pages/Order.js
+@@ -1294,6 +1294,11 @@ const RemarkSelectionModal = ({ item, groups, initialRemarks, onToggle, onCancel
+ };
+ 
+ // --- OrderPage 組件 ---
++
++// 訂單品項寫進 DB 的欄位（跟 saveOrderBeforeNavigate／handleGoBack 的欄位一致）
++const toDbItems = (arr) => arr.map(({ id, name, price, quantity, isSent, isServed, isPaid, sentBatch, isTakeoutPortion, category, internalId, sortOrder, remarks }) =>
++    ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, sentBatch: sentBatch || 0, isTakeoutPortion: !!isTakeoutPortion, category, internalId, sortOrder, remarks: remarks || [] }));
++
+ const OrderPage = () => {
+     const navigate = useNavigate();
+     const location = useLocation();
+@@ -2111,11 +2116,15 @@ const handleConfirmOrder = async () => {
+             // 【關鍵修正】：結帳時若尚未計時，直接開始計時
+             const newSendTime = sendTime || now; 
+             
+-            // 2. 【DB 主訂單狀態更新】儲存訂單到 DB
+-            const orderId = await saveOrderBeforeNavigate(tableNumber, updatedOrderForDb, currentOrderId, customerCount, subTotal, finalStatus, newSendTime, newFinishTime);
++            // 2. 【先存未付款的訂單】確保訂單存在（沒有就建立）、品項與顧客資料寫入，但「還不標記付款」。
++            //    付款標記、發票、扣庫存一律交給下一步的 /complete 在同一個 request 裡完成：
++            //    之前這裡就先把品項標成 isPaid、訂單標成 paid，萬一下一步（開發票）沒送到
++            //    （重新整理、斷網、關分頁），會留下「已付款但沒有發票」的游離訂單，而且畫面上
++            //    已全部付清、無法再結帳補開。改成這樣之後任何一步中斷，訂單都還是未付款，重新結帳即可。
++            const orderId = await saveOrderBeforeNavigate(tableNumber, currentOrder, currentOrderId, customerCount, subTotal, 'served', newSendTime, finishTime);
+ 
+             if (!orderId) {
+-                throw new Error("DB 訂單主狀態更新失敗。");
++                throw new Error("DB 訂單儲存失敗。");
+             }
+ 
+             // 補派 dailyOrderNo（直接結帳但未曾送廚房單時）與結帳記錄同時執行
+@@ -2125,13 +2134,15 @@ const handleConfirmOrder = async () => {
+                           if (assigned) { setDailyOrderNo(assigned); pendingDailyOrderNoRef.current = assigned; }
+                       })
+                     : Promise.resolve(),
+-                // 3. 【DB 結帳記錄/庫存扣減】建立結帳記錄
++                // 3. 【DB 結帳：付款標記＋發票＋扣庫存，同一個 request】
++                //    （原本傳的是 itemsToCheckout，但 completeOrderAndReport 只認 newItems，等於沒傳）
+                 completeOrderAndReport({
+                     orderId: currentOrderId || orderId,
+-                    itemsToCheckout: itemsToCheckout,
++                    newItems: toDbItems(updatedOrderForDb),
+                     tableNumber: tableNumber,
+                     isFullyPaid: isFullyPaid,
+                     sendTime: newSendTime,
++                    finishTime: newFinishTime,
+                 }),
+             ]);
+ 
+-- 
+2.37.1 (Apple Git-137.1)
+

@@ -5,6 +5,7 @@ import {
     updateMenuItem, addMenuItem, deleteMenuItem,
     getCategorySettings, saveCategorySettings, DEFAULT_CATEGORY_SETTINGS,
 } from '../db';
+import useNianfaiSeason from '../hooks/useNianfaiSeason';
 
 // ======================================================================
 // 輔助函式
@@ -15,7 +16,7 @@ const formatCurrency = (number) => {
 
 const getCategoryStyles = (category) => {
     const palette = [
-        'bg-teal-50 text-teal-700 border-teal-200',
+        'bg-[#4A9A7A]/10 text-[#4A9A7A] border-[#4A9A7A]/25',
         'bg-amber-50 text-amber-700 border-amber-200',
         'bg-lime-50 text-lime-700 border-lime-200',
         'bg-indigo-50 text-indigo-700 border-indigo-200',
@@ -102,7 +103,7 @@ const CategorySettingsModal = ({ category, allCategories, onClose, onSave, onDel
                         type="text"
                         value={form.name}
                         onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                        className="w-full border border-gray-300 rounded-lg p-2.5 text-base focus:ring-blue-500 focus:border-blue-500"
+                        className="w-full border border-gray-300 rounded-lg p-2.5 text-base focus:ring-[#4A9A7A] focus:border-[#4A9A7A]"
                     />
                 </div>
 
@@ -118,7 +119,7 @@ const CategorySettingsModal = ({ category, allCategories, onClose, onSave, onDel
                             <span className="text-base font-medium text-gray-700">{label}</span>
                             <div
                                 onClick={() => toggle(field)}
-                                className={`relative w-12 h-6 rounded-full transition-colors ${form[field] ? 'bg-blue-500' : 'bg-gray-300'}`}
+                                className={`relative w-12 h-6 rounded-full transition-colors ${form[field] ? 'bg-[#4A9A7A]' : 'bg-gray-300'}`}
                             >
                                 <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${form[field] ? 'translate-x-7' : 'translate-x-1'}`} />
                             </div>
@@ -160,7 +161,7 @@ const CategorySettingsModal = ({ category, allCategories, onClose, onSave, onDel
                             </div>
                             <div
                                 onClick={() => toggle('includeInTotal')}
-                                className={`relative w-12 h-6 rounded-full transition-colors flex-shrink-0 ml-4 ${form.includeInTotal !== false ? 'bg-blue-500' : 'bg-gray-300'}`}
+                                className={`relative w-12 h-6 rounded-full transition-colors flex-shrink-0 ml-4 ${form.includeInTotal !== false ? 'bg-[#4A9A7A]' : 'bg-gray-300'}`}
                             >
                                 <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${form.includeInTotal !== false ? 'translate-x-7' : 'translate-x-1'}`} />
                             </div>
@@ -174,7 +175,7 @@ const CategorySettingsModal = ({ category, allCategories, onClose, onSave, onDel
                             </div>
                             <div
                                 onClick={() => toggle('showInKpi')}
-                                className={`relative w-12 h-6 rounded-full transition-colors flex-shrink-0 ml-4 ${form.showInKpi !== false ? 'bg-blue-500' : 'bg-gray-300'}`}
+                                className={`relative w-12 h-6 rounded-full transition-colors flex-shrink-0 ml-4 ${form.showInKpi !== false ? 'bg-[#4A9A7A]' : 'bg-gray-300'}`}
                             >
                                 <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${form.showInKpi !== false ? 'translate-x-7' : 'translate-x-1'}`} />
                             </div>
@@ -229,11 +230,11 @@ const AddCategoryModal = ({ existingNames, onClose, onAdd }) => {
                     value={name}
                     onChange={e => setName(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && handleAdd()}
-                    className="w-full border border-gray-300 rounded-lg p-3 text-base mb-4 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full border border-gray-300 rounded-lg p-3 text-base mb-4 focus:ring-[#4A9A7A] focus:border-[#4A9A7A]"
                 />
                 <div className="flex justify-end gap-2">
                     <button onClick={onClose} className="px-4 py-2 text-sm text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300">取消</button>
-                    <button onClick={handleAdd} className="px-4 py-2 text-sm font-bold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700">新增</button>
+                    <button onClick={handleAdd} className="px-4 py-2 text-sm font-bold text-white bg-[#4A9A7A] rounded-lg hover:bg-[#3A8A6A]">新增</button>
                 </div>
             </div>
         </div>
@@ -243,8 +244,8 @@ const AddCategoryModal = ({ existingNames, onClose, onAdd }) => {
 // ======================================================================
 // ItemModal — 新增/編輯菜單品項
 // ======================================================================
-const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [], categories = [] }) => {
-    const baseItem = { name: '', printName: '', customerPrintName: '', price: 0, category: categories[0]?.name || '', imageUrl: '', stock: 0, consumes: [] };
+const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [], categories = [], menuItems = [], activeNianfaiYear = null }) => {
+    const baseItem = { name: '', printName: '', customerPrintName: '', price: 0, category: categories[0]?.name || '', imageUrl: '', stock: 0, consumes: [], bundleComposition: null, nianfaiYear: null, nianfaiStockRef: null };
     const initialData = isAdding ? baseItem : {
         ...baseItem,
         ...item,
@@ -253,12 +254,29 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
         sortOrder: item?.sortOrder !== undefined ? item.sortOrder : Infinity,
         printName: item?.printName || '',
         customerPrintName: item?.customerPrintName || '',
+        bundleComposition: item?.bundleComposition || null,
+        nianfaiYear: item?.nianfaiYear || null,
+        nianfaiStockRef: item?.nianfaiStockRef || null,
     };
     const [formData, setFormData] = useState(initialData);
     const [submitting, setSubmitting] = useState(false);
 
     const handleChange = (e) => {
         const { name, value } = e.target;
+        // 「年菜」改成真的分類（修正單 #01 第 3 節），不再是任何品項都能勾選的旗標：
+        // 切進年菜分類自動帶入目前年度，切出去則清空年菜專屬欄位
+        if (name === 'category') {
+            setFormData(prev => {
+                if (value === '年菜' && prev.category !== '年菜') {
+                    return { ...prev, category: value, nianfaiYear: activeNianfaiYear };
+                }
+                if (value !== '年菜' && prev.category === '年菜') {
+                    return { ...prev, category: value, nianfaiYear: null, bundleComposition: null, nianfaiStockRef: null };
+                }
+                return { ...prev, category: value };
+            });
+            return;
+        }
         setFormData(prev => ({
             ...prev,
             [name]: name === 'price' || name === 'stock' ? Math.max(0, parseFloat(value) || 0) : value,
@@ -274,6 +292,16 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
                     ? current.filter(id => id !== inventoryId)
                     : [...current, inventoryId],
             };
+        });
+    };
+
+    const handleToggleBundle = () => {
+        setFormData(prev => ({ ...prev, bundleComposition: prev.bundleComposition ? null : [] }));
+    };
+    const handleBundleQtyChange = (itemId, qty) => {
+        setFormData(prev => {
+            const current = (prev.bundleComposition || []).filter(c => c.itemId !== itemId);
+            return { ...prev, bundleComposition: qty > 0 ? [...current, { itemId, qty }] : current };
         });
     };
 
@@ -299,7 +327,7 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
                 </h3>
                 <form onSubmit={handleSubmit}>
                     <div className="mb-6 border p-5 rounded-xl bg-gray-50">
-                        <h4 className="text-xl font-bold text-gray-700 mb-4 border-l-4 border-blue-400 pl-3">基本資訊</h4>
+                        <h4 className="text-xl font-bold text-gray-700 mb-4 border-l-4 border-[#4A9A7A] pl-3">基本資訊</h4>
                         <div className="mb-4 flex justify-center">
                             {formData.imageUrl ? (
                                 <img src={formData.imageUrl} alt="預覽圖" className="h-24 w-24 object-cover rounded-full border-2 border-gray-300 shadow-md" onError={e => { e.target.style.opacity = 0; }}/>
@@ -343,24 +371,25 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
                         </div>
                         <input type="hidden" name="stock" value={formData.stock}/>
                     </div>
-                    <div className="mb-6 border p-5 rounded-xl bg-green-50">
+                    <div className="mb-6 border p-5 rounded-xl bg-[#4A9A7A]/8">
                         <h4 className="text-xl font-bold text-gray-700 mb-4 border-l-4 border-green-500 pl-3">📦 庫存連動</h4>
                         <p className="text-sm text-gray-600 mb-3">勾選此品項售出時會消耗的庫存原料。</p>
                         <div className="space-y-4 max-h-72 overflow-y-auto pr-3">
                             {inventoryItems.length === 0 ? (
                                 <p className="text-sm text-gray-400">無庫存項目</p>
                             ) : (
-                                Object.entries(inventoryItems.reduce((acc, inv) => {
+                                // 年菜庫存只給年菜品項對應用（不扣庫存），不列入一般品項的庫存連動選項
+                                Object.entries(inventoryItems.filter(inv => inv.category !== '年菜庫存').reduce((acc, inv) => {
                                     (acc[inv.category] = acc[inv.category] || []).push(inv);
                                     return acc;
                                 }, {})).map(([category, items]) => (
                                     <div key={category} className="border border-green-200 p-3 rounded-lg bg-white shadow-sm">
-                                        <p className="text-base font-black text-green-800 mb-2">{category}</p>
+                                        <p className="text-base font-black text-[#4A9A7A] mb-2">{category}</p>
                                         <div className="grid grid-cols-2 gap-2">
                                             {items.map(inv => (
-                                                <label key={inv.id} className="flex items-center space-x-2 text-base cursor-pointer hover:bg-green-100 p-2 rounded-lg">
-                                                    <input type="checkbox" checked={formData.consumes.includes(inv.id)} onChange={() => handleConsumeToggle(inv.id)} className="form-checkbox text-green-600 h-5 w-5 rounded"/>
-                                                    <span className={formData.consumes.includes(inv.id) ? 'font-bold text-green-700' : 'text-gray-800'}>{inv.name}</span>
+                                                <label key={inv.id} className="flex items-center space-x-2 text-base cursor-pointer hover:bg-[#4A9A7A]/10 p-2 rounded-lg">
+                                                    <input type="checkbox" checked={formData.consumes.includes(inv.id)} onChange={() => handleConsumeToggle(inv.id)} className="form-checkbox text-[#4A9A7A] h-5 w-5 rounded"/>
+                                                    <span className={formData.consumes.includes(inv.id) ? 'font-bold text-[#4A9A7A]' : 'text-gray-800'}>{inv.name}</span>
                                                 </label>
                                             ))}
                                         </div>
@@ -369,9 +398,56 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
                             )}
                         </div>
                     </div>
+                    {formData.category === '年菜' && (
+                        <div className="mb-6 border p-5 rounded-xl bg-orange-50">
+                            <h4 className="text-xl font-bold text-gray-700 mb-4 border-l-4 border-orange-400 pl-3">🧧 年菜設定</h4>
+                            <p className="text-sm text-gray-600 mb-3">
+                                年度：<span className="font-bold text-gray-800">{formData.nianfaiYear || '（未設定，請確認年菜管理頁的目前年度）'}</span>
+                            </p>
+                            <label className="flex items-center space-x-2 cursor-pointer mb-3">
+                                <input type="checkbox" checked={!!formData.bundleComposition} onChange={handleToggleBundle} className="form-checkbox text-orange-600 h-5 w-5 rounded"/>
+                                <span className="text-gray-700">這是套餐（由多個品項組成）</span>
+                            </label>
+                            {formData.bundleComposition ? (
+                                <div className="space-y-1.5 max-h-56 overflow-y-auto pr-2 border-t border-orange-200 pt-3">
+                                    <p className="text-sm text-gray-600 mb-2">套餐組成與份量（供需庫存統計用，不影響結帳金額）：</p>
+                                    {menuItems.filter(mi => mi.category === '年菜' && mi.nianfaiYear === formData.nianfaiYear && mi.id !== formData.id && !mi.bundleComposition).map(mi => {
+                                        const comp = formData.bundleComposition.find(c => c.itemId === mi.id);
+                                        return (
+                                            <div key={mi.id} className="flex items-center justify-between p-2 bg-white rounded-lg border border-orange-200">
+                                                <span className="text-sm text-gray-700 truncate flex-1">{mi.name}</span>
+                                                <input type="number" min="0" value={comp?.qty || 0}
+                                                    onChange={e => handleBundleQtyChange(mi.id, Math.max(0, parseInt(e.target.value, 10) || 0))}
+                                                    className="w-16 border border-gray-300 rounded p-1 text-right text-sm" />
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <div className="border-t border-orange-200 pt-3">
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">對應庫存（只顯示用，不會扣庫存；年節限定品項選同年度的年菜庫存。新的年節限定品項請先到庫存管理新增類別「年菜庫存」的品項）</label>
+                                    <select value={formData.nianfaiStockRef || ''}
+                                        onChange={e => setFormData(prev => ({ ...prev, nianfaiStockRef: e.target.value || null }))}
+                                        className="w-full border border-gray-300 rounded-lg p-2 text-sm">
+                                        <option value="">（無）</option>
+                                        <optgroup label="年菜庫存（年節限定，製作入庫量）">
+                                            {inventoryItems.filter(inv => inv.category === '年菜庫存' && (inv.id || '').startsWith(`nfstock_${formData.nianfaiYear}_`)).map(inv => (
+                                                <option key={inv.id} value={inv.id}>{inv.name}</option>
+                                            ))}
+                                        </optgroup>
+                                        <optgroup label="冷凍包庫存（平常也賣）">
+                                            {inventoryItems.filter(inv => inv.category === '冷凍包庫存').map(inv => (
+                                                <option key={inv.id} value={inv.id}>{inv.name}</option>
+                                            ))}
+                                        </optgroup>
+                                    </select>
+                                </div>
+                            )}
+                        </div>
+                    )}
                     <div className="flex justify-end space-x-4 pt-4 border-t">
                         <button type="button" onClick={onClose} className="px-6 py-3 text-base font-medium text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300">取消</button>
-                        <button type="submit" disabled={submitting} className={`px-6 py-3 text-base font-bold text-white rounded-lg shadow-md transition-colors ${submitting ? 'bg-blue-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>{submitting ? '處理中...' : isAdding ? '確認新增' : '儲存變更'}</button>
+                        <button type="submit" disabled={submitting} className={`px-6 py-3 text-base font-bold text-white rounded-lg shadow-md transition-colors ${submitting ? 'bg-[#4A9A7A]/50 cursor-not-allowed' : 'bg-[#4A9A7A] hover:bg-[#3A8A6A]'}`}>{submitting ? '處理中...' : isAdding ? '確認新增' : '儲存變更'}</button>
                     </div>
                 </form>
             </div>
@@ -392,6 +468,8 @@ const MenuManagementPage = () => {
     const [isAddingNew, setIsAddingNew] = useState(false);
     const [editingCategory, setEditingCategory] = useState(null); // category settings modal
     const [isAddingCategory, setIsAddingCategory] = useState(false);
+    // 年菜分類顯示與否只看這個 hook（修正單 #01 第 2 節），preparing/selling/closed 顯示，archived 隱藏
+    const { year: activeNianfaiYear, showMenuCategory: showNianfaiCategory } = useNianfaiSeason();
     const [filterCategory, setFilterCategory] = useState(null);
 
     useEffect(() => {
@@ -499,7 +577,12 @@ const MenuManagementPage = () => {
         return <div className="p-8 text-center text-2xl text-gray-600">菜單資料載入中...</div>;
     }
 
-    const filteredItems = menuItems.filter(item => item.category === filterCategory);
+    // 年菜改成真分類後，preparing/selling/closed 以外（archived）不顯示這個分類 tab，
+    // 資料不受影響，明年初始化新年度時會依 useNianfaiSeason 重新出現
+    const visibleCategories = showNianfaiCategory ? categories : categories.filter(c => c.name !== '年菜');
+    // 年菜 tab 只顯示目前年度的品項（往年的品項保留在資料庫裡，不顯示，避免明年新舊混在一起改錯）
+    const filteredItems = menuItems.filter(item => item.category === filterCategory
+        && (filterCategory !== '年菜' || !activeNianfaiYear || item.nianfaiYear === activeNianfaiYear));
     const currentCatSetting = categories.find(c => c.name === filterCategory);
 
     return (
@@ -508,7 +591,7 @@ const MenuManagementPage = () => {
                 <h2 className="text-4xl font-black text-gray-800">菜單管理</h2>
                 <button
                     onClick={() => setIsAddingNew(true)}
-                    className="bg-emerald-600 text-white px-5 py-3 rounded-lg hover:bg-emerald-700 font-bold text-base shadow-md flex items-center space-x-2"
+                    className="bg-[#D47856] text-white px-5 py-3 rounded-lg hover:bg-[#C46848] font-bold text-base shadow-md flex items-center space-x-2"
                 >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"/></svg>
                     <span>新增菜單項目</span>
@@ -518,13 +601,13 @@ const MenuManagementPage = () => {
             {/* 類別 Tab 導航列 */}
             <div className="mb-6 border-b border-gray-200">
                 <nav className="-mb-px flex items-center space-x-2 overflow-x-auto" aria-label="Tabs">
-                    {categories.map(cat => (
+                    {visibleCategories.map(cat => (
                         <div key={cat.name} className="flex items-center flex-shrink-0">
                             <button
                                 onClick={() => setFilterCategory(cat.name)}
                                 className={`whitespace-nowrap py-3 px-2 border-b-4 text-lg font-medium transition-colors duration-150
                                     ${cat.name === filterCategory
-                                        ? 'border-blue-600 text-blue-600 font-black'
+                                        ? 'border-[#4A9A7A] text-[#4A9A7A] font-black'
                                         : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
                                     }`}
                             >
@@ -546,7 +629,7 @@ const MenuManagementPage = () => {
                     {/* 新增類別按鈕 */}
                     <button
                         onClick={() => setIsAddingCategory(true)}
-                        className="flex-shrink-0 ml-2 flex items-center gap-1 px-3 py-2 text-sm text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                        className="flex-shrink-0 ml-2 flex items-center gap-1 px-3 py-2 text-sm text-gray-400 hover:text-[#4A9A7A] hover:bg-[#4A9A7A]/10 rounded-lg transition-colors"
                         title="新增類別"
                     >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"/></svg>
@@ -570,6 +653,11 @@ const MenuManagementPage = () => {
                     <span className="px-2.5 py-1 rounded-full text-xs font-bold border bg-purple-50 text-purple-600 border-purple-200">
                         報表：{currentCatSetting.reportGroup}
                     </span>
+                    {filterCategory === '年菜' && activeNianfaiYear && (
+                        <span className="px-2.5 py-1 rounded-full text-xs font-bold border bg-orange-50 text-orange-700 border-orange-200">
+                            只顯示 {activeNianfaiYear} 年度的年菜（往年的保留但不顯示）
+                        </span>
+                    )}
                 </div>
             )}
 
@@ -639,6 +727,8 @@ const MenuManagementPage = () => {
                     isAdding={false}
                     inventoryItems={inventoryItems}
                     categories={categories}
+                    menuItems={menuItems}
+                    activeNianfaiYear={activeNianfaiYear}
                 />
             )}
             {isAddingNew && (
@@ -649,6 +739,8 @@ const MenuManagementPage = () => {
                     isAdding={true}
                     inventoryItems={inventoryItems}
                     categories={categories}
+                    menuItems={menuItems}
+                    activeNianfaiYear={activeNianfaiYear}
                 />
             )}
             {editingCategory && (

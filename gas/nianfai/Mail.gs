@@ -1,0 +1,539 @@
+/**
+ * 寄出前確認、出貨通知、取貨提醒（handoff 第 4、5、6 節；取代舊 pre_ship.gs／shipped.gs／pickup_reminder.gs）
+ *
+ *   寄出前確認  宅配單；WebPOS 年菜管理頁「寄信」先預覽名單、確認後才寄
+ *   出貨通知    宅配單；必須已填「出貨日」與「託運單號」，沒填的列出原因跳過
+ *   寄出前確認  也可以在 Yw 指定的「寄出前確認時間」一次自動寄出（Reminder.gs）
+ *   取貨提醒    自取單；每天 08:00 自動寄給「明天」取貨的客人（設定「取貨提醒開關」= 開，小卡ID 必填），
+ *               寄完把名單寄給店家；失敗只重試一次。WebPOS 也可以手動預覽／補寄指定日期
+ *
+ * 共同規則：
+ *   - 寄過的不重寄（狀態存在指令碼屬性，見 OrderSheets.gs）
+ *   - 現場單有留 email 的也照寄（沒留 email 的不寄；dc9b57e 起）
+ *   - 沒有 email（或 email 是店家信箱）不寄
+ *   - 已取消的訂單不列入
+ *   - Gmail 每天可寄封數有上限（一般帳號約 100 封，含確認信）；超過的部分不寄、列出來隔天再寄
+ * 出貨通知（冷凍年菜寄出通知）與取貨提醒附上「加熱說明小卡」（「設定」的「加熱說明小卡ID」）；寄出前確認不附。
+ * 自動取貨提醒時小卡ID 必填（沒填不寄、通知店家）；自動寄出前確認不需要小卡。
+ */
+/** ids：只看這些訂單（Sheet 選單選取的列）；取貨提醒有指定 ids 時不限日期 */
+function nfMailPlan_(type, dateIso, ids, opts) { // opts.resend：指定的訂單已寄過也再寄一次（補寄），其他條件照樣檢查
+  var T = NF_MAIL_TYPES[type];
+  if (!T) throw new Error('未知的信件類型：' + type);
+  nfSyncOrderSheets_();
+  var settings = nfReadSettings_();
+  var prev = nfReadOrderSheets_(nfSpreadsheet_(), settings);
+  var only = ids && ids.length ? ids.map(nfIdStr_) : null;
+  var resend = !!(opts && opts.resend && only);
+  var target = type === 'pickupReminder' ? (dateIso || (only ? null : nfTomorrowIso_())) : null;
+  var list = [];
+  prev.rows[T.kind].forEach(function (r) {
+    if (only && only.indexOf(r.id) < 0) return;
+    if (nfIsCancelled_(r)) return;
+    if (target && nfIsoDate_(r.pickupDate) !== target) return;
+    var ms = nfMailState_(r.id)[type];
+    var email = String(r.email || '').trim();
+    var reason = '';
+    if (ms && ms.status === '已寄出' && !resend) reason = '已寄過（' + ms.at + '）';
+    else if (!email || email.toLowerCase() === NF.STORE_EMAIL.toLowerCase()) reason = '沒有 email';
+    else if (type === 'shipped' && !r.shipDate) reason = '缺出貨日';
+    else if (type === 'shipped') reason = nfTrackNoProblem_(r, prev.rows.delivery);
+    list.push({ id: r.id, name: String(r.name || ''), email: email, reason: reason, failed: !!(ms && ms.status !== '已寄出'), resend: !!(resend && ms && ms.status === '已寄出'), row: r });
+  });
+  return { type: type, label: T.label, date: target, list: list, settings: settings };
+}
+
+/** 給 WebPOS 預覽：可寄名單、跳過名單（含原因）、今天剩餘可寄封數 */
+function nfMailPreview_(type, dateIso) {
+  var p = nfMailPlan_(type, dateIso);
+  var strip = function (x) { return { id: x.id, name: x.name, email: x.email, reason: x.reason, failed: x.failed }; };
+  return {
+    label: p.label,
+    date: p.date ? nfFormDateLabel_(p.date) : null,
+    eligible: p.list.filter(function (x) { return !x.reason; }).map(strip),
+    skipped: p.list.filter(function (x) { return x.reason; }).map(strip),
+    quota: nfMailQuota_(),
+  };
+}
+
+/**
+ * 寄信總覽（WebPOS 寄信頁）：三種信每位客人的狀態，一次回傳
+ *   status：ready 可寄｜sent 已寄出｜opened 已開信（參考）｜acked 客人已確認｜failed 寄送失敗｜skip 不寄（reason）
+ *   取貨提醒另外附各取貨日人數
+ */
+function nfMailOverview_() {
+  nfSyncOrderSheets_();
+  var settings = nfReadSettings_();
+  var prev = nfReadOrderSheets_(nfSpreadsheet_(), settings);
+  var out = { quota: nfMailQuota_(), types: {} };
+  Object.keys(NF_MAIL_TYPES).forEach(function (type) {
+    var T = NF_MAIL_TYPES[type];
+    var rows = [];
+    prev.rows[T.kind].forEach(function (r) {
+      if (nfIsCancelled_(r)) return;
+      var ms = nfMailState_(r.id)[type];
+      var email = String(r.email || '').trim();
+      var status, reason = '', at = '';
+      if (ms && ms.status === '已寄出') {
+        status = ms.ackAt ? 'acked' : ms.openedAt ? 'opened' : 'sent';
+        at = ms.ackAt || ms.openedAt || ms.at;
+        if (ms.ackAt && ms.ackFast) reason = '寄出後 1 分鐘內就確認，可能是信箱自動檢查';
+      } else {
+        if (!email || email.toLowerCase() === NF.STORE_EMAIL.toLowerCase()) reason = '沒有 email';
+        else if (type === 'shipped' && !r.shipDate) reason = '缺出貨日';
+        else if (type === 'shipped') reason = nfTrackNoProblem_(r, prev.rows.delivery);
+        status = reason ? 'skip' : (ms ? 'failed' : 'ready');
+        if (ms) { at = ms.at; if (!reason) reason = String(ms.status).replace(/^失敗：/, ''); }
+      }
+      rows.push({
+        id: r.id, name: String(r.name || ''), phone: String(r.phone || ''), email: email,
+        pickupDate: r.pickupDate ? nfIsoDate_(r.pickupDate) : '', status: status, reason: reason, at: at,
+        onsite: String(r.note || '').indexOf('現場單') >= 0,
+      });
+    });
+    out.types[type] = { label: T.label, rows: rows };
+  });
+  return out;
+}
+
+function nfMailQuota_() {
+  try { return MailApp.getRemainingDailyQuota(); } catch (e) { return null; }
+}
+
+/**
+ * 寄出。ids：只寄這些訂單（WebPOS 預覽後確認的名單）；不傳＝全部可寄的。
+ * opts.retry：失敗重試一次（自動取貨提醒）；opts.auto：自動排程（寄完通知店家）
+ */
+function nfMailSend_(type, ids, dateIso, opts) {
+  opts = opts || {};
+  var result = nfWithLock_(function () { // 避免兩邊同時按寄出造成重寄
+    var p = nfMailPlan_(type, dateIso, ids, { resend: opts.resend });
+    var want = ids && ids.length ? ids.map(nfIdStr_) : null;
+    var todo = p.list.filter(function (x) { return !x.reason && (!want || want.indexOf(x.id) >= 0); });
+    var quota = nfMailQuota_();
+    var overQuota = [];
+    if (quota !== null && todo.length > quota) { overQuota = todo.slice(quota); todo = todo.slice(0, quota); }
+    var attachment = type === 'preShip' ? null : nfHeatingCard_(p.settings); // 小卡附在出貨通知（提醒宅配別忘了放實體小卡）與取貨提醒；寄出前確認不附
+    var sent = [], failed = [];
+    todo.forEach(function (x) {
+      var cur = nfMailState_(x.id)[type]; // 寄之前再確認一次（WebPOS 與 Sheet 選單同時寄也不會重複）
+      if (cur && cur.status === '已寄出' && !x.resend) return;
+      var tries = opts.retry ? 2 : 1, err = null;
+      for (var t = 0; t < tries; t++) {
+        try { nfSendNotice_(type, x.row, p.settings, attachment); err = null; break; } catch (e) { err = e; Utilities.sleep(1000); }
+      }
+      if (err) {
+        var msg = String(err && err.message ? err.message : err);
+        nfSetMailState_(x.id, type, '失敗：' + msg);
+        failed.push({ id: x.id, name: x.name, error: msg });
+      } else {
+        nfSetMailState_(x.id, type, '已寄出', { keepAck: x.resend });
+        sent.push({ id: x.id, name: x.name, email: x.email, resend: x.resend });
+      }
+      Utilities.sleep(300);
+    });
+    return {
+      label: p.label,
+      date: p.date ? nfFormDateLabel_(p.date) : null,
+      sent: sent,
+      failed: failed,
+      overQuota: overQuota.map(function (x) { return { id: x.id, name: x.name }; }),
+      skipped: p.list.filter(function (x) { return x.reason; }).map(function (x) { return { id: x.id, name: x.name, reason: x.reason }; })
+        // 指定的訂單在名單裡找不到（已取消、取貨日不符、編號對不上）：也列出來，不要默默寄出 0 封
+        .concat((want || []).filter(function (id) { return !p.list.some(function (x) { return x.id === id; }); })
+          .map(function (id) { return { id: id, name: id, reason: '找不到這張訂單（已取消或取貨日不符）' }; })),
+    };
+  });
+  nfSyncOrderSheets_(); // 把寄信狀態顯示到工作表
+  // Gmail 額度用完沒寄出的，存起來隔天 08:00 提醒店家（當天的結果通知多半也會因為額度寄不出去）
+  nfAddQuotaPending_(type, result.label, result.overQuota.concat(result.failed.filter(function (x) { return nfIsQuotaError_(x.error); })));
+  if (opts.auto || result.failed.length || result.overQuota.length) nfMailReport_(result, opts.auto);
+  return result;
+}
+
+// ── Gmail 每日額度用完：沒寄出的名單隔天 08:00 寄清單提醒店家，直到都寄出為止 ──
+var NF_QUOTA_PENDING_KEY = 'QUOTA_PENDING';
+
+function nfIsQuotaError_(msg) {
+  return /too many times|quota|limit exceeded|額度/i.test(String(msg || ''));
+}
+
+function nfQuotaPending_() {
+  try { return JSON.parse(nfProps_().getProperty(NF_QUOTA_PENDING_KEY) || '[]'); } catch (e) { return []; }
+}
+
+/** items：[{ id, name }]；同一封信（年度＋種類＋訂單）只記一次 */
+function nfAddQuotaPending_(type, label, items) {
+  if (!items || !items.length || !NF_CTX) return;
+  var list = nfQuotaPending_();
+  var at = nfFormatTimestamp_(new Date());
+  items.forEach(function (x) {
+    var dup = list.some(function (q) { return q.env === NF_CTX.env && q.year === NF_CTX.year && q.type === type && q.id === String(x.id); });
+    if (!dup) list.push({ env: NF_CTX.env, year: NF_CTX.year, type: type, label: label, id: String(x.id), name: x.name, at: at });
+  });
+  nfProps_().setProperty(NF_QUOTA_PENDING_KEY, JSON.stringify(list));
+}
+
+/**
+ * 每天 08:00（取貨提醒觸發一開始先跑）：把之前因為額度沒寄出、到現在還沒寄的信列成清單寄給店家。
+ * 已經補寄（狀態變成已寄出）或訂單不在了的就從清單移除；還沒寄的留著，隔天再提醒。
+ */
+function nfQuotaPendingReminder() {
+  var list = nfQuotaPending_();
+  if (!list.length) return { reminded: 0, left: 0 };
+  var keep = [];
+  list.forEach(function (q) {
+    try {
+      nfUseYear_(q.env, q.year);
+      var st = nfMailState_(q.id)[q.type];
+      if (st && st.status === '已寄出') return; // 已補寄
+      keep.push(q);
+    } catch (e) {
+      keep.push(q); // 讀不到年度先留著，不要漏掉
+    }
+  });
+  nfProps_().setProperty(NF_QUOTA_PENDING_KEY, JSON.stringify(keep));
+  if (!keep.length) return { reminded: 0, left: 0 };
+  var byLabel = {};
+  keep.forEach(function (q) { (byLabel[q.year + ' ' + q.label] = byLabel[q.year + ' ' + q.label] || []).push(q); });
+  var lines = ['之前 Gmail 當天可寄封數用完，下面這些信還沒寄出，請到 WebPOS 年菜管理頁「寄信」補寄：'];
+  Object.keys(byLabel).forEach(function (k) {
+    lines.push('\n' + k + '（' + byLabel[k].length + ' 封）：');
+    byLabel[k].forEach(function (q) { lines.push('・' + q.name + '　' + q.id + '　（' + q.at + ' 沒寄出）'); });
+  });
+  lines.push('\n今天 Gmail 還能寄 ' + (nfMailQuota_() === null ? '（無法讀取）' : nfMailQuota_()) + ' 封。補寄完成後這份提醒就不會再出現。');
+  try {
+    MailApp.sendEmail({ to: NF.STORE_EMAIL, subject: '【年菜】還有 ' + keep.length + ' 封信因為額度用完沒寄出', body: lines.join('\n'), name: NF.SENDER_NAME });
+  } catch (e) {
+    console.error('額度提醒寄送失敗：' + e);
+  }
+  return { reminded: keep.length, left: keep.length };
+}
+
+/** 寄信結果通知店家 */
+function nfMailReport_(r, auto) {
+  if (auto && !r.sent.length && !r.failed.length && !r.overQuota.length) return; // 明天沒有要提醒的就不打擾
+  var lines = [];
+  lines.push((auto ? '自動' : '') + r.label + (r.date ? '（' + r.date + ' 取貨）' : '') + '：寄出 ' + r.sent.length + ' 封');
+  if (r.sent.length) lines.push('\n已寄出：\n' + r.sent.map(function (x) { return '・' + x.name + '　' + x.id; }).join('\n'));
+  if (r.failed.length) lines.push('\n寄送失敗（請確認 email 或稍後再寄）：\n' + r.failed.map(function (x) { return '・' + x.name + '　' + x.error; }).join('\n'));
+  if (r.overQuota.length) lines.push('\n今天 Gmail 可寄封數已用完，明天再寄：\n' + r.overQuota.map(function (x) { return '・' + x.name; }).join('\n'));
+  var skip = r.skipped.filter(function (x) { return x.reason.indexOf('已寄過') !== 0; });
+  if (skip.length) lines.push('\n沒有寄：\n' + skip.map(function (x) { return '・' + x.name + '　' + x.reason; }).join('\n'));
+  try {
+    MailApp.sendEmail({
+      to: NF.STORE_EMAIL,
+      subject: '【年菜】' + r.label + '寄出 ' + r.sent.length + ' 封' + (r.failed.length ? '，失敗 ' + r.failed.length + ' 封' : ''),
+      body: lines.join('\n'),
+      name: NF.SENDER_NAME,
+    });
+  } catch (e) {
+    console.error('寄信結果通知失敗：' + e);
+  }
+}
+
+function nfHeatingCard_(settings) {
+  var id = String(settings.kv['加熱說明小卡ID'] || '').trim();
+  if (!id) return null;
+  var blob = DriveApp.getFileById(id).getBlob();
+  var ext = (/\/(png|gif|webp)$/.exec(blob.getContentType() || '') || [null, 'jpg'])[1];
+  return blob.setName('加熱說明小卡.' + ext); // 副檔名照實際格式
+}
+
+function nfNoticeItems_(row, settings) {
+  var items = [], total = 0;
+  settings.items.forEach(function (it, i) {
+    var q = parseInt(row['qty_' + i], 10);
+    if (!(q > 0)) return;
+    var sub = it.isBundle ? it.composition.map(function (c) { return c.item.name; }).join('、') : '';
+    var per = it.isBundle && it.composition.length ? it.composition.reduce(function (s, c) { return s + c.qty; }, 0) : 1;
+    total += q * per;
+    items.push({ name: it.name, qty: q, sub: sub });
+  });
+  return { items: items, totalCount: total };
+}
+
+function nfSendNotice_(type, row, settings, attachment, subjectPrefix) {
+  var kv = settings.kv;
+  var its = nfNoticeItems_(row, settings);
+  var last5 = String(row.last5 || '');
+  var data = {
+    orderTime: row.id ? String(row.id).replace(/#\d+$/, '') : nfFormatTimestamp_(new Date()), // 訂單編號＝表單時間戳記
+    isOnsite: last5.indexOf(NF.ONSITE_PREFIX) === 0,
+    seqLabel: last5.indexOf(NF.ONSITE_PREFIX) === 0 ? last5.slice(NF.ONSITE_PREFIX.length) : '',
+    mapUrl: String(kv['地圖連結'] || ''),
+    year: settings.year,
+    name: String(row.name || ''),
+    receiverName: String(row.recipientName || row.name || ''),
+    receiverPhone: String(row.recipientPhone || row.phone || ''),
+    receiverAddress: String(row.recipientAddress || ''),
+    shipPeriod: String(kv['寄出期間'] || ''),
+    greeting: String(kv['祝賀語'] || ''),
+    storePhone: String(kv['電話'] || ''),
+    storeAddress: String(kv['店址'] || ''),
+    line: String(kv['LINE'] || ''),
+    trackingNo: String(row.trackNo || ''),
+    shipDate: String(row.shipDate || ''),
+    items: its.items,
+    totalCount: its.totalCount,
+  };
+  var subject, file;
+  if (type === 'preShip') {
+    file = 'PreShip'; subject = '冷凍年菜宅配寄出前確認';
+  } else if (type === 'shipped') {
+    file = 'Shipped'; subject = '冷凍年菜寄出通知';
+  } else {
+    file = 'PickupReminder'; subject = '冷凍年菜取貨提醒';
+    var iso = nfIsoDate_(row.pickupDate);
+    data.shipDate = nfFormDateLabel_(iso).replace(/^\d{4}\//, '');
+    var ph = nfPickupHours_(settings, iso);
+    data.pickupHours = ph.hours;
+    data.isLastDay = ph.isLastDay;
+  }
+  data.shipPeriodShort = data.shipPeriod.replace(/^\d{4}\//, '');
+  var tpl, html;
+  data.ackUrl = row.id ? nfConfirmUrl_(row, type) : '#'; // 確認按鈕：預先填好的「年菜確認」Google 表單（ConfirmForm.gs）
+  tpl = HtmlService.createTemplateFromFile(file);
+  tpl.data = nfPlainDates_(data);
+  html = tpl.evaluate().getContent();
+  if (row.id) html = html.replace('</body>', nfOpenPixel_(row.id, type) + '</body>');
+  var opts = { htmlBody: html, name: NF.SENDER_NAME };
+  if (attachment) opts.attachments = [attachment];
+  GmailApp.sendEmail(String(row.email).trim(), (subjectPrefix || '') + subject, '您的信箱不支援 HTML 顯示。', opts);
+}
+
+/** 寄範本給店家 review：範例訂單＋「設定」的日期／祝賀語／店家資訊，不寫入任何寄信狀態 */
+function nfMailSample_(to, types) {
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(to || ''))) throw new Error('email 格式不正確');
+  var settings = nfReadSettings_();
+  var row = {
+    name: '王小明', phone: '0911222333', email: to,
+    recipientName: '王大明', recipientPhone: '0912345678', recipientAddress: '台北市信義區範例路 1 號',
+    trackNo: '123456789012',
+    shipDate: nfShipDateLabels_(settings)[0] || '1/25 (一)',
+    pickupDate: settings.pickupDates.length ? nfFormDateLabel_(settings.pickupDates[0]) : '',
+  };
+  var bundle = -1, single = -1;
+  settings.items.forEach(function (it, i) { if (it.isBundle && bundle < 0) bundle = i; if (!it.isBundle && single < 0) single = i; });
+  if (bundle >= 0) row['qty_' + bundle] = 1;
+  if (single >= 0) row['qty_' + single] = 2;
+  var attachment = null, note = '';
+  try { attachment = nfHeatingCard_(settings); } catch (e) { note = '加熱說明小卡讀取失敗：' + e.message; }
+  var sent = [];
+  // 確認信範本：線上自取、線上宅配（未滿免運）、現場單（顯示流水號、不顯示匯款）
+  var items = [];
+  if (bundle >= 0) items.push({ item: settings.items[bundle], qty: 1 });
+  if (single >= 0) items.push({ item: settings.items[single], qty: 2 });
+  var subtotal = items.reduce(function (s, x) { return s + x.item.price * x.qty; }, 0);
+  var base = { name: '王小明', phone: '0911222333', email: to, timestampText: nfFormatTimestamp_(new Date()), items: items, subtotal: subtotal,
+    recipientName: '王大明', recipientPhone: '0912345678', recipientAddress: '台北市信義區範例路 1 號' };
+  var confirms = {
+    confirmPickup: { label: '確認信（線上自取）', o: { method: '來店自取', isDelivery: false, isOnsite: false, pickupDateRaw: row.pickupDate, shipping: 0 } },
+    confirmDelivery: { label: '確認信（線上宅配）', o: { method: '宅配', isDelivery: true, isOnsite: false, shipping: subtotal < settings.freeThreshold ? settings.shippingFee : 0 } },
+    confirmOnsite: { label: '確認信（現場單自取）', o: { method: '來店自取', isDelivery: false, isOnsite: true, seqLabel: settings.year.slice(-2) + Utilities.formatDate(new Date(), NF.TZ, 'yyMMdd') + '001', last5: '現結', pickupDateRaw: settings.pickupDates.length ? nfFormDateLabel_(settings.pickupDates[settings.pickupDates.length - 1]) : '', shipping: 0 } }, // 訂在最後一天，看提早結束的取貨時間
+  };
+  (types || ['preShip', 'shipped', 'pickupReminder', 'confirmPickup', 'confirmDelivery', 'confirmOnsite']).forEach(function (t) {
+    if (confirms[t]) {
+      var o = {}; Object.keys(base).forEach(function (k) { o[k] = base[k]; });
+      Object.keys(confirms[t].o).forEach(function (k) { o[k] = confirms[t].o[k]; });
+      o.total = o.subtotal + o.shipping;
+      nfSendConfirmation_(o, settings, '【範本】');
+      sent.push(confirms[t].label);
+      return;
+    }
+    nfSendNotice_(t, row, settings, t === 'preShip' ? null : attachment, '【範本】');
+    sent.push(NF_MAIL_TYPES[t].label);
+  });
+  return { sent: sent, attachment: !!attachment, note: note };
+}
+
+// ── 開信追蹤：信裡放一張 1×1 圖片，載入時記下開信時間（Gmail 大致準確；Apple 郵件會預先載入、擋圖片的信箱不會回報）──
+function nfOpenToken_(key) {
+  var sig = Utilities.computeHmacSha256Signature(key, nfSecret_());
+  return Utilities.base64EncodeWebSafe(sig).replace(/=+$/, '').slice(0, 22);
+}
+
+function nfMailKeyParam_(id, type) {
+  var key = NF_CTX.env + '|' + NF_CTX.year + '|' + type + '|' + id;
+  return 'k=' + encodeURIComponent(key) + '&s=' + nfOpenToken_(key);
+}
+
+function nfOpenPixel_(id, type) {
+  var base = nfProps_().getProperty('WEB_APP_URL');
+  if (!base) return '';
+  return '<img src="' + base + '?action=open&' + nfMailKeyParam_(id, type) + '" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px;">';
+}
+
+/**
+ * 客人確認：信裡的按鈕先開一個確認頁（doGet action=ack），客人在頁面上再點「確認」連結才記錄（doGet action=ackdo）。
+ * 信箱的安全掃描只會打開信裡的連結，不會再點確認頁裡的連結，所以「客人已確認」代表客人真的看過信。
+ * 第二步用連結而不是表單送出：多個 Google 帳號的導向、App 內建瀏覽器都不會把它弄壞。
+ * （舊信件的表單送出 doPost action=ack 仍然有效）
+ */
+function nfAckUrl_(id, type) {
+  var base = nfProps_().getProperty('WEB_APP_URL');
+  return base ? base + '?action=ack&' + nfMailKeyParam_(id, type) : '#';
+}
+
+var NF_ACK_TEXT = {
+  preShip: { q: '請確認配送資訊正確無誤', btn: '配送資訊正確，我已確認', done: '已收到您的確認，年菜將依寄出期間寄出。如需修改配送資訊，請加入官方 LINE 洽詢。' },
+  shipped: { q: '請確認您已收到出貨通知', btn: '我已收到出貨通知', done: '感謝確認！收到年菜後請確認品項及數量，有任何問題請與我們聯絡。' },
+  pickupReminder: { q: '請確認您已收到取貨提醒', btn: '我已收到取貨提醒', done: '感謝確認！期待您準時來店取貨。如需變更取貨日，請提前通知我們備貨。' },
+};
+
+function nfAckParse_(key, sig) {
+  if (!key || !sig || sig !== nfOpenToken_(key)) return null;
+  var p = String(key).split('|');
+  if (p.length < 4 || !NF_ACK_TEXT[p[2]]) return null;
+  return { env: p[0], year: p[1], type: p[2], id: p.slice(3).join('|') };
+}
+
+/**
+ * 確認頁外觀。icon：'done' 綠色勾勾（確認完成／已確認過）、'warn' 連結無效；order：哪一筆訂單（讓客人知道確認的是什麼）
+ */
+function nfAckPage_(title, body, action, icon, order) {
+  var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+  var mark = icon === 'done' ? '<div class="ok">✓</div>' : icon === 'warn' ? '<div class="ng">!</div>' : '';
+  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_top">' +
+    '<style>body{font-family:"PingFang TC","Microsoft JhengHei",sans-serif;background:#f9f9f9;margin:0;padding:20px;color:#333}' +
+    '.c{max-width:420px;margin:24px auto;background:#fff;border:1px solid #e0e0e0;border-radius:14px;padding:28px 24px;text-align:center}' +
+    'h1{font-size:22px;margin:14px 0 8px}p{font-size:16px;line-height:1.7;color:#555;margin:6px 0}' +
+    '.order{background:#f8f8f8;border-radius:10px;padding:12px;margin:16px 0 4px;font-size:15px;color:#333;line-height:1.7}' +
+    '.order b{color:#111}.btn{display:inline-block;background:#C1032F;color:#fff;border-radius:28px;font-size:18px;font-weight:bold;padding:14px 34px;margin-top:16px;text-decoration:none}' +
+    '.ok,.ng{width:64px;height:64px;border-radius:50%;margin:8px auto 0;color:#fff;font-size:38px;line-height:64px;font-weight:bold}.ok{background:#16a34a}.ng{background:#f59e0b}' +
+    '.hint{font-size:13px;color:#999;margin-top:18px}</style>' +
+    '</head><body><div class="c"><img src="https://mcusercontent.com/c27db4d77ffc4c29cdbe402a9/images/945a049c-4a56-d37c-288c-e12771643211.png" width="170" alt="咕咕義小餐館">' +
+    mark + '<h1>' + esc(title) + '</h1><p>' + esc(body) + '</p>' +
+    (order ? '<div class="order">' + order + '</div>' : '') + (action || '') +
+    (icon === 'done' ? '<p class="hint">可以關閉這個頁面了</p>' : '') + '</div></body></html>';
+  return HtmlService.createHtmlOutput(html).setTitle('咕咕義小餐館').addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+/** 確認頁上顯示的訂單：訂購人＋訂購編號（現場單）或訂單時間 */
+function nfAckOrderHtml_(id) {
+  var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+  try {
+    var all = nfReadOrderSheets_(nfSpreadsheet_(), nfReadSettings_());
+    var r = all.rows.delivery.concat(all.rows.pickup).filter(function (x) { return x.id === id; })[0];
+    if (!r) return '';
+    var last5 = String(r.last5 || '');
+    var ref = last5.indexOf(NF.ONSITE_PREFIX) === 0 ? '訂購編號 <b>' + esc(last5.slice(NF.ONSITE_PREFIX.length)) + '</b>' : '訂單時間 <b>' + esc(String(id).replace(/#\d+$/, '')) + '</b>';
+    return '訂購人 <b>' + esc(r.name || '') + '</b><br>' + ref;
+  } catch (e) { return ''; }
+}
+
+function nfAckLoad_(key, sig) {
+  var a = nfAckParse_(key, sig);
+  if (!a) return { page: nfAckPage_('連結無效', '請直接聯絡咕咕義小餐館官方 LINE。', '', 'warn') };
+  if (!nfProps_().getProperty(nfYearKey_(a.env, a.year))) return { page: nfAckPage_('連結已失效', '請直接聯絡咕咕義小餐館官方 LINE。', '', 'warn') };
+  nfUseYear_(a.env, a.year);
+  return { a: a };
+}
+
+/** doGet action=ack：確認頁。已經確認過就直接告訴客人，不用再按 */
+function nfAckGet_(key, sig) {
+  var L = nfAckLoad_(key, sig);
+  if (L.page) return L.page;
+  var a = L.a, t = NF_ACK_TEXT[a.type];
+  var st = nfMailState_(a.id)[a.type];
+  var order = nfAckOrderHtml_(a.id);
+  if (st && st.ackAt) return nfAckPage_('您已經確認過了', '已於 ' + String(st.ackAt).slice(5, 16) + ' 收到您的確認，不需要再確認。', '', 'done', order);
+  var href = (nfProps_().getProperty('WEB_APP_URL') || '') + '?action=ackdo&k=' + encodeURIComponent(key) + '&s=' + encodeURIComponent(sig);
+  var link = '<a href="' + href.replace(/"/g, '&quot;') + '" target="_top" class="btn">' + t.btn + '</a>';
+  return nfAckPage_(t.q, '請點下方按鈕完成確認。', link, '', order);
+}
+
+/** 記錄客人已確認：doGet action=ackdo（確認頁上的連結），舊信件的 doPost action=ack 也走這裡 */
+function nfAckPost_(key, sig) {
+  var L = nfAckLoad_(key, sig);
+  if (L.page) return L.page;
+  var a = L.a;
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  var already = null, at = null;
+  try {
+    var st = nfMailState_(a.id);
+    if (st[a.type] && st[a.type].ackAt) already = st[a.type].ackAt;
+    else if (st[a.type]) {
+      at = st[a.type].ackAt = nfFormatTimestamp_(new Date());
+      nfProps_().setProperty(nfMailKey_(a.id), JSON.stringify(st));
+    }
+  } finally { lock.releaseLock(); }
+  var order = nfAckOrderHtml_(a.id);
+  if (already) return nfAckPage_('您已經確認過了', '已於 ' + String(already).slice(5, 16) + ' 收到您的確認，不需要再確認。', '', 'done', order);
+  if (!at) return nfAckPage_('找不到這封信的紀錄', '請直接聯絡咕咕義小餐館官方 LINE。', '', 'warn', order);
+  try { nfSyncOrderSheets_(); } catch (e) { /* 下次同步時會顯示 */ }
+  return nfAckPage_('確認完成', NF_ACK_TEXT[a.type].done + '（' + String(at).slice(5, 16) + '）', '', 'done', order);
+}
+
+/** doGet action=open（不需要密鑰，用簽章驗證）：第一次開信記下時間 */
+function nfRecordOpen_(key, sig) {
+  if (!key || !sig || sig !== nfOpenToken_(key)) return false;
+  var p = String(key).split('|');
+  if (p.length < 4) return false;
+  if (!nfProps_().getProperty(nfYearKey_(p[0], p[1]))) return false;
+  nfUseYear_(p[0], p[1]);
+  var id = p.slice(3).join('|'), type = p[2];
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return false;
+  try {
+    var st = nfMailState_(id);
+    if (!st[type] || st[type].status !== '已寄出' || st[type].openedAt) return true;
+    // 寄出 3 分鐘內的載入多半是信箱的安全掃描（Outlook／Hotmail 送達時就會先抓圖），不算開信
+    var sentAt = new Date(String(st[type].at).replace(/\//g, '-').replace(' ', 'T') + '+08:00');
+    if (!isNaN(sentAt) && Date.now() - sentAt.getTime() < 3 * 60 * 1000) return true;
+    st[type].openedAt = nfFormatTimestamp_(new Date());
+    nfProps_().setProperty(nfMailKey_(id), JSON.stringify(st));
+  } finally { lock.releaseLock(); }
+  try { nfSyncOrderSheets_(); } catch (e) { /* 下次同步時會顯示 */ }
+  return true;
+}
+
+/** 取貨時段：最後一天（除夕前一天）用「最後取貨結束時間」，其他天用「每日取貨時間」，格式 12:00 - 20:00 */
+function nfPickupHours_(settings, iso) {
+  var kv = settings.kv;
+  var parts = String(kv['每日取貨時間'] || '12:00 ~ 20:00').split(/\s*[~～-]\s*/);
+  var start = parts[0] || '12:00', end = parts[1] || '20:00';
+  var last = settings.pickupDates[settings.pickupDates.length - 1];
+  var isLastDay = !!iso && iso === last;
+  return {
+    isLastDay: isLastDay,
+    hours: start + ' - ' + (isLastDay ? String(kv['最後取貨結束時間'] || '16:00') : end),
+    daily: start + ' - ' + end,
+    lastEnd: String(kv['最後取貨結束時間'] || '16:00'),
+    lastLabel: last ? nfFormDateLabel_(last).replace(/^\d{4}\//, '') : '',
+  };
+}
+
+function nfTomorrowIso_() {
+  return nfIsoDate_(Utilities.formatDate(new Date(Date.now() + 24 * 3600 * 1000), NF.TZ, 'yyyy-MM-dd'));
+}
+
+/** 每天 08:00（時間驅動觸發）：所有已正式上線、開啟取貨提醒的年度，寄給明天取貨的客人 */
+function nfDailyPickupReminder() {
+  try { nfQuotaPendingReminder(); } catch (e) { console.error('額度提醒失敗：' + e); } // 先提醒昨天額度用完沒寄出的
+  var all = nfProps_().getProperties();
+  Object.keys(all).forEach(function (k) {
+    if (k.indexOf('YEAR_') !== 0) return;
+    try {
+      var meta = JSON.parse(all[k]);
+      if (!meta.live) return;
+      var envYear = k.slice(5).split(':');
+      nfUseYear_(envYear[0], envYear[1]);
+      if (String(nfReadSettings_().kv['取貨提醒開關'] || '').trim() !== '開') return;
+      nfAutoPickupReminder_(); // 小卡沒問題才寄（Reminder.gs）
+    } catch (e) {
+      try {
+        MailApp.sendEmail({ to: NF.STORE_EMAIL, subject: '【年菜】自動取貨提醒執行失敗', body: k + '\n' + (e && e.stack ? e.stack : e), name: NF.SENDER_NAME });
+      } catch (e2) { console.error(e2); }
+    }
+  });
+}
+
+/** 確保自動提醒的觸發存在（整個專案各一個）：每天 08:00 取貨提醒、每 10 分鐘檢查寄出前確認時間 */
+function nfEnsureDailyTrigger_() {
+  var handlers = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
+  if (handlers.indexOf('nfDailyPickupReminder') < 0) ScriptApp.newTrigger('nfDailyPickupReminder').timeBased().everyDays(1).atHour(8).nearMinute(0).inTimezone(NF.TZ).create();
+  if (handlers.indexOf('nfDeliveryReminderTick') < 0) ScriptApp.newTrigger('nfDeliveryReminderTick').timeBased().everyMinutes(10).create();
+  return true;
+}

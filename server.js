@@ -207,6 +207,15 @@ const PRINTER_IP   = process.env.PRINTER_IP   || '192.168.0.104';
 const PRINTER_PORT = Number(process.env.PRINTER_PORT) || 9100;
 const CUPS_PRINTER = process.env.CUPS_PRINTER  || '_192_168_0_104';
 
+// 列印沙盒：只在 dev 且明確設定 PRINT_MODE=preview 時生效，正式模式完全不受影響。
+// 開啟後所有會碰到實體印表機/錢櫃的動作都改成寫檔案到本機，供在 iPad 上直接預覽 PDF。
+const PRINT_SANDBOX = IS_DEV && process.env.PRINT_MODE === 'preview';
+const PREVIEW_DIR = path.join(__dirname, 'logs', 'print-preview');
+if (PRINT_SANDBOX) {
+    fs.mkdirSync(PREVIEW_DIR, { recursive: true });
+    console.log('🧪 列印沙盒模式：不送印表機、不開錢櫃、不清列印佇列');
+}
+
 // 印表機是單一連線裝置：開錢櫃走原始 TCP（不經過 CUPS），列印走 CUPS lp。
 // 兩邊各自獨立發起連線，若不同桌的列印/開錢櫃請求時間點重疊（例如出餐尖峰時段），
 // 會同時搶佔印表機同一個連線埠，造成連線被拒或延遲重試 → 印單「有時很慢」。
@@ -259,6 +268,10 @@ function printRateLimit(req, res, next) {
 // 若不設連線逾時，會在 withPrinterQueue 佇列裡卡住整批列印請求，因此設定固定逾時、逾時就放棄。
 const DRAWER_CONNECT_TIMEOUT_MS = 4000;
 function kickCashDrawer() {
+    if (PRINT_SANDBOX) {
+        console.log('🧪 [沙盒] 開錢櫃（未執行）');
+        return Promise.resolve({ success: true, message: '沙盒模式：未開錢櫃' });
+    }
     return new Promise((resolve) => {
         const client = new net.Socket();
         let settled = false;
@@ -667,6 +680,17 @@ function printOnce(filePath, pageH) {
 }
 
 async function printPDF(filePath, pageH, copies = 1) {
+    if (PRINT_SANDBOX) {
+        const ts = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }).replace(/[: ]/g, '-');
+        const previewName = `${ts}_x${copies}_${path.basename(filePath)}`;
+        try {
+            fs.copyFileSync(filePath, path.join(PREVIEW_DIR, previewName));
+        } finally {
+            fs.unlink(filePath, () => {});
+        }
+        console.log(`🧪 [沙盒] 預覽 PDF 已儲存：${previewName}（${copies} 份）`);
+        return;
+    }
     try {
         // 多份同時送出（parallel），避免循序等待造成延遲
         await Promise.all(Array.from({ length: copies }, () => printOnce(filePath, pageH)));
@@ -676,6 +700,22 @@ async function printPDF(filePath, pageH, copies = 1) {
 }
 
 // ----------------------------------------------------
+// 年菜取貨日加星期：'2027-01-29' → '2027-01-29（五）'（日期字串直接解析，不受時區影響）
+// '2027-02-04' → '2027/2/4 (四)'（確認信、表單選項的寫法）
+function fmtSlashDateWithWeekday(dateStr) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr || '');
+    if (!m) return dateStr || '';
+    const wd = '日一二三四五六'[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()];
+    return `${+m[1]}/${+m[2]}/${+m[3]} (${wd})`;
+}
+function fmtPickupDateWithWeekday(dateStr) {
+    if (!dateStr) return '';
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr);
+    if (!m) return dateStr;
+    const wd = '日一二三四五六'[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()];
+    return `${m[1]}-${m[2]}-${m[3]}（${wd}）`;
+}
+
 // 【關帳報表 PDF】buildCloseReportPDF
 // ----------------------------------------------------
 function buildCloseReportPDF(data, filePath) {
@@ -1246,8 +1286,326 @@ function buildCustomerReceiptPDF(data, filePath) {
 }
 
 // ----------------------------------------------------
+// 【年菜】二聯單：存根聯（確認訂購時印，客人在手寫格填資料，店家留存）／顧客聯（結帳後印，給客人取貨時出示）
+// data: { seqLabel（訂購編號）, year, orderDate, deliveryMethod, pickupDate, deliveryPeriod,
+//         items[{ name, qty, price, bundleComponents[] }], subtotal, shippingFee, total,
+//         pickupHours（server 依年度設定算好） }
+// 版面依 Yw 2026/11 修正：logo＋電話｜店址、年菜訂購單｜訂購編號、訂購日期、出貨方式、訂單明細、總計、
+// 取貨資訊／宅配資訊（存根聯留手寫格，加高）、注意事項；字比一般收據大；除 logo 外不放英文
+// ----------------------------------------------------
+const NF_STORE = { phone: '04-2471-5526', address: '台中市西區東興路三段13號1樓' };
+const NF_LOGO = (() => { try { return fs.readFileSync(path.join(__dirname, 'assets', 'nianfai-logo-print.png')); } catch { return null; } })();
+// 字級（Yw 2026-11-26：再大兩級）
+const NF_SZ = { label: 10.5, item: 9.75, sub: 9, section: 11, total: 13, small: 9, head: 9.5 }; // head：訂單編號／訂購日期／出貨方式（小一級）
+const NF_M = 3;                     // 出血邊（左右、上方）
+// 字型：蘋方 TC 的 Regular（一般）＋ Semibold（粗體，預設不用），同一家族、基線一致；用真正的粗體字重，不用描邊加粗（熱感紙上描邊會糊）
+// 讀不到蘋方時退回微軟正黑體＋描邊加粗
+const NF_FONT_FILE = '/System/Library/Fonts/PingFang.ttc';
+const NF_PINGFANG = (() => { try { fs.accessSync(NF_FONT_FILE); return true; } catch { return false; } })();
+// 有粗有細（Yw 2026-11-26：參考第一版，一般字要細）：一般字 Light、重點 Medium；預覽可用 slipWeights 比較其他組合
+// 可選字重／字型：蘋方 TC 四種粗細、黑體-繁（STHeiti）Light／Medium、微軟正黑體（今天第一版用的）
+const NF_WEIGHTS = {
+    thin: [NF_FONT_FILE, 'PingFangTC-Thin'], light: [NF_FONT_FILE, 'PingFangTC-Light'], regular: [NF_FONT_FILE, 'PingFangTC-Regular'],
+    medium: [NF_FONT_FILE, 'PingFangTC-Medium'], semibold: [NF_FONT_FILE, 'PingFangTC-Semibold'],
+    heitiLight: ['/System/Library/Fonts/STHeiti Light.ttc', 'STHeitiTC-Light'],
+    heitiMedium: ['/System/Library/Fonts/STHeiti Medium.ttc', 'STHeitiTC-Medium'],
+    jhenghei: [null, null],
+};
+const NF_DEFAULT_WEIGHTS = { reg: 'thin', bold: 'light' }; // Yw 2026-11-26：再細一級（一般字 Thin、重點 Light），熱感紙上比較不糊
+function nfFonts(doc) {
+    for (const [k, [file, ps]] of Object.entries(NF_WEIGHTS)) {
+        try {
+            if (!file || !NF_PINGFANG) doc.registerFont('Nf_' + k, FONT_REG);
+            else doc.registerFont('Nf_' + k, file, ps);
+        } catch { doc.registerFont('Nf_' + k, FONT_REG); }
+    }
+}
+const NF_W = PAGE_W - NF_M * 2;     // 內容寬度
+const WEEK = '日一二三四五六';
+// 'YYYY-MM-DD' 或時間 → 'YYYY/MM/DD (X)'（台北時間）
+function nfDateWeek(v) {
+    if (!v) return '';
+    let y, m, d;
+    const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v));
+    if (iso) { [y, m, d] = [iso[1], iso[2], iso[3]]; }
+    else {
+        const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(v));
+        const g = (t) => p.find(x => x.type === t).value;
+        [y, m, d] = [g('year'), g('month'), g('day')];
+    }
+    const wd = new Date(Date.UTC(+y, +m - 1, +d)).getUTCDay();
+    return `${y}/${m}/${d} (${WEEK[wd]})`;
+}
+
+// 時間戳記 → 'YYYY/MM/DD HH:mm:ss'（台北時間）
+function nfDateTime(v) {
+    return new Date(v).toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }).replace(/-/g, '/');
+}
+
+// 先量高度再正式畫（熱感紙長度依內容）
+function nfRenderSlip(drawFn, filePath) {
+    return new Promise((resolve, reject) => {
+        const m = new PDFDocument({ size: [PAGE_W, 3000], margins: { top: 0, bottom: 0, left: 0, right: 0 } });
+        nfFonts(m);
+        const h = Math.ceil(drawFn(m)) + 8; // 下方出血
+        const doc = new PDFDocument({ size: [PAGE_W, h], margins: { top: 0, bottom: 0, left: 0, right: 0 }, compress: false });
+        const chunks = [];
+        doc.on('data', c => chunks.push(c));
+        doc.on('end', () => fs.writeFile(filePath, Buffer.concat(chunks), e => e ? reject(e) : resolve(h)));
+        doc.on('error', reject);
+        nfFonts(doc);
+        drawFn(doc);
+        doc.end();
+    });
+}
+
+// 排版工具：整張單只用一個字型家族（蘋方 TC Medium／Semibold），同一行的中文與數字基線一致、不會上下錯開
+// opts.weights：{ reg, bold }（light／regular／medium／semibold），預設一般字 Light、重點 Medium
+function nfSlipParts(doc, opts = {}) {
+    const X = NF_M, W = NF_W;
+    const wt = { ...NF_DEFAULT_WEIGHTS, ...(opts.weights || {}) };
+    const REG = 'Nf_' + (NF_WEIGHTS[wt.reg] ? wt.reg : 'light');
+    const BOLD = 'Nf_' + (NF_WEIGHTS[wt.bold] ? wt.bold : 'medium');
+    // weight：指定字重（light／regular／medium／semibold），蓋過一般／粗體
+    const draw = (t, x, y, size, { bold = false, width, align, weight } = {}) => {
+        const stroke = bold && !NF_PINGFANG; // 沒有蘋方才用描邊加粗
+        doc.font(weight && NF_WEIGHTS[weight] ? 'Nf_' + weight : bold ? BOLD : REG).fontSize(size).fillColor('black').strokeColor('black').lineWidth(stroke ? 0.35 : 0);
+        doc.text(String(t), x, y, { lineBreak: false, width, align, fill: true, stroke });
+    };
+    // 量寬度一律用最粗的字重量（比較寬），一般字和粗體都放得下
+    const wOf = (t, size) => doc.font('Nf_semibold').fontSize(size).widthOfString(String(t));
+    const line = (y, lw = 0.6, dash = false) => {
+        doc.save(); if (dash) doc.dash(2, { space: 1.5 });
+        doc.moveTo(X, y).lineTo(X + W, y).lineWidth(lw).strokeColor('black').stroke(); doc.restore();
+    };
+    // 放進一行的字級（最小 min）
+    const fitSize = (t, size, min, width = W) => { let sz = size; while (sz > min && wOf(t, sz) > width) sz -= 0.25; return sz; };
+    // 換行：只在標點（，、。）後斷，挑兩行長度最接近的位置；沒有標點才在中間斷
+    const balance = (t, size, width) => {
+        if (wOf(t, size) <= width) return [t];
+        const cuts = [];
+        for (let i = 1; i < t.length; i++) if ('，、。；'.includes(t[i - 1])) cuts.push(i);
+        const cand = (cuts.length ? cuts : [...Array(t.length - 1).keys()].map(i => i + 1))
+            .map(i => [t.slice(0, i), t.slice(i)])
+            // 句尾標點（，、。；）可以稍微超出（全形標點右半邊是空白），標點才不會被擠到下一行開頭
+            .filter(([a, b]) => wOf(a, size) - ('，、。；'.includes(a.slice(-1)) ? size * 0.75 : 0) <= width && wOf(b, size) <= width)
+            .sort((p, q) => Math.abs(wOf(p[0], size) - wOf(p[1], size)) - Math.abs(wOf(q[0], size) - wOf(q[1], size)));
+        if (cand.length) return cand[0];
+        const mid = Math.ceil(t.length / 2);
+        return [t.slice(0, mid), ...balance(t.slice(mid), size, width)];
+    };
+    // 標籤：內容（同字型、同字級、同一條基線），內容描邊加粗；放不下先縮小再平均換行
+    // size：字級；oneLine：內容一律放在同一行（放不下就縮小字）
+    const field = (label, value, y, { size = NF_SZ.label, oneLine = false } = {}) => {
+        const v = String(value || '');
+        const lw = wOf(label, size);
+        if (oneLine) {
+            const osz = fitSize(v, size, 6, W - lw);
+            draw(label, X, y + (size - osz) * 0.8, size);
+            draw(v, X + lw, y + (size - osz) * 0.8, osz, { bold: true });
+            return y + size + 4;
+        }
+        draw(label, X, y, NF_SZ.label);
+        const sz = fitSize(v, NF_SZ.label, NF_SZ.label - 1.5, W - lw);
+        if (wOf(v, sz) > W - lw && wOf(v, NF_SZ.label) <= W) { // 同一行放不下：內容換到下一行（例如訂購日期的完整時間）
+            y += NF_SZ.label + 3;
+            draw(v, X, y, NF_SZ.label, { bold: true });
+            return y + NF_SZ.label + 6;
+        }
+        const lines = balance(v, sz, W - lw);
+        lines.forEach((l, i) => draw(l, X + lw, y + i * (sz + 3), sz, { bold: true }));
+        return y + lines.length * (sz + 3) + 3;
+    };
+    // 手寫格：標籤＋底線（加高），可加「□同上」，地址可多行
+    const blank = (label, y, { same = false, lines = 1, H = 25 } = {}) => {
+        const lw = wOf(label, NF_SZ.label);
+        const sameW = same ? 26 : 0;
+        for (let i = 0; i < lines; i++) {
+            const by = y + H * (i + 1) - 4;
+            if (i === 0) draw(label, X, by - NF_SZ.label - 2, NF_SZ.label);
+            doc.moveTo(i === 0 ? X + lw + 1 : X, by).lineTo(X + W - (i === 0 ? sameW : 0), by).lineWidth(0.5).strokeColor('black').stroke();
+        }
+        if (same) {
+            const bx = X + W - sameW + 4, top = y + H - 4 - 7.5;
+            doc.rect(bx, top, 7, 7).lineWidth(0.6).strokeColor('black').stroke();
+            draw('同上', bx + 9, top - 0.5, NF_SZ.small);
+        }
+        return y + H * lines + 2;
+    };
+    // 區塊：分隔線上下都留空隙
+    // 小標（手寫區分組：訂購人／收件人）
+    const sub = (title, y) => { draw(title, X, y + 4, NF_SZ.small); return y + NF_SZ.small + 4; };
+    const section = (title, y) => { y += 3; line(y, 0.9); y += 7; draw(title, X, y, NF_SZ.section, { bold: true }); return y + NF_SZ.section + 6; };
+    // 條列（・）：每點只在標點斷行、兩行長度接近，第二行對齊文字開頭
+    const bullets = (items, y) => {
+        const bw = wOf('・', NF_SZ.label);
+        // 條列只用一般字重，用實際字重量寬度（比用最粗的量準），一行放得下就不換行
+        // 句尾全形標點右半邊是空白，可以超出邊界半個字
+        const wReg = (t, size) => doc.font(REG).fontSize(size).widthOfString(String(t)) - ('，、。；'.includes(String(t).slice(-1)) ? size * 0.5 : 0);
+        // 同一組注意事項用同一個字級、每點一行不換行：以最長的那點放得下為準一起縮小
+        let sz = NF_SZ.label;
+        while (sz > 6 && items.some(t => wReg(t, sz) > W - bw)) sz -= 0.25;
+        for (const t of items) {
+            draw('・', X, y, sz);
+            draw(t, X + bw, y, sz);
+            y += sz + 5;
+        }
+        return y;
+    };
+    return { X, W, draw, wOf, line, fitSize, balance, field, blank, sub, section, bullets };
+}
+
+// 抬頭到總計（兩聯共用）
+function nfSlipOrderPart(doc, data, withLogo, paid) {
+    const P = nfSlipParts(doc, { weights: data.slipWeights });
+    const { X, W } = P;
+    let y = NF_M;
+    if (withLogo && NF_LOGO) {
+        doc.image(NF_LOGO, X, y, { width: W });
+        y += W * 145 / 768 + 4;
+        const contact = `${NF_STORE.phone}｜${NF_STORE.address}`;
+        // 店家電話＋地址：Regular（比 Medium 細一級）、一行放完（不換行）
+        const csz = P.fitSize(contact, NF_SZ.small, 5);
+        P.draw(contact, X, y, csz, { width: W, align: 'center', weight: 'regular' });
+        y += csz + 6;
+        P.line(y, 0.9); y += 8;
+    }
+    // 抬頭三欄：同一個字級（標籤和內容都一樣大），以「訂購日期」一行放得下為準；標籤同寬，內容左緣對齊
+    const headRows = [
+        ['訂單編號：', data.seqLabel || ''],
+        ['訂購日期：', nfDateTime(data.orderDate || Date.now())],
+        ['出貨方式：', data.deliveryMethod === 'delivery' ? '宅配' : '來店自取'],
+    ];
+    let hs = NF_SZ.head;
+    while (hs > 7 && headRows.some(([l, v]) => P.wOf(l, hs) + P.wOf(v, hs) > W)) hs -= 0.25;
+    const hlw = Math.max(...headRows.map(([l]) => P.wOf(l, hs)));
+    for (const [l, v] of headRows) {
+        P.draw(l, X, y, hs);
+        P.draw(v, X + hlw, y, hs, { bold: true });
+        y += hs + 4;
+    }
+    y += 2;
+
+    // 訂單明細
+    y = P.section(`${data.year || ''} 年菜訂單明細`.trim(), y);
+    // 欄寬：小計欄剛好放得下「$00,000」、數量欄放得下兩位數，其餘都給品名（7 個字的品名放得進一行）
+    const AW = Math.ceil(P.wOf('$00,000', NF_SZ.item)) + 2, QW = Math.ceil(P.wOf('數量', NF_SZ.small)) + 2, NW = W - QW - AW;
+    P.draw('品名', X, y, NF_SZ.small);
+    P.draw('數量', X + NW, y, NF_SZ.small, { width: QW, align: 'center' });
+    P.draw('小計', X + NW + QW, y, NF_SZ.small, { width: AW, align: 'right' });
+    y += NF_SZ.small + 3;
+    P.line(y, 0.4, true); y += 4;
+    const money = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
+    const rows = (data.items || []).map(it => ({ ...it, qty: it.quantity || it.qty || 1 }));
+    for (const r of rows) {
+        // 品名：所有品名同一字級（NF_SZ.item）；超過 7 個字的新品名才縮小（最多到 9pt），再放不下才換行，不會壓到數量欄
+        const nsz = P.fitSize(r.name || '', NF_SZ.item, 9, NW - 1);
+        const nameLines = P.wOf(r.name || '', nsz) <= NW - 1 ? [r.name || ''] : P.balance(r.name || '', NF_SZ.item, NW - 1);
+        const lsz = nameLines.length === 1 ? nsz : NF_SZ.item;
+        nameLines.forEach((l, i) => P.draw(l, X, y + i * (NF_SZ.item + 2) + (NF_SZ.item - lsz) * 0.8, lsz, { bold: true }));
+        P.draw(String(r.qty), X + NW, y, NF_SZ.item, { width: QW, align: 'center' });
+        P.draw(money((r.price || 0) * r.qty), X + NW + QW, y, NF_SZ.item, { width: AW, align: 'right' });
+        y += nameLines.length * (NF_SZ.item + 2) + 2;
+        for (const c of r.bundleComponents || []) {
+            P.draw(`・${c.name}${c.qty > 1 ? ` ×${c.qty}` : ''}`, X + 1.5, y, NF_SZ.sub); // 套餐細項：縮排小一點
+            y += NF_SZ.sub + 2.5;
+        }
+        if ((r.bundleComponents || []).length) y += 2;
+    }
+    y += 2; P.line(y, 0.4, true); y += 7; // 品項下方分隔線：和上方一樣用虛線
+    const subtotal = data.subtotal != null ? data.subtotal : rows.reduce((s, r) => s + (r.price || 0) * r.qty, 0);
+    const ship = data.shippingFee || 0;
+    const total = data.total != null ? data.total : subtotal + ship;
+    if (ship > 0) {
+        P.draw('小計', X, y, NF_SZ.label); P.draw(money(subtotal), X, y, NF_SZ.label, { width: W, align: 'right' }); y += NF_SZ.label + 3;
+        P.draw('運費', X, y, NF_SZ.label); P.draw(money(ship), X, y, NF_SZ.label, { width: W, align: 'right' }); y += NF_SZ.label + 4;
+    }
+    // 總計（已付清）：標籤和金額底部對齊
+    const ty = y + (NF_SZ.total - NF_SZ.label) * 0.8;
+    P.draw(paid ? '總計（已付清）' : '總計', X, ty, NF_SZ.label, { bold: true });
+    P.draw(money(total), X, y, NF_SZ.total, { bold: true, width: W, align: 'right' });
+    y += NF_SZ.total + 6;
+    return { y, P };
+}
+
+// 顧客聯：結帳後印，客人帶回去（取貨時出示），總計標「已付清」
+function buildNianfaiConfirmPDF(data, filePath) {
+    return nfRenderSlip((doc) => {
+        let { y, P } = nfSlipOrderPart(doc, data, true, true);
+        if (data.deliveryMethod === 'delivery') {
+            y = P.section('宅配資訊', y);
+            y = P.field('寄出期間：', String(data.deliveryPeriod || '').replace(/^\d{4}\//, '').replace(/\s*[~～]\s*/, '～').replace(/\s+/g, ''), y);
+            y = P.section('注意事項', y);
+            y = P.bullets(['宅配統一於寄出期間寄出。', '恕無法指定到貨日期。'], y);
+        } else {
+            y = P.section('取貨資訊', y);
+            y = P.field('取貨日期：', nfDateWeek(data.pickupDate), y);
+            y = P.field('取貨時間：', data.pickupHours || '', y);
+            y = P.section('注意事項', y);
+            y = P.bullets(['請依照取貨日期前往取貨。', '取貨時請出示此訂購單據。', '需變更取貨日期請提前通知。'], y);
+        }
+        return y;
+    }, filePath);
+}
+
+// 存根聯：確認訂購時印（尚未付款），客人在手寫格填資料，店家留存（之後到年菜訂單頁補登）
+function buildNianfaiStubPDF(data, filePath) {
+    return nfRenderSlip((doc) => {
+        let { y, P } = nfSlipOrderPart(doc, data, false, false);
+        // 存根聯不印手寫格（Yw 2026-11-26）：客人資料全部寫在背面
+        if (data.deliveryMethod === 'delivery') {
+            y = P.section('宅配資訊', y);
+            P.draw('- 請在背面寫下宅配資訊 -', P.X, y, NF_SZ.label, { width: P.W, align: 'center' }); y += NF_SZ.label + 5;
+        } else {
+            y = P.section('取貨資訊', y);
+            y = P.field('取貨日期：', nfDateWeek(data.pickupDate), y);
+            y = P.field('取貨時間：', data.pickupHours || '', y);
+            y += 2; P.draw('- 請在背面寫下取貨資訊 -', P.X, y, NF_SZ.label, { width: P.W, align: 'center' }); y += NF_SZ.label + 5;
+        }
+        return y;
+    }, filePath);
+}
+
+// 取貨時間：最後一天（除夕前一天）提早結束，其他天用每日取貨時間（年菜管理頁的日期設定）
+// 資料庫連不上時用上次讀到的設定（記憶體＋存到硬碟，伺服器重開也還在）；完全沒有設定就留空，不印可能錯的時間
+const NIANFAI_PICKUP_CACHE_FILE = path.join(__dirname, 'logs', 'nianfai_pickup_cache.json');
+const nianfaiPickupKvCache = new Map(); // year -> 上次讀到的取貨時間設定
+try { for (const [y, v] of Object.entries(JSON.parse(fs.readFileSync(NIANFAI_PICKUP_CACHE_FILE, 'utf8')))) nianfaiPickupKvCache.set(Number(y), v); } catch { /* 還沒有 */ }
+async function nianfaiPickupHoursFor(year, pickupDate) {
+    if (!year || !pickupDate) return '';
+    year = Number(year);
+    const keys = ['pickup_hours', 'last_pickup_end', 'pickup_dates'].map(k => `nianfai_${year}_${k}`);
+    let kv;
+    try {
+        // 最多等 3 秒：資料庫慢時不要讓單據等太久
+        const { data, error } = await Promise.race([
+            supabase.from('app_settings').select('key, value').in('key', keys),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('逾時')), 3000)),
+        ]);
+        if (error) throw error;
+        kv = Object.fromEntries((data || []).map(r => [r.key.replace(`nianfai_${year}_`, ''), r.value]));
+        if (kv.pickup_dates) {
+            nianfaiPickupKvCache.set(year, kv);
+            try { fs.mkdirSync(path.dirname(NIANFAI_PICKUP_CACHE_FILE), { recursive: true }); fs.writeFileSync(NIANFAI_PICKUP_CACHE_FILE, JSON.stringify(Object.fromEntries(nianfaiPickupKvCache))); } catch { /* 存不了就算了 */ }
+        }
+    } catch (e) {
+        kv = nianfaiPickupKvCache.get(year);
+        console.warn('[年菜] 讀取貨時間設定失敗' + (kv ? '，用上次的設定：' : '，也沒有存下的設定，取貨時間留空：'), e.message);
+        if (!kv) return '';
+    }
+    const [start = '12:00', end = '20:00'] = String(kv.pickup_hours || '12:00 ~ 20:00').split(/\s*[~～-]\s*/);
+    let dates = []; try { dates = JSON.parse(kv.pickup_dates || '[]'); } catch { dates = []; }
+    const last = [...dates].sort().pop(); // 最後一個取貨日（不管存的順序）
+    return `${start} - ${last && pickupDate === last ? (kv.last_pickup_end || '16:00') : end}`;
+}
+
+// 開機先讀一次今年和明年的設定（存起來，之後資料庫連不上也有）
+setTimeout(() => { const y = new Date().getFullYear(); [y, y + 1].forEach(yr => nianfaiPickupHoursFor(yr, '0000-00-00').catch(() => {})); }, 5000);
+
+// ----------------------------------------------------
 // 【列印】POST /print
-// printMode: 'kitchen' → 廚房聯×2, 'customer' → 顧客聯×1, 'all' → 廚房聯×2 + 顧客聯×1
+// printMode: 'kitchen' → 廚房聯×2, 'customer' → 顧客聯×1, 'all' → 廚房聯×2 + 顧客聯×1,
+//            'nianfai-stub' → 年菜存根聯（確認訂購時印，客人填資料）, 'nianfai-customer' → 年菜顧客聯（結帳後印給客人）
 // ----------------------------------------------------
 app.post('/print', printRateLimit, async (req, res) => {
     const data = req.body;
@@ -1260,6 +1618,23 @@ app.post('/print', printRateLimit, async (req, res) => {
 
     // 立即回應前端，印表在背景執行（避免前端等待印表完成才解鎖）
     res.json({ status: '列印請求已送出' });
+
+    // 年菜單據與一般列印分開：讀取貨時間、產生 PDF 都在佇列外做（讀資料庫慢也不會卡住廚房單／顧客單），只有送印才排隊
+    if (printMode === 'nianfai-customer' || printMode === 'nianfai-stub') {
+        (async () => {
+            try {
+                data.pickupHours = await nianfaiPickupHoursFor(data.year, data.pickupDate).catch(() => '');
+                const isCustomer = printMode === 'nianfai-customer';
+                const f = path.join(os.tmpdir(), `${isCustomer ? 'nianfai_customer' : 'nianfai_stub'}_${Date.now()}.pdf`);
+                const h = await (isCustomer ? buildNianfaiConfirmPDF : buildNianfaiStubPDF)(data, f);
+                await withPrinterQueue(() => printPDF(f, h, 1));
+                console.log(isCustomer ? '年菜顧客聯已送出' : '年菜存根聯已送出');
+            } catch (e) {
+                console.error('🔴 年菜列印錯誤：', e);
+            }
+        })();
+        return;
+    }
 
     // 背景非同步執行印表與開錢櫃；排入印表機佇列，避免與其他桌的列印/開錢櫃請求搶連線
     withPrinterQueue(async () => {
@@ -1292,6 +1667,8 @@ app.post('/print', printRateLimit, async (req, res) => {
                 await printPDF(f, h, 1);
                 console.log('顧客聯已送出（1份）');
             }
+
+            // 年菜單據（nianfai-customer／nianfai-stub）在上面另外處理，不進這段
         } catch (e) {
             console.error('🔴 列印錯誤：', e);
         }
@@ -1335,6 +1712,39 @@ app.get('/api/health', async (req, res) => {
     const { error } = await supabase.from('menu_items').select('id').limit(1);
     res.json({ ok: !error, supabase: error ? error.message : 'connected', dev: IS_DEV });
 });
+
+// ---- 列印沙盒：預覽 PDF 清單（只在 PRINT_SANDBOX 開啟時註冊這兩個路由） ----
+if (PRINT_SANDBOX) {
+    app.use('/dev/print-preview/files', express.static(PREVIEW_DIR));
+    app.get('/dev/print-preview', (req, res) => {
+        const files = fs.readdirSync(PREVIEW_DIR)
+            .filter(f => f.endsWith('.pdf'))
+            .sort((a, b) => b.localeCompare(a))
+            .slice(0, 50);
+        const items = files.map(f =>
+            `<li><a href="/dev/print-preview/files/${encodeURIComponent(f)}" target="_blank">${f}</a></li>`
+        ).join('\n');
+        res.send(`<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>列印沙盒預覽</title>
+<style>
+body { font-family: -apple-system, sans-serif; padding: 16px; font-size: 18px; }
+h2 { margin-bottom: 12px; }
+ul { list-style: none; padding: 0; }
+li { padding: 12px 8px; border-bottom: 1px solid #ddd; }
+a { color: #1a5a45; text-decoration: none; word-break: break-all; }
+</style>
+</head>
+<body>
+<h2>🧪 列印沙盒預覽（最新 ${files.length} 筆）</h2>
+<ul>${items || '<li>目前沒有預覽檔案</li>'}</ul>
+</body>
+</html>`);
+    });
+}
 
 // ============================================================
 // 圖片代理縮圖：菜單圖片目前是外部 CDN 的原圖（實測平均 1.4MB、最大 1080x1080），
@@ -1393,6 +1803,10 @@ app.get('/api/menu', async (req, res) => {
             thresholds: r.thresholds || null,
             depleted: consumes.some(cId => cId in invMap && invMap[cId] !== null && invMap[cId] <= 0),
             linkedStock,
+            bundleComposition: r.bundle_composition || null,
+            nianfaiYear: r.nianfai_year || null,
+            nianfaiProductionQty: r.nianfai_production_qty,
+            nianfaiStockRef: r.nianfai_stock_ref || null,
         };
     }));
 });
@@ -1410,7 +1824,9 @@ app.post('/api/menu', async (req, res) => {
     const row = { id, name: b.name, print_name: b.printName||'', customer_print_name: b.customerPrintName||'',
         price: b.price, category: b.category||'', sort_order: b.sortOrder,
         stock: b.stock, sold_out: b.soldOut||false, consumes: b.consumes||[],
-        image_url: b.imageUrl||null, thresholds: b.thresholds||null };
+        image_url: b.imageUrl||null, thresholds: b.thresholds||null,
+        bundle_composition: b.bundleComposition||null, nianfai_year: b.nianfaiYear||null,
+        nianfai_stock_ref: b.nianfaiStockRef||null };
     const { data, error } = await supabase.from('menu_items').upsert(row).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(rowToCamel(data));
@@ -1429,6 +1845,10 @@ app.patch('/api/menu/:id', async (req, res) => {
     if (b.consumes    !== undefined) updates.consumes    = b.consumes;
     if (b.imageUrl    !== undefined) updates.image_url  = b.imageUrl;
     if (b.thresholds  !== undefined) updates.thresholds = b.thresholds;
+    if (b.bundleComposition !== undefined) updates.bundle_composition = b.bundleComposition;
+    if (b.nianfaiYear !== undefined) updates.nianfai_year = b.nianfaiYear;
+    if (b.nianfaiProductionQty !== undefined) updates.nianfai_production_qty = b.nianfaiProductionQty;
+    if (b.nianfaiStockRef !== undefined) updates.nianfai_stock_ref = b.nianfaiStockRef;
     const { data, error } = await supabase.from('menu_items').update(updates).eq('id', req.params.id).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(rowToCamel(data));
@@ -1449,8 +1869,8 @@ app.post('/api/menu/reset-soldout', async (req, res) => {
 // ============================================================
 app.get('/api/inventory-logs', async (req, res) => {
     const { item_id } = req.query;
-    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
-    let q = supabase.from('inventory_logs').select('*').gte('created_at', threeDaysAgo).order('created_at', { ascending: false }).limit(200);
+    const oneMonthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    let q = supabase.from('inventory_logs').select('*').gte('created_at', oneMonthAgo).order('created_at', { ascending: false }).limit(500);
     if (item_id) q = q.eq('item_id', item_id);
     const { data, error } = await q;
     if (error) return res.status(500).json({ error: error.message });
@@ -1547,6 +1967,8 @@ app.post('/api/tables/:tableNumber/reset', async (req, res) => {
 });
 // Dev 專用：一鍵清空桌位管理測試頁——刪除所有進行中（未結帳歸檔）的訂單與對應發票，
 // 桌位全部重設為空桌，庫存連動品項統一設回 10 份。已歸檔的歷史訂單/發票/報表資料不動。
+// 年菜測試資料全部清掉（不論狀態，含已作廢）：年菜訂單／發票、流水號保留紀錄，
+// 流水號計數器歸 1（下一張從 27001 開始）、表單關閉狀態重設。
 // IS_DEV 擋在最前面，就算有人直接打這支 API 也不會在 prod 生效。
 app.post('/api/dev/reset-test-data', async (req, res) => {
     if (!IS_DEV) return res.status(403).json({ error: '僅限 dev 環境使用' });
@@ -1564,8 +1986,62 @@ app.post('/api/dev/reset-test-data', async (req, res) => {
             await supabase.from('orders').delete().in('id', orderIds);
         }
         await supabase.from('tables').update({ status: 'idle', order_id: null, updated_at: new Date().toISOString() }).not('table_number', 'is', null);
-        await supabase.from('menu_items').update({ stock: 10 }).ilike('category', '%庫存%');
-        res.json({ ok: true, clearedOrders: orderIds.length });
+        // 庫存：只有年菜限定（年菜庫存）歸 0；平常也有在賣的品項（冷凍包等其他庫存）保持原本數量，不變動
+        await supabase.from('menu_items').update({ stock: 0 }).eq('category', NIANFAI_STOCK_CATEGORY);
+
+        // 年菜：所有年菜訂單（含作廢、已歸檔）與發票；nianfai_orders 會跟著 orders 一起刪（on delete cascade）
+        const { data: nfOrders, error: nfErr } = await supabase.from('orders').select('id').eq('is_nianfai', true);
+        if (nfErr) throw nfErr;
+        const nfOrderIds = (nfOrders || []).map(o => o.id);
+        if (nfOrderIds.length > 0) {
+            const { data: nfInvs } = await supabase.from('invoices').select('id').in('order_id', nfOrderIds);
+            const nfInvIds = (nfInvs || []).map(i => i.id);
+            if (nfInvIds.length > 0) {
+                await supabase.from('adjustments').delete().in('original_invoice_id', nfInvIds);
+                await supabase.from('invoices').delete().in('id', nfInvIds);
+            }
+            await supabase.from('nianfai_orders').delete().in('order_id', nfOrderIds);
+            await supabase.from('orders').delete().in('id', nfOrderIds);
+        }
+        const { data: resvRows } = await supabase.from('nianfai_seq_reservations').select('id');
+        if ((resvRows || []).length > 0) {
+            await supabase.from('nianfai_seq_reservations').delete().in('id', resvRows.map(r => r.id));
+        }
+        // 年菜回到「從未開賣」：流水號歸 1、表單關閉狀態重設、開賣狀態回到準備中、測試中（尚未正式上線）、停售上限清空
+        const { data: nfSettings } = await supabase.from('app_settings').select('key')
+            .or('key.like.nianfai_%_next_seq,key.like.nianfai_%_form_closed,key.like.nianfai_%_status,key.like.nianfai_%_phase');
+        const nowIso = new Date().toISOString();
+        const resetValue = (key) => key.endsWith('_next_seq') ? '1' : key.endsWith('_form_closed') ? 'false' : key.endsWith('_status') ? 'preparing' : 'testing';
+        for (const { key } of (nfSettings || [])) {
+            if (!/^nianfai_\d{4}_/.test(key)) continue;
+            await supabase.from('app_settings').upsert({ key, value: resetValue(key), updated_at: nowIso });
+        }
+        await supabase.from('menu_items').update({ nianfai_sellout_cap: null }).not('nianfai_year', 'is', null);
+
+        // 列印沙盒的預覽 PDF 一起清掉
+        let clearedPreviews = 0;
+        if (PRINT_SANDBOX) {
+            for (const f of fs.readdirSync(PREVIEW_DIR)) { if (f.endsWith('.pdf')) { fs.unlinkSync(path.join(PREVIEW_DIR, f)); clearedPreviews++; } }
+        }
+
+        // 測試試算表一起清空，不然流水號重新開始後會跟表單回應裡的舊測試單撞號
+        let gasReset = null;
+        if (nianfaiGasConfigured()) {
+            const { data: yr } = await supabase.from('app_settings').select('value').eq('key', 'nianfai_active_year').maybeSingle();
+            const year = parseInt(yr?.value, 10);
+            if (year) {
+                try {
+                    gasReset = (await callNianfaiGas('resetTestData', { year }, { timeoutMs: 330000 })).result;
+                    // 回到測試中（尚未正式上線），可以重新測試「測試完畢正式上線」流程
+                    await callNianfaiGas('backToTesting', { year }).catch(() => null);
+                    nianfaiDemandCache.delete(year);
+                    nianfaiStatusCache.delete(year);
+                } catch (e) {
+                    gasReset = { error: e.message };
+                }
+            }
+        }
+        res.json({ ok: true, clearedOrders: orderIds.length, clearedNianfaiOrders: nfOrderIds.length, clearedReservations: (resvRows || []).length, clearedPreviews, gasReset });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -1664,8 +2140,9 @@ app.post('/api/orders/:id/move-table', async (req, res) => {
 
 // 注意：specific routes 必須在 /:id 前面
 app.get('/api/orders/active', async (req, res) => {
+    // 年菜現場單（is_nianfai）有自己的佇列頁，不能混進桌位/外帶的進行中訂單
     const { data, error } = await supabase.from('orders').select('*')
-        .in('status', ['open','served','paid']).order('id');
+        .in('status', ['open','served','paid']).or('is_nianfai.is.null,is_nianfai.eq.false').order('id');
     if (error) return res.status(500).json({ error: error.message });
     res.json((data||[]).map(orderToCamel));
 });
@@ -1730,6 +2207,7 @@ app.get('/api/report/sessions', async (req, res) => {
         unmarkedGroups: r.unmarked_groups, unmarkedCustomers: r.unmarked_customers,
         grossRevenue: r.gross_revenue, adjustmentAmount: r.adjustment_amount,
         netRevenue: r.net_revenue, frozenRevenue: r.frozen_revenue, mealNetRevenue: r.meal_net_revenue,
+        nianfaiRevenue: r.nianfai_revenue,
     })));
 });
 // 下載分析資料：meal_period_sessions / order_items / orders_fact / external_events + 資料字典，打包成 zip
@@ -2033,7 +2511,7 @@ app.patch('/api/orders/:id', async (req, res) => {
 // completeOrderAndReport
 app.post('/api/orders/:id/complete', async (req, res) => {
     const orderId = parseInt(req.params.id);
-    const { newItems, tableNumber, isFullyPaid, sendTime } = req.body;
+    const { newItems, tableNumber, isFullyPaid, sendTime, finishTime } = req.body;
     const now = new Date().toISOString();
     const { data: existing, error: fetchErr } = await supabase.from('orders').select('*').eq('id', orderId).single();
     if (fetchErr || !existing) return res.status(404).json({ error: '找不到訂單' });
@@ -2067,19 +2545,14 @@ app.post('/api/orders/:id/complete', async (req, res) => {
     });
 
     const amountNow = snapshot.reduce((s, it) => s + (it.price||0) * (it.quantity||1), 0);
-    const newPaidAmount = prevPaid + amountNow;
-
-    await supabase.from('orders').update({
-        status: isFullyPaid ? 'paid' : 'served',
-        items: finalItems, total: currentTotal,
-        paid_amount: newPaidAmount,
-        send_time: sendTime || existing.send_time || Date.now(),
-        updated_at: now,
-    }).eq('id', orderId);
+    // 已付金額＝所有有效發票加總（不用 orders.paid_amount 累加：若上次發票已開、訂單卻沒更新成功，
+    // 重新結帳時 amountNow 為 0，用累加會少算）
+    const invoicedBefore = (prevInvs||[]).reduce((s, inv) => s + (inv.amount || inv.total || 0), 0);
+    const newPaidAmount = Math.max(prevPaid, invoicedBefore + amountNow);
 
     if (amountNow > 0) {
         // 建立發票（部分結帳也會建立，每次結帳一張）
-        await supabase.from('invoices').insert({
+        const { error: invErr } = await supabase.from('invoices').insert({
             invoice_number: `INV-${Date.now()}`,
             payment_time: now,
             order_id: orderId, daily_order_no: existing.daily_order_no,
@@ -2088,6 +2561,8 @@ app.post('/api/orders/:id/complete', async (req, res) => {
             total: amountNow, amount: amountNow,
             items_snapshot: snapshot, status: '已開立', void_time: null,
         });
+        // 發票沒開成功就不要把訂單標成已付款：訂單維持未付款，重新結帳即可（不會重複開立，見上方 alreadyCounted）
+        if (invErr) return res.status(500).json({ error: `建立發票失敗：${invErr.message}` });
         // 扣庫存 + 寫紀錄
         for (const it of snapshot) {
             const { data: mi } = await supabase.from('menu_items').select('stock,consumes').eq('id', it.id).single();
@@ -2105,10 +2580,851 @@ app.post('/api/orders/:id/complete', async (req, res) => {
             }
         }
     }
+    // 先開發票／扣庫存，最後才把訂單標成已付款：任何一步中斷，訂單都還是「未付款」，
+    // 重新結帳時 alreadyCounted 會扣掉已開立的數量，不會重複開發票也不會漏開
+    const { error: ordErr } = await supabase.from('orders').update({
+        status: isFullyPaid ? 'paid' : 'served',
+        items: finalItems, total: currentTotal,
+        paid_amount: newPaidAmount,
+        send_time: sendTime || existing.send_time || Date.now(),
+        ...(finishTime !== undefined ? { finish_time: finishTime } : {}),
+        updated_at: now,
+    }).eq('id', orderId);
+    if (ordErr) return res.status(500).json({ error: `更新訂單失敗：${ordErr.message}` });
+
     if (tableNumber && tableNumber !== '外帶') {
         await supabase.from('tables').upsert({ table_number: tableNumber, status: isFullyPaid ? 'paid' : 'served', order_id: orderId, updated_at: now });
     }
     res.json({ ok: true });
+});
+
+// ============================================================
+// 年菜（nianfai）：訂單與通路完全獨立於一般內用外帶，不扣庫存
+// ============================================================
+
+// 現場年菜單資料補齊後送同一個 Google Form（GAS doPost），讓 Yw 不用手動填兩次。
+// 修正單 #01 第 6 節：結帳當下資料是空的（客人手寫在存根聯），要等佇列頁補齊、
+// 按「送出」才會走到這裡。NIANFAI_GAS_URL 還沒設定好之前一律停在 pending（待傳），
+// 不視為錯誤；之後補上網址、或前次失敗，都靠下面的定時器重試。
+const NIANFAI_DEFAULT_EMAIL = 'goodgoodeatrestaurant@gmail.com'; // 客人沒填 email 時用店家信箱
+const NIANFAI_STOCK_CATEGORY = '年菜庫存';
+// 年菜流水號顯示：年份末兩碼＋3 位流水號，例如 2027 年第 1 號 → 27001（2028 從 28001 開始）
+const nianfaiSeqLabel = (year, seqNo) => `${Number(year) % 100}${String(seqNo).padStart(3, '0')}`; // 舊格式（27001），只剩相容用
+// 訂購編號：販售年度 2 碼＋出單日期 yymmdd＋流水號 3 碼，例 27261205001（2027 年菜、2026/12/05 確認訂購、第 1 號）。
+// 出單日期＝確認訂購（取得流水號）那天，存根聯當下就印出，所以顧客聯、表單、Sheet、確認信都用同一個。
+const taipeiYYMMDD = (d) => {
+    const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: '2-digit', month: '2-digit', day: '2-digit' }).formatToParts(new Date(d || Date.now()));
+    const g = (t) => p.find(x => x.type === t).value;
+    return `${g('year')}${g('month')}${g('day')}`;
+};
+const nianfaiOrderNo = (year, seqNo, issuedAt) => `${Number(year) % 100}${taipeiYYMMDD(issuedAt)}${String(seqNo).padStart(3, '0')}`;
+// 年度內各流水號的出單日期（nianfai_seq_reservations.confirmed_at）；fallback：訂單建立時間
+async function nianfaiIssueDates(year, seqNos = null) {
+    let q = supabase.from('nianfai_seq_reservations').select('seq_no, confirmed_at').eq('year', year);
+    if (seqNos) q = q.in('seq_no', seqNos);
+    const { data } = await q;
+    return new Map((data || []).map(r => [r.seq_no, r.confirmed_at]));
+} // 年節限定品項的製作入庫量，在庫存管理頁維護
+
+// 第 6 節必填欄位：缺一不能送出。回傳缺少的欄位名稱（空陣列 = 完整）
+function nianfaiMissingFields(nf) {
+    const missing = [];
+    const blank = v => !v || !String(v).trim();
+    if (blank(nf.customer_name)) missing.push('姓名');
+    if (blank(nf.customer_phone)) missing.push('電話');
+    if (!['pickup', 'delivery'].includes(nf.delivery_method)) missing.push('取貨方式');
+    if (nf.delivery_method === 'pickup' && blank(nf.pickup_date)) missing.push('取貨日');
+    if (nf.delivery_method === 'delivery') {
+        if (blank(nf.recipient_name)) missing.push('收件人');
+        if (blank(nf.recipient_phone)) missing.push('收件電話');
+        if (blank(nf.recipient_address)) missing.push('收件地址');
+    }
+    return missing;
+}
+
+// ── Google 表單／Sheet（GAS Web App）────────────────────────────────────────
+// GAS 程式在 repo 的 gas/nianfai/，綁在當年度的年菜試算表上，部署成網頁應用程式。
+// Apps Script 不能自訂 HTTP 狀態碼，成功與否看回應 JSON 的 ok。
+const nianfaiGasConfigured = () => !!(process.env.NIANFAI_GAS_URL && process.env.NIANFAI_GAS_SECRET);
+
+// GAS 是一支獨立的「年菜系統」專案，每個請求都帶 env（dev／prod）與 year，GAS 依此打開該年度的試算表與表單
+const NIANFAI_GAS_ENV = IS_DEV ? 'dev' : 'prod';
+async function callNianfaiGas(action, payload = {}, { method = 'POST', timeoutMs = 30000 } = {}) {
+    const url = process.env.NIANFAI_GAS_URL;
+    const secret = process.env.NIANFAI_GAS_SECRET || '';
+    if (!url) throw new Error('GAS 網址尚未設定');
+    payload = { env: NIANFAI_GAS_ENV, ...payload };
+    if (method !== 'GET') payload.webAppUrl = url; // GAS 記下自己的網址（開信追蹤圖片用）
+    let resp;
+    if (method === 'GET') {
+        const qs = new URLSearchParams({ action, secret, ...payload });
+        resp = await fetch(`${url}?${qs}`, { signal: AbortSignal.timeout(timeoutMs) });
+    } else {
+        resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, secret, ...payload }),
+            signal: AbortSignal.timeout(timeoutMs),
+        });
+    }
+    const text = await resp.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch { /* GAS 錯誤頁是 HTML */ }
+    if (!resp.ok || !json) throw new Error(`GAS 回應異常（HTTP ${resp.status}）`);
+    if (!json.ok) {
+        // 新功能呼叫到舊版 GAS：提示更新（Apps Script 網址只跑部署作業指定的版本，不會自動用最新存檔）
+        if (/未知的 action/.test(json.error || '')) {
+            throw new Error(`${json.error}——Google 端的 GAS 不是最新版，請更新程式並「管理部署作業 → 編輯 → 新版本」重新部署`);
+        }
+        throw new Error(json.error || 'GAS 回報失敗');
+    }
+    return json;
+}
+
+async function submitToNianfaiForm(orderId) {
+    if (!nianfaiGasConfigured()) return; // 尚未設定，保持 pending，不算失敗
+    const { data: nf } = await supabase.from('nianfai_orders').select('*').eq('order_id', orderId).single();
+    if (!nf || nf.form_submission_status === 'sent') return;
+    if (nianfaiMissingFields(nf).length > 0) return; // 防呆：資料不完整絕不送出
+    const { data: validInv } = await supabase.from('invoices').select('id').eq('order_id', orderId).eq('status', '已開立').limit(1);
+    if (!validInv || validInv.length === 0) return; // 防呆：發票已作廢的單絕不送出
+    const { data: order } = await supabase.from('orders').select('items, timestamp').eq('id', orderId).single();
+    const issued = (await nianfaiIssueDates(nf.year, [nf.seq_no])).get(nf.seq_no) || nf.created_at || order?.timestamp;
+    try {
+        // 表單題目依品名對應（GAS 端用「設定」的品名比對），GAS 用「現結＋流水號」防重複
+        await callNianfaiGas('submitOrder', {
+            year: nf.year,
+            order: {
+                orderId: nf.order_id, // GAS 用訂單編號防重複（流水號在清空測試資料後會重新開始）
+                seqLabel: nianfaiOrderNo(nf.year, nf.seq_no, issued), // 表單「末五碼」填「現結＋訂購編號」
+                customerName: nf.customer_name, customerPhone: nf.customer_phone,
+                // 客人有填就用客人的（GAS 寄給客人並 bcc 店家）；沒填用店家信箱（只寄給店家）
+                email: (nf.customer_email && nf.customer_email.trim()) || NIANFAI_DEFAULT_EMAIL,
+                deliveryMethod: nf.delivery_method, pickupDate: nf.pickup_date,
+                recipientName: nf.recipient_name, recipientPhone: nf.recipient_phone,
+                recipientAddress: nf.recipient_address,
+                items: (order?.items || []).map(it => ({ id: it.id, name: it.name, qty: it.quantity || 1 })),
+            },
+        });
+        refreshNianfaiDemand(nf.year).catch(() => {}); // 背景更新需求（頁面照常用舊快取＋WebPOS 未送出的單，不會少算）
+        await supabase.from('nianfai_orders').update({
+            form_submission_status: 'sent', form_submission_error: null, submitted_at: new Date().toISOString(),
+        }).eq('order_id', orderId);
+    } catch (error) {
+        await supabase.from('nianfai_orders').update({ form_submission_status: 'failed', form_submission_error: error.message }).eq('order_id', orderId);
+        throw error;
+    }
+}
+
+// 待傳佇列重試：資料已補齊但還沒送成功的訂單（pending=GAS 網址當時未設定、failed=送出失敗），
+// 每 5 分鐘補送一次。incomplete（資料待補）不在這裡，submitToNianfaiForm 內也會再擋一次。
+setInterval(async () => {
+    if (!nianfaiGasConfigured()) return;
+    // 只補送發票有效的單：送出失敗後被作廢的單不能再送進表單（客人會收到確認信）
+    const pendingRows = (await fetchValidNianfaiOrders({ statuses: ['pending', 'failed'] }).catch(() => []))
+        .map(({ nf }) => ({ order_id: nf.order_id }));
+    for (const row of pendingRows) {
+        await submitToNianfaiForm(row.order_id).catch(e => console.error(`[年菜] 待傳佇列重送失敗 order_id=${row.order_id}:`, e.message));
+    }
+}, 5 * 60 * 1000);
+
+// WebPOS 現場單需求：只算發票有效（未作廢）的訂單，套餐依 bundle_composition 展開成單品。
+// excludeSeqLabels：已經送進表單的流水號（這些從 Sheet 算，不再從 WebPOS 算，避免重複）
+// ordered（選填）：各品項被點的原始份數（套餐不拆），給年菜庫存的套餐列顯示份數
+// sentBefore（選填，毫秒）：在這個時間以前就送出成功的單也排除（Sheet 快照裡已經有它）。
+// 只靠流水號字串比對的話，訂購編號格式改過（例如舊單 27001 → 新格式 27261125001）就會對不上而重複計算。
+async function computeWebposNianfaiDemand(year, excludeSeqLabels = new Set(), ordered = null, sentBefore = null) {
+    const { data: nfOrders } = await supabase.from('nianfai_orders').select('order_id, seq_no, created_at, form_submission_status, submitted_at').eq('year', year);
+    const demand = {};
+    const issued = await nianfaiIssueDates(year);
+    const seqByOrder = new Map((nfOrders || []).map(o => [o.order_id, nianfaiOrderNo(year, o.seq_no, issued.get(o.seq_no) || o.created_at)]));
+    const inSheet = (o) => excludeSeqLabels.has(seqByOrder.get(o.order_id))
+        || (sentBefore != null && o.form_submission_status === 'sent' && o.submitted_at && new Date(o.submitted_at).getTime() < sentBefore);
+    const orderIds = (nfOrders || []).filter(o => !inSheet(o)).map(o => o.order_id);
+    if (orderIds.length === 0) return demand;
+
+    const { data: invoices } = await supabase.from('invoices').select('order_id').in('order_id', orderIds).eq('status', '已開立');
+    const validOrderIds = new Set((invoices || []).map(i => i.order_id));
+    const { data: orders } = await supabase.from('orders').select('id, items').in('id', orderIds);
+    const { data: menuItems } = await supabase.from('menu_items').select('id, bundle_composition').eq('nianfai_year', year);
+    const bundleMap = new Map((menuItems || []).map(m => [m.id, m.bundle_composition]));
+
+    for (const o of (orders || [])) {
+        if (!validOrderIds.has(o.id)) continue; // 發票已作廢，不計入
+        for (const it of (o.items || [])) {
+            const qty = it.quantity || 1;
+            if (ordered) ordered[it.id] = (ordered[it.id] || 0) + qty;
+            const bundle = bundleMap.get(it.id);
+            if (bundle && bundle.length > 0) {
+                for (const comp of bundle) demand[comp.itemId] = (demand[comp.itemId] || 0) + comp.qty * qty;
+            } else {
+                demand[it.id] = (demand[it.id] || 0) + qty;
+            }
+        }
+    }
+    return demand;
+}
+
+// 修正單 #01 第 7 節：需求 = Sheet 總訂購量（線上＋已送出的現場單）＋ WebPOS 尚未送出的現場單。
+// GAS 未設定或讀取失敗時，暫時全部用 WebPOS 現場單計算（source = webpos_onsite_only，畫面註明「僅含現場單」）。
+// Sheet 結果快取：有快取就直接用（頁面不等 GAS），超過 60 秒在背景更新；只有完全沒有快取時才等 GAS（約 5 秒）。
+// 用舊快取不會少算：剛送出、Sheet 快取還沒包含的現場單，流水號不在 onsiteSeqs 裡，會由 WebPOS 這邊計入。
+const nianfaiDemandCache = new Map(); // year -> { at, sheet }
+const nianfaiDemandInflight = new Map(); // year -> Promise（同時只更新一次）
+function refreshNianfaiDemand(year) {
+    if (nianfaiDemandInflight.has(year)) return nianfaiDemandInflight.get(year);
+    const p = (async () => {
+        const startedAt = Date.now(); // 這個時間以前送出成功的現場單，一定已經在這份 Sheet 快照裡
+        const sheet = await callNianfaiGas('demand', { year }, { method: 'GET', timeoutMs: 30000 });
+        const cached = { at: Date.now(), startedAt, sheet };
+        nianfaiDemandCache.set(year, cached);
+        // 表單開關以 Google 表單實際狀態為準（停售由 GAS 關閉表單）
+        await supabase.from('app_settings').upsert({
+            key: `nianfai_${year}_form_closed`, value: sheet.formAccepting ? 'false' : 'true', updated_at: new Date().toISOString(),
+        });
+        return cached;
+    })().finally(() => nianfaiDemandInflight.delete(year));
+    nianfaiDemandInflight.set(year, p);
+    return p;
+}
+async function computeNianfaiDemandDetail(year) {
+    if (nianfaiGasConfigured()) {
+        try {
+            let cached = nianfaiDemandCache.get(year);
+            if (!cached) cached = await refreshNianfaiDemand(year);
+            else if (Date.now() - cached.at > 60 * 1000) {
+                refreshNianfaiDemand(year).catch(e => console.error('[年菜] 背景更新 Sheet 需求失敗：', e.message));
+            }
+            const sheetDemand = cached.sheet.demandById || {};
+            const sent = new Set(cached.sheet.onsiteSeqs || []);
+            const ordered = { ...(cached.sheet.orderedById || {}) };
+            const webpos = await computeWebposNianfaiDemand(year, sent, ordered, cached.startedAt ?? null);
+            const demand = { ...sheetDemand };
+            for (const [id, q] of Object.entries(webpos)) demand[id] = (demand[id] || 0) + q;
+            return { demand, ordered, source: 'sheet', formAccepting: cached.sheet.formAccepting, updatedAt: cached.sheet.updatedAt };
+        } catch (error) {
+            console.error('[年菜] 讀取 Sheet 需求失敗，暫用 WebPOS 現場單：', error.message);
+            const ordered = {};
+            return { demand: await computeWebposNianfaiDemand(year, new Set(), ordered), ordered, source: 'webpos_onsite_only', error: error.message };
+        }
+    }
+    const ordered = {};
+    return { demand: await computeWebposNianfaiDemand(year, new Set(), ordered), ordered, source: 'webpos_onsite_only' };
+}
+async function computeNianfaiDemand(year) {
+    return (await computeNianfaiDemandDetail(year)).demand;
+}
+
+
+// 「設定」分頁用的資料：品項／價格／套餐組成／停售上限、取貨與寄出日期（品項唯一來源是 WebPOS）
+async function buildNianfaiSheetPayload(year) {
+    const keys = ['pickup_dates', 'ship_dates', 'delivery_period', 'last_pickup_end', 'order_deadline', 'pickup_hours'].map(k => `nianfai_${year}_${k}`);
+    const [{ data: items, error }, { data: stockRows }, { data: settings }] = await Promise.all([
+        supabase.from('menu_items').select('*').eq('nianfai_year', year).order('sort_order'),
+        supabase.from('menu_items').select('id, category, stock').ilike('category', '%庫存%'),
+        supabase.from('app_settings').select('key, value').in('key', keys),
+    ]);
+    if (error) throw error;
+    const catById = new Map((stockRows || []).map(r => [r.id, r.category]));
+    const stockById = new Map((stockRows || []).map(r => [r.id, r.stock]));
+    const nameById = new Map((items || []).map(r => [r.id, r.name]));
+    const kv = Object.fromEntries((settings || []).map(r => [r.key.replace(`nianfai_${year}_`, ''), r.value]));
+    let pickupDates = [];
+    try { pickupDates = JSON.parse(kv.pickup_dates || '[]'); } catch { pickupDates = []; }
+    // 寄出日（起訖 → 每一天），「宅配」出貨日下拉選單用
+    const shipDates = [];
+    try {
+        const { start, end } = JSON.parse(kv.ship_dates || '{}');
+        if (start && end) {
+            for (let d = new Date(`${start}T00:00:00Z`); d <= new Date(`${end}T00:00:00Z`) && shipDates.length < 31; d.setUTCDate(d.getUTCDate() + 1)) {
+                shipDates.push(d.toISOString().slice(0, 10));
+            }
+        }
+    } catch { /* 沒設定 */ }
+    return {
+        year,
+        shippingFee: 160, freeThreshold: 3000, bundleMax: 8, singleMax: 8,
+        pickupDates,
+        orderDeadline: kv.order_deadline || '',
+        pickupHours: kv.pickup_hours || '12:00 ~ 20:00',
+        deliveryPeriod: kv.delivery_period || '',
+        shipDates,
+        // 最後取貨日（除夕前一天）與結束時間，表單須知與確認信用
+        lastPickupText: pickupDates.length ? fmtSlashDateWithWeekday(pickupDates[pickupDates.length - 1]) : '',
+        lastPickupEnd: kv.last_pickup_end || '16:00',
+        items: (items || []).map(r => ({
+            id: r.id, name: r.name, price: r.price,
+            isBundle: !!(r.bundle_composition && r.bundle_composition.length),
+            composition: (r.bundle_composition || []).map(c => ({ id: c.itemId, name: nameById.get(c.itemId) || c.itemId, qty: c.qty })),
+            // 平常也賣＝對應冷凍包庫存；年節限定對應年菜庫存
+            regular: !!r.nianfai_stock_ref && catById.get(r.nianfai_stock_ref) !== NIANFAI_STOCK_CATEGORY,
+            cap: r.nianfai_sellout_cap,
+            // 製作入庫＝對應庫存目前數量（供需庫存「製作」欄）
+            productionQty: r.nianfai_stock_ref ? (stockById.get(r.nianfai_stock_ref) ?? null) : null,
+        })),
+    };
+}
+
+const nianfaiGasRoute = (handler) => async (req, res) => {
+    const year = parseInt(req.body?.year || req.query?.year, 10);
+    if (!year) return res.status(400).json({ error: '缺少年度' });
+    if (!nianfaiGasConfigured()) return res.status(400).json({ error: 'GAS 網址或密鑰尚未設定' });
+    try {
+        const out = await handler(year, req);
+        nianfaiStatusCache.delete(year); // 狀態可能變了（建立、上線、表單開關、提醒開關…），下次重新讀
+        res.json(out);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// 表單或「設定」有變動時，之前「檢查表單對應」的結果就不算數，開賣前要重新檢查
+const invalidateNianfaiFormCheck = (year) => supabase.from('app_settings').delete().eq('key', `nianfai_${year}_form_check`);
+
+// 年菜管理頁：GAS 連線狀態＋該年度試算表／表單（沒建立也算連線成功）
+// 「Google 表單／Sheet」狀態：快取 30 秒、過期時先回舊的並在背景更新；任何 Google 操作（POST）後清掉，下次重新讀
+const nianfaiStatusCache = new Map(); // year -> { at, body }
+async function fetchNianfaiGasStatus(year) {
+    const r = await callNianfaiGas('ping', year ? { year } : {}, { method: 'GET', timeoutMs: 20000 });
+    const { data: chk } = await supabase.from('app_settings').select('value').eq('key', `nianfai_${year}_form_check`).maybeSingle();
+    let formCheck = null;
+    try { formCheck = chk ? JSON.parse(chk.value) : null; } catch { formCheck = null; }
+    // 測試中／已正式上線：以 GAS 記錄為準，同步一份到 app_settings
+    if (year && r.created) {
+        await supabase.from('app_settings').upsert({ key: `nianfai_${year}_phase`, value: r.live ? 'live' : 'testing', updated_at: new Date().toISOString() });
+    }
+    return { configured: true, ok: true, env: NIANFAI_GAS_ENV, ...r, phase: r.created ? (r.live ? 'live' : 'testing') : null, formCheck };
+}
+app.get('/api/nianfai/gas/status', async (req, res) => {
+    if (!nianfaiGasConfigured()) return res.json({ configured: false });
+    const year = parseInt(req.query.year, 10) || null;
+    const key = year || 0;
+    const cached = nianfaiStatusCache.get(key);
+    const refresh = () => fetchNianfaiGasStatus(year).then(body => { nianfaiStatusCache.set(key, { at: Date.now(), body }); return body; });
+    try {
+        if (cached && req.query.fresh !== '1') {
+            if (Date.now() - cached.at > 30 * 1000) refresh().catch(() => {});
+            return res.json(cached.body);
+        }
+        res.json(await refresh());
+    } catch (error) {
+        res.json({ configured: true, ok: false, error: error.message });
+    }
+});
+
+// 建立當年度 Google 試算表＋表單＋分頁＋保護範圍＋觸發條件
+app.post('/api/nianfai/gas/create-year', nianfaiGasRoute(async (year) => {
+    const payload = await buildNianfaiSheetPayload(year);
+    if (!payload.pickupDates.length || !payload.deliveryPeriod || !payload.orderDeadline) {
+        throw new Error('請先設定取貨、寄出日期與預購截止日');
+    }
+    if (!payload.items.length) throw new Error('這個年度還沒有年菜品項');
+    // 雲端硬碟：000GGE ＞ 2. 年菜 ＞ 2027 年菜測試（dev）／2027 年菜（prod）
+    const folderPath = ['000GGE', '2. 年菜', `${year} ${IS_DEV ? "年菜測試" : "年菜"}`];
+    const r = await callNianfaiGas('createYear', { ...payload, folderPath }, { timeoutMs: 330000 });
+    const now = new Date().toISOString();
+    await supabase.from('app_settings').upsert([
+        { key: `nianfai_${year}_sheet_url`, value: r.spreadsheetUrl, updated_at: now },
+        { key: `nianfai_${year}_form_url`, value: r.formUrl, updated_at: now },
+        { key: `nianfai_${year}_form_edit_url`, value: r.formEditUrl, updated_at: now },
+    ]);
+    await invalidateNianfaiFormCheck(year);
+    return { ok: true, ...r };
+}));
+
+// WebPOS 品項／價格／日期 → 「設定」
+app.post('/api/nianfai/gas/sync-settings', nianfaiGasRoute(async (year) => {
+    const r = await callNianfaiGas('syncSettings', await buildNianfaiSheetPayload(year), { timeoutMs: 330000 });
+    nianfaiDemandCache.delete(year);
+    await invalidateNianfaiFormCheck(year);
+    return { ok: true, items: r.items };
+}));
+
+// 同步到表單：apply=false 只列差異，apply=true 套用
+app.post('/api/nianfai/gas/form-sync', nianfaiGasRoute(async (year, req) => {
+    const apply = !!req.body.apply;
+    const r = await callNianfaiGas(apply ? 'applyFormSync' : 'planFormSync', { year }, { timeoutMs: 60000 });
+    if (apply) await invalidateNianfaiFormCheck(year);
+    return { ok: true, changes: r.changes || [], warnings: r.warnings || [], hasResponses: !!r.hasResponses };
+}));
+
+// 檢查表單說明：「設定」的值有沒有出現在表單說明裡（只檢查，不修改）
+app.post('/api/nianfai/gas/check-form-text', nianfaiGasRoute(async (year) => {
+    const r = await callNianfaiGas('checkFormText', { year }, { timeoutMs: 60000 });
+    return { ok: true, ...r.result };
+}));
+
+// 檢查表單對應：開賣前必須通過，結果記在 app_settings
+app.post('/api/nianfai/gas/check-form', nianfaiGasRoute(async (year) => {
+    const r = await callNianfaiGas('checkForm', { year }, { timeoutMs: 60000 });
+    const result = { passed: !!r.passed, problems: r.problems || [], at: new Date().toISOString() };
+    await supabase.from('app_settings').upsert({ key: `nianfai_${year}_form_check`, value: JSON.stringify(result), updated_at: result.at });
+    return { ok: true, ...result };
+}));
+
+// 依目前「設定」重建訂單整理／供需庫存／備料表／修改紀錄（不動表單回應）
+app.post('/api/nianfai/gas/rebuild-tabs', nianfaiGasRoute(async (year) => {
+    await callNianfaiGas('syncSettings', await buildNianfaiSheetPayload(year), { timeoutMs: 330000 });
+    const r = await callNianfaiGas('rebuildTabs', { year }, { timeoutMs: 330000 });
+    return { ok: true, result: r.result };
+}));
+
+// 寄信（寄出前確認、出貨通知、取貨提醒）：先預覽名單，確認後才寄
+const NIANFAI_MAIL_TYPES = ['preShip', 'shipped', 'pickupReminder'];
+app.post('/api/nianfai/gas/mail-preview', nianfaiGasRoute(async (year, req) => {
+    const { type, date } = req.body || {};
+    if (!NIANFAI_MAIL_TYPES.includes(type)) throw new Error('未知的信件類型');
+    const r = await callNianfaiGas('mailPreview', { year, type, date: date || null }, { timeoutMs: 120000 });
+    return { ok: true, result: r.result };
+}));
+app.get('/api/nianfai/gas/mail-overview', nianfaiGasRoute(async (year) => {
+    const r = await callNianfaiGas('mailOverview', { year }, { timeoutMs: 120000 });
+    return { ok: true, ...r.result };
+}));
+app.post('/api/nianfai/gas/mail-send', nianfaiGasRoute(async (year, req) => {
+    const { type, date, ids, resend } = req.body || {};
+    if (!NIANFAI_MAIL_TYPES.includes(type)) throw new Error('未知的信件類型');
+    if (!Array.isArray(ids) || !ids.length) throw new Error('沒有要寄的訂單');
+    const r = await callNianfaiGas('mailSend', { year, type, date: date || null, ids, resend: !!resend }, { timeoutMs: 300000 });
+    return { ok: true, result: r.result };
+}));
+app.post('/api/nianfai/gas/mail-sample', nianfaiGasRoute(async (year, req) => {
+    const r = await callNianfaiGas('mailSample', { year, to: req.body?.to, types: req.body?.types }, { timeoutMs: 120000 });
+    return { ok: true, result: r.result };
+}));
+app.post('/api/nianfai/gas/set-reminder', nianfaiGasRoute(async (year, req) => {
+    const r = await callNianfaiGas('setReminder', { year, on: !!req.body?.on });
+    return { ok: true, reminderOn: r.reminderOn, reminders: r.reminders };
+}));
+// 自動宅配提醒（寄出前確認）：開關與寄出時間（例 2027/01/20 20:00；空字串＝清除）
+app.post('/api/nianfai/gas/set-delivery-reminder', nianfaiGasRoute(async (year, req) => {
+    const body = req.body || {};
+    const r = await callNianfaiGas('setDeliveryReminder', { year, on: body.on === undefined ? null : !!body.on, at: body.at === undefined ? null : String(body.at) });
+    return { ok: true, reminders: r.reminders };
+}));
+app.post('/api/nianfai/gas/sync-orders', nianfaiGasRoute(async (year) => {
+    const r = await callNianfaiGas('syncOrders', { year }, { timeoutMs: 120000 });
+    return { ok: true, result: r.result };
+}));
+
+// 表單網址、短網址（forms.gle）、海報用 QR code
+app.get('/api/nianfai/gas/form-links', nianfaiGasRoute(async (year) => {
+    const r = await callNianfaiGas('formLinks', { year }, { timeoutMs: 60000 });
+    return { ok: true, ...r.result };
+}));
+app.get('/api/nianfai/form-qr.png', async (req, res) => {
+    const year = parseInt(req.query.year, 10);
+    if (!year || !nianfaiGasConfigured()) return res.status(400).send('缺少年度或 GAS 未設定');
+    try {
+        const r = (await callNianfaiGas('formLinks', { year }, { timeoutMs: 60000 })).result;
+        const qr = require('qr-image');
+        if (req.query.format === 'svg') { // 向量檔：海報放大也清楚
+            return res.set('Content-Type', 'image/svg+xml').set('Content-Disposition', `attachment; filename="nianfai-${year}-qr.svg"`)
+                .send(qr.imageSync(r.short || r.url, { type: 'svg', margin: 2, ec_level: 'M' }));
+        }
+        const png = qr.imageSync(r.short || r.url, { type: 'png', size: 30, margin: 2, ec_level: 'M' }); // 海報用：大尺寸
+        res.set('Content-Type', 'image/png').set('Content-Disposition', `inline; filename="nianfai-${year}-qr.png"; filename*=UTF-8''${encodeURIComponent(`${year}-年菜表單-QR.png`)}`).send(png);
+    } catch (e) { res.status(500).send(e.message); }
+});
+
+// 排查用：回應分頁、觸發條件、各分頁前幾列的顯示值
+app.post('/api/nianfai/gas/diagnose', nianfaiGasRoute(async (year) => {
+    const r = await callNianfaiGas('diagnose', { year }, { timeoutMs: 60000 });
+    return { ok: true, result: r.result };
+}));
+
+// 測試完畢，正式上線：Google 端清空表單回覆與表單回應（正式客人從第 2 列開始），WebPOS 清空該年度
+// 年菜單／發票／保留流水號、流水號歸 1（27001）、清掉測試時的停售上限。每個年度只能做一次。
+app.post('/api/nianfai/gas/go-live', nianfaiGasRoute(async (year) => {
+    const { data: chk } = await supabase.from('app_settings').select('value').eq('key', `nianfai_${year}_form_check`).maybeSingle();
+    let formCheck = null;
+    try { formCheck = chk ? JSON.parse(chk.value) : null; } catch { formCheck = null; }
+    if (!formCheck?.passed) throw new Error('請先通過「檢查表單對應」');
+    const { data: st } = await supabase.from('app_settings').select('value').eq('key', `nianfai_${year}_status`).maybeSingle();
+    const accepting = st?.value === 'selling'; // 正式上線後表單開關跟著開賣狀態
+    const g = await callNianfaiGas('goLive', { year, accepting }, { timeoutMs: 330000 });
+    const cleared = await clearNianfaiYearOrders(year);
+    await supabase.from('menu_items').update({ nianfai_sellout_cap: null }).eq('nianfai_year', year);
+    const now = new Date().toISOString();
+    await supabase.from('app_settings').upsert([
+        { key: `nianfai_${year}_phase`, value: 'live', updated_at: now },
+        { key: `nianfai_${year}_next_seq`, value: '1', updated_at: now },
+        { key: `nianfai_${year}_form_closed`, value: 'false', updated_at: now },
+    ]);
+    nianfaiDemandCache.delete(year);
+    await callNianfaiGas('syncSettings', await buildNianfaiSheetPayload(year), { timeoutMs: 330000 }).catch(() => null); // 停售上限清空同步到「設定」
+    return { ok: true, sheetCleared: g.result?.cleared || 0, liveAt: g.result?.liveAt, ...cleared };
+}));
+
+// 清空測試資料（只限測試中，正式環境也可用）：Google 端清空表單回覆／表單回應／宅配自取／寄信與送單紀錄，
+// WebPOS 只清這個年度的年菜單／發票／保留流水號、流水號歸 1。一般營業資料完全不碰；年度維持測試中。
+app.post('/api/nianfai/gas/clear-test', nianfaiGasRoute(async (year) => {
+    const { data: ph } = await supabase.from('app_settings').select('value').eq('key', `nianfai_${year}_phase`).maybeSingle();
+    if (ph?.value === 'live') throw new Error(`${year} 年已經正式上線，不能清空測試資料`);
+    const g = await callNianfaiGas('clearTestData', { year }, { timeoutMs: 330000 }); // GAS 也會再檢查一次是否已上線
+    const cleared = await clearNianfaiYearOrders(year);
+    await supabase.from('app_settings').upsert({ key: `nianfai_${year}_next_seq`, value: '1', updated_at: new Date().toISOString() });
+    nianfaiDemandCache.delete(year);
+    nianfaiStatusCache.delete(year);
+    return { ok: true, sheetCleared: g.result?.cleared || 0, ...cleared };
+}));
+
+// 只限 dev：解除目前年度測試試算表與表單的連結（檔案保留、改名加「舊」），用來從零重新模擬建立年度
+app.post('/api/nianfai/gas/dev-archive-year', nianfaiGasRoute(async (year) => {
+    if (!IS_DEV) throw new Error('只有測試環境可以解除連結');
+    const r = await callNianfaiGas('devArchiveYear', { year }, { timeoutMs: 120000 });
+    return { ok: true, result: r.result };
+}));
+
+// 只限 dev：回到測試中，方便重複測試正式上線流程
+app.post('/api/nianfai/gas/back-to-testing', nianfaiGasRoute(async (year) => {
+    if (!IS_DEV) throw new Error('只有測試環境可以回到測試');
+    await callNianfaiGas('backToTesting', { year });
+    await supabase.from('app_settings').upsert({ key: `nianfai_${year}_phase`, value: 'testing', updated_at: new Date().toISOString() });
+    return { ok: true };
+}));
+
+// 開賣／收單時開關 Google 表單（只在正式上線後；測試中表單保持開放）
+app.post('/api/nianfai/gas/set-accepting', nianfaiGasRoute(async (year, req) => {
+    const r = await callNianfaiGas('setAccepting', { year, accepting: !!req.body.accepting });
+    nianfaiDemandCache.delete(year);
+    return { ok: true, formAccepting: r.formAccepting };
+}));
+
+// 刪除某年度所有年菜單（訂單／發票／明細）與保留流水號
+async function clearNianfaiYearOrders(year) {
+    // 只清年菜：先從 nianfai_orders 找該年度的訂單，再確認 orders.is_nianfai = true，一般營運訂單不會被選到
+    const { data: nfRows } = await supabase.from('nianfai_orders').select('order_id').eq('year', year);
+    const candidateIds = (nfRows || []).map(r => r.order_id);
+    const { data: nfOrders } = candidateIds.length
+        ? await supabase.from('orders').select('id').in('id', candidateIds).eq('is_nianfai', true)
+        : { data: [] };
+    const orderIds = (nfOrders || []).map(o => o.id);
+    if (orderIds.length) {
+        const { data: invs } = await supabase.from('invoices').select('id').in('order_id', orderIds);
+        const invIds = (invs || []).map(i => i.id);
+        if (invIds.length) {
+            await supabase.from('adjustments').delete().in('original_invoice_id', invIds);
+            await supabase.from('invoices').delete().in('id', invIds);
+        }
+        await supabase.from('nianfai_orders').delete().in('order_id', orderIds);
+        await supabase.from('orders').delete().in('id', orderIds);
+    }
+    const { data: resv } = await supabase.from('nianfai_seq_reservations').select('id').eq('year', year);
+    if ((resv || []).length) await supabase.from('nianfai_seq_reservations').delete().in('id', resv.map(r => r.id));
+    return { clearedOrders: orderIds.length, clearedReservations: (resv || []).length };
+}
+
+// 重新套用保護範圍
+app.post('/api/nianfai/gas/protect', nianfaiGasRoute(async (year) => {
+    const r = await callNianfaiGas('protect', { year });
+    return { ok: true, result: r.result };
+}));
+
+// 修正單 #01 第 5 節：點單改成兩步——「確認訂購」先保留流水號、印顧客聯（這時候
+// 還沒有真正的 orders/invoices）；「結帳」才真的成立訂單/發票，資料待補（姓名電話
+// 等客人手寫後在佇列頁補），送表單也要等補完資料才觸發（第 6 節），不在這裡做。
+
+// 確認訂購：新建保留（沒有 reservationId）或改單重印（帶 reservationId，沿用同一流水號）
+app.post('/api/nianfai/reservations', async (req, res) => {
+    const { reservationId, year, items, deliveryMethod, pickupDate, total } = req.body;
+    if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: '品項不可為空' });
+    if (!year) return res.status(400).json({ error: '缺少年度' });
+    if (!['pickup', 'delivery'].includes(deliveryMethod)) return res.status(400).json({ error: '取貨方式錯誤' });
+    try {
+        if (reservationId) {
+            const { data, error } = await supabase.from('nianfai_seq_reservations')
+                .update({ items_snapshot: items, delivery_method: deliveryMethod, pickup_date: pickupDate || null, total })
+                .eq('id', reservationId).eq('status', 'reserved').select().single();
+            if (error || !data) return res.status(404).json({ error: '找不到保留中的訂購紀錄（可能已結帳或已取消，請重新開始）' });
+            return res.json({ reservationId: data.id, seqNo: data.seq_no, orderNo: nianfaiOrderNo(data.year, data.seq_no, data.confirmed_at), confirmedAt: data.confirmed_at });
+        }
+        const seqKey = `nianfai_${year}_next_seq`;
+        const now = new Date().toISOString();
+        const { data: seqRow } = await supabase.from('app_settings').select('value').eq('key', seqKey).single();
+        const seqNo = parseInt(seqRow?.value, 10) || 1;
+        await supabase.from('app_settings').upsert({ key: seqKey, value: String(seqNo + 1), updated_at: now });
+        const { data, error } = await supabase.from('nianfai_seq_reservations').insert({
+            year, seq_no: seqNo, status: 'reserved', items_snapshot: items,
+            delivery_method: deliveryMethod, pickup_date: pickupDate || null, total,
+        }).select().single();
+        if (error) throw error;
+        res.json({ reservationId: data.id, seqNo: data.seq_no, orderNo: nianfaiOrderNo(data.year, data.seq_no, data.confirmed_at), confirmedAt: data.confirmed_at });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// 保留中（已確認訂購、尚未結帳）的單：佇列頁列出來可「繼續點單」或「放棄」，
+// 點單頁也用來還原（重新整理、從其他頁面回來時不會讓流水號卡在保留中找不回來）
+function reservationToCamel(r) {
+    return {
+        id: r.id, year: r.year, seqNo: r.seq_no, status: r.status,
+        items: r.items_snapshot || [], deliveryMethod: r.delivery_method, pickupDate: r.pickup_date,
+        total: r.total, confirmedAt: r.confirmed_at, orderNo: nianfaiOrderNo(r.year, r.seq_no, r.confirmed_at),
+    };
+}
+app.get('/api/nianfai/reservations', async (req, res) => {
+    const year = parseInt(req.query.year, 10);
+    if (!year) return res.status(400).json({ error: '缺少年度' });
+    const { data, error } = await supabase.from('nianfai_seq_reservations')
+        .select('*').eq('year', year).eq('status', req.query.status || 'reserved').order('confirmed_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json((data || []).map(reservationToCamel));
+});
+app.get('/api/nianfai/reservations/:id', async (req, res) => {
+    const { data, error } = await supabase.from('nianfai_seq_reservations').select('*').eq('id', req.params.id).single();
+    if (error || !data) return res.status(404).json({ error: '找不到保留紀錄' });
+    res.json(reservationToCamel(data));
+});
+
+// 放棄：客人最後沒買（離開頁面按取消），流水號記為放棄、會跳號但有紀錄可查
+app.post('/api/nianfai/reservations/:id/abandon', async (req, res) => {
+    const { error } = await supabase.from('nianfai_seq_reservations')
+        .update({ status: 'abandoned', abandoned_at: new Date().toISOString() })
+        .eq('id', req.params.id).eq('status', 'reserved');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+});
+
+// 結帳：用保留的內容成立訂單/發票，流水號沿用確認訂購時保留的號碼，不重新抽號。
+// 資料（姓名/電話/收件資訊）先留空，進佇列「資料待補」，由 Phase D 的補資料流程處理。
+app.post('/api/nianfai/reservations/:id/checkout', async (req, res) => {
+    const { override } = req.body;
+    try {
+        const { data: resv, error: fetchErr } = await supabase.from('nianfai_seq_reservations')
+            .select('*').eq('id', req.params.id).eq('status', 'reserved').single();
+        if (fetchErr || !resv) return res.status(404).json({ error: '找不到保留中的訂購紀錄（可能已結帳或已取消，請重新確認訂購）' });
+
+        const { year, seq_no: seqNo, items_snapshot: items, delivery_method: deliveryMethod, pickup_date: pickupDate, total } = resv;
+        const now = new Date().toISOString();
+
+        if (!override) {
+            const { data: closedRow } = await supabase.from('app_settings').select('value').eq('key', `nianfai_${year}_form_closed`).single();
+            if (closedRow?.value === 'true') {
+                return res.status(409).json({ error: 'FORM_CLOSED', message: '年菜表單已關閉，只有確認過的人員能繼續新增訂單' });
+            }
+        }
+
+        const { data: order, error: orderErr } = await supabase.from('orders').insert({
+            table_number: '外帶', order_type: '外帶', status: 'paid',
+            items, total, sub_total: total, paid_amount: total,
+            timestamp: now, updated_at: now, is_nianfai: true,
+        }).select().single();
+        if (orderErr) throw orderErr;
+
+        const { error: nfErr } = await supabase.from('nianfai_orders').insert({
+            order_id: order.id, year, seq_no: seqNo,
+            delivery_method: deliveryMethod, pickup_date: pickupDate,
+            form_submission_status: 'incomplete', // 資料待補，佇列頁補齊送出後才 doPost
+        });
+        if (nfErr) throw nfErr;
+
+        const { data: invoice, error: invErr } = await supabase.from('invoices').insert({
+            invoice_number: `NF-${nianfaiOrderNo(year, seqNo, resv.confirmed_at)}`,
+            payment_time: now, order_id: order.id,
+            order_type: '外帶', table_name: '外帶', customer_count: 0,
+            total, amount: total, items_snapshot: items, status: '已開立',
+        }).select().single();
+        if (invErr) throw invErr;
+
+        await supabase.from('nianfai_seq_reservations').update({ status: 'used', used_at: now }).eq('id', req.params.id);
+        nianfaiDemandCache.delete(year); // 訂購量重新計算
+
+        res.json({ ok: true, orderId: order.id, seqNo, orderNo: nianfaiOrderNo(year, seqNo, resv.confirmed_at), confirmedAt: resv.confirmed_at, invoiceId: invoice.id, total });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+// ── 年菜佇列（修正單 #01 第 4、6 節）────────────────────────────────────────
+// 取有效（發票未作廢）的年菜現場單，合併 orders（結帳時間、品項、金額）與
+// nianfai_orders（資料、送出狀態）。year 給定時只取該年度；since 給定時只取結帳時間在之後的。
+async function fetchValidNianfaiOrders({ year, since, statuses } = {}) {
+    let q = supabase.from('nianfai_orders').select('*');
+    if (year) q = q.eq('year', year);
+    if (statuses) q = q.in('form_submission_status', statuses);
+    const { data: nfRows, error } = await q;
+    if (error) throw error;
+    if (!nfRows || nfRows.length === 0) return [];
+    const ids = nfRows.map(r => r.order_id);
+    const [{ data: orders, error: oErr }, { data: invoices, error: iErr }] = await Promise.all([
+        supabase.from('orders').select('id, items, total, timestamp').in('id', ids),
+        supabase.from('invoices').select('id, order_id, status').in('order_id', ids).eq('status', '已開立'),
+    ]);
+    if (oErr) throw oErr;
+    if (iErr) throw iErr;
+    const oMap = new Map((orders || []).map(o => [o.id, o]));
+    const invMap = new Map((invoices || []).map(i => [i.order_id, i]));
+    const sinceMs = since ? new Date(since).getTime() : null;
+    // 出單日期（訂購編號用）：依年度一次查
+    const issuedByYear = new Map();
+    for (const y of [...new Set(nfRows.map(r => r.year))]) issuedByYear.set(y, await nianfaiIssueDates(y));
+    return nfRows
+        .filter(nf => invMap.has(nf.order_id) && oMap.has(nf.order_id))
+        .map(nf => ({ nf, order: oMap.get(nf.order_id), invoice: invMap.get(nf.order_id), issuedAt: issuedByYear.get(nf.year).get(nf.seq_no) }))
+        .filter(({ order }) => sinceMs == null || new Date(order.timestamp).getTime() >= sinceMs);
+}
+
+function nianfaiQueueEntry({ nf, order, invoice, issuedAt }) {
+    return {
+        orderId: nf.order_id, invoiceId: invoice.id, year: nf.year, seqNo: nf.seq_no,
+        orderNo: nianfaiOrderNo(nf.year, nf.seq_no, issuedAt || nf.created_at || order.timestamp),
+        checkoutTime: order.timestamp, total: order.total,
+        items: (order.items || []).map(it => ({ id: it.id, name: it.name, quantity: it.quantity || 1, price: it.price })),
+        customerName: nf.customer_name || '', customerPhone: nf.customer_phone || '',
+        customerEmail: nf.customer_email || '',
+        deliveryMethod: nf.delivery_method, pickupDate: nf.pickup_date,
+        recipientName: nf.recipient_name || '', recipientPhone: nf.recipient_phone || '',
+        recipientAddress: nf.recipient_address || '',
+        status: nf.form_submission_status || 'incomplete',
+        error: nf.form_submission_error || null,
+        submittedAt: nf.submitted_at || null,
+        missingFields: nianfaiMissingFields(nf),
+    };
+}
+
+// 佇列頁：待補區（資料待補／送出失敗／待傳）與歷史區（已送出），都是最新的在最上面
+app.get('/api/nianfai/queue', async (req, res) => {
+    const year = parseInt(req.query.year, 10);
+    if (!year) return res.status(400).json({ error: '缺少年度' });
+    try {
+        const rows = (await fetchValidNianfaiOrders({ year })).map(nianfaiQueueEntry)
+            .sort((a, b) => new Date(b.checkoutTime) - new Date(a.checkoutTime));
+        res.json({
+            pending: rows.filter(r => r.status !== 'sent'),
+            history: rows.filter(r => r.status === 'sent'),
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// 補填資料（只儲存不送出）。已送出的單不能在 WebPOS 改（第 6 節：由 Yw 到表單回應修正）。
+const NIANFAI_DETAIL_FIELDS = {
+    customerName: 'customer_name', customerPhone: 'customer_phone', customerEmail: 'customer_email',
+    deliveryMethod: 'delivery_method', pickupDate: 'pickup_date',
+    recipientName: 'recipient_name', recipientPhone: 'recipient_phone', recipientAddress: 'recipient_address',
+};
+async function saveNianfaiDetails(orderId, body) {
+    const { data: nf, error } = await supabase.from('nianfai_orders').select('*').eq('order_id', orderId).single();
+    if (error || !nf) return { status: 404, error: '找不到年菜訂單' };
+    if (nf.form_submission_status === 'sent') return { status: 409, error: '此單已送出表單，請到「表單回應」修正' };
+    const updates = {};
+    for (const [k, col] of Object.entries(NIANFAI_DETAIL_FIELDS)) {
+        if (body[k] === undefined) continue;
+        const v = typeof body[k] === 'string' ? body[k].trim() : body[k];
+        updates[col] = v === '' ? null : v;
+    }
+    // 取貨方式在確認訂購時就決定（影響運費與總額），結帳後不能再改
+    if (updates.delivery_method && updates.delivery_method !== nf.delivery_method) {
+        return { status: 400, error: '已結帳的訂單不能變更取貨方式，如需更改請作廢後重新點單' };
+    }
+    // 切換取貨方式時清掉另一種方式的欄位，避免送出時帶到不相干的舊資料
+    const method = updates.delivery_method || nf.delivery_method;
+    if (method === 'pickup') Object.assign(updates, { recipient_name: null, recipient_phone: null, recipient_address: null });
+    if (method === 'delivery') updates.pickup_date = null;
+    const { data: saved, error: updErr } = await supabase.from('nianfai_orders').update(updates).eq('order_id', orderId).select().single();
+    if (updErr) return { status: 500, error: updErr.message };
+    return { nf: saved };
+}
+
+app.patch('/api/nianfai/orders/:orderId/details', async (req, res) => {
+    const result = await saveNianfaiDetails(req.params.orderId, req.body || {});
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    res.json({ ok: true, missingFields: nianfaiMissingFields(result.nf) });
+});
+
+// 送出：先存資料，資料完整才標成 pending 並 doPost。GAS 網址未設定時停在 pending（待傳），不報錯。
+app.post('/api/nianfai/orders/:orderId/submit', async (req, res) => {
+    const orderId = req.params.orderId;
+    const result = await saveNianfaiDetails(orderId, req.body || {});
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    const missing = nianfaiMissingFields(result.nf);
+    if (missing.length > 0) return res.status(400).json({ error: 'INCOMPLETE', message: `資料不完整：${missing.join('、')}`, missingFields: missing });
+    await supabase.from('nianfai_orders').update({ form_submission_status: 'pending', form_submission_error: null }).eq('order_id', orderId);
+    try {
+        await submitToNianfaiForm(orderId);
+    } catch (e) {
+        return res.json({ ok: true, status: 'failed', error: e.message });
+    }
+    const { data: after } = await supabase.from('nianfai_orders').select('form_submission_status').eq('order_id', orderId).single();
+    res.json({ ok: true, status: after?.form_submission_status || 'pending', gasConfigured: !!process.env.NIANFAI_GAS_URL });
+});
+
+// 作廢前查詢年菜單送出狀態：已送出的要提醒 Yw 同時到表單回應取消（第 6 節）
+app.get('/api/nianfai/orders/:orderId/status', async (req, res) => {
+    const { data: nf, error } = await supabase.from('nianfai_orders')
+        .select('year, seq_no, form_submission_status').eq('order_id', req.params.orderId).single();
+    if (error || !nf) return res.status(404).json({ error: '找不到年菜訂單' });
+    res.json({ year: nf.year, seqNo: nf.seq_no, status: nf.form_submission_status });
+});
+
+// 關帳限制（第 6 節）：關帳區間內有「資料待補」的有效年菜單就不能關帳。
+// 送出失敗／待傳的單資料已完整、會自動重試，不擋關帳。
+app.get('/api/nianfai/close-check', async (req, res) => {
+    try {
+        const rows = await fetchValidNianfaiOrders({ since: req.query.since || null, statuses: ['incomplete'] });
+        const blocking = rows.map(nianfaiQueueEntry)
+            .sort((a, b) => a.year - b.year || a.seqNo - b.seqNo)
+            .map(r => ({ orderId: r.orderId, label: r.orderNo }));
+        res.json({ blocking });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/nianfai/demand', async (req, res) => {
+    const { year } = req.query;
+    if (!year) return res.status(400).json({ error: '缺少年度' });
+    try {
+        const detail = await computeNianfaiDemandDetail(parseInt(year, 10));
+        res.json(detail);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+app.get('/api/nianfai/items', async (req, res) => {
+    const yearNum = parseInt(req.query.year, 10);
+    if (!yearNum) return res.status(400).json({ error: '缺少年度' });
+    const [{ data, error }, { data: allItems, error: allErr }] = await Promise.all([
+        supabase.from('menu_items').select('*').eq('nianfai_year', yearNum).order('sort_order'),
+        supabase.from('menu_items').select('id, category, stock'),
+    ]);
+    if (error) return res.status(500).json({ error: error.message });
+    if (allErr) return res.status(500).json({ error: allErr.message });
+    const catMap = {};
+    (allItems || []).forEach(r => { catMap[r.id] = r.category || ''; });
+    // 庫存品項 stock 對照表，跟 /api/menu 的 linkedStock/depleted 算法一致，
+    // 讓年菜 tab 用 MenuCard 呈現時跟一般營業餐點的庫存徽章/售完樣式完全比照
+    const invMap = {};
+    (allItems || []).forEach(r => { if ((r.category || '').includes('庫存')) invMap[r.id] = r.stock; });
+    const { demand, ordered } = await computeNianfaiDemandDetail(yearNum);
+    res.json((data || []).map(r => {
+        // nianfai_stock_ref 指向庫存管理頁的庫存品項（只顯示用，不是 consumes，年菜不扣庫存）：
+        //  - 冷凍包庫存：平常也賣的 5 項，對應冷凍包現有庫存
+        //  - 年菜庫存：年節限定品項的製作數量（統一在庫存管理頁補貨/盤點）
+        // 只顯示庫存與訂購量，不連動停售、不自動關表單（2026-11-27 Yw 決定）；
+        // 停售只看 Yw 在年菜點單頁長按卡片手動設定的 sold_out（只影響 WebPOS，不會關 Google 表單）
+        const stockRef = r.nianfai_stock_ref || null;
+        const refStock = stockRef && stockRef in invMap ? invMap[stockRef] : null;
+        const isSeasonalStock = !!stockRef && catMap[stockRef] === NIANFAI_STOCK_CATEGORY;
+        return {
+            id: r.id, name: r.name, price: r.price, category: r.category,
+            sortOrder: r.sort_order, imageUrl: r.image_url,
+            nianfaiStockRef: stockRef,
+            consumes: stockRef ? [stockRef] : [], // 給 MenuCard 判斷庫存徽章用，年菜不會真的扣這個庫存
+            linkedStock: refStock,
+            // 年節限定品項不看製作數量（還沒做時是 0，不能顯示成售完）
+            depleted: !isSeasonalStock && refStock !== null && refStock <= 0,
+            bundleComposition: r.bundle_composition || null,
+            nianfaiProductionQty: isSeasonalStock ? refStock : null,
+            demand: demand[r.id] || 0,
+            ordered: ordered[r.id] || 0, // 原始點購份數（套餐不拆）
+            soldOut: !!r.sold_out,
+            isRegularSellingItem: !!stockRef && !isSeasonalStock,
+            stock: refStock,
+        };
+    }));
 });
 
 // ============================================================
@@ -2174,7 +3490,7 @@ app.get('/api/invoices', async (req, res) => {
     // JOIN orders 取得最新的 daily_order_no、table_number、order_type（以訂單為準，避免換桌後發票欄位過期）
     const orderIds = [...new Set((data||[]).map(r => r.order_id).filter(Boolean))];
     const ords = orderIds.length
-        ? await fetchAllRows(() => supabase.from('orders').select('id, daily_order_no, table_number, order_type').in('id', orderIds))
+        ? await fetchAllRows(() => supabase.from('orders').select('id, daily_order_no, table_number, order_type, is_nianfai').in('id', orderIds))
         : [];
     const oMap = new Map((ords||[]).map(o => [o.id, o]));
     res.json((data||[]).map(r => {
@@ -2184,6 +3500,7 @@ app.get('/api/invoices', async (req, res) => {
             daily_order_no: r.daily_order_no || ord?.daily_order_no,
             table_name:  ord?.table_number  || r.table_name,
             order_type:  ord?.order_type    || r.order_type,
+            is_nianfai:  ord?.is_nianfai    || false,
         });
     }));
 });
@@ -2427,6 +3744,7 @@ function invoiceToCamel(r) {
         itemsSnapshot: r.items_snapshot||[], dailyOrderNo: r.daily_order_no,
         orderType: r.order_type || (r.table_name === '外帶' ? '外帶' : '內用'), tableName: r.table_name,
         customerCount: r.customer_count||0, voidTime: r.void_time||null,
+        isNianfai: r.is_nianfai || false,
     };
 }
 
@@ -2517,6 +3835,23 @@ app.post('/print-preview', async (req, res) => {
         const ts = Date.now();
         const slips = [];
 
+        // 年菜單聯預覽（確認訂購/結帳分開測試）
+        if (data.printMode === 'nianfai-customer' || data.printMode === 'nianfai-stub') {
+            data.pickupHours = await nianfaiPickupHoursFor(data.year, data.pickupDate).catch(() => '');
+        }
+        if (data.printMode === 'nianfai-customer') {
+            const fnameC = `preview_nf_customer_${ts}.pdf`;
+            const hc = await buildNianfaiConfirmPDF(data, path.join(os.tmpdir(), fnameC));
+            slips.push({ name: '年菜顧客聯', url: `/print-preview/${fnameC}`, height: hc });
+            return res.json({ slips });
+        }
+        if (data.printMode === 'nianfai-stub') {
+            const fnameS = `preview_nf_stub_${ts}.pdf`;
+            const hs = await buildNianfaiStubPDF(data, path.join(os.tmpdir(), fnameS));
+            slips.push({ name: '年菜存根聯', url: `/print-preview/${fnameS}`, height: hs });
+            return res.json({ slips });
+        }
+
         // 顧客聯
         {
             const fname = `preview_c_${ts}.pdf`;
@@ -2549,8 +3884,13 @@ app.post('/print-preview', async (req, res) => {
 // ----------------------------------------------------
 // React build 靜態檔案（API 路由之後）
 // ----------------------------------------------------
-app.use(express.static(path.join(__dirname, 'build')));
+// index.html 與 asset-manifest.json 不快取（其他 JS/CSS 檔名含雜湊，可以長期快取）：更新後重新整理就是新版
+const NO_CACHE_FILES = new Set(['index.html', 'asset-manifest.json']);
+app.use(express.static(path.join(__dirname, 'build'), {
+    setHeaders: (res, filePath) => { if (NO_CACHE_FILES.has(path.basename(filePath))) res.set('Cache-Control', 'no-cache'); },
+}));
 app.get(/.*/, (req, res) => {
+    res.set('Cache-Control', 'no-cache');
     res.sendFile(path.join(__dirname, 'build', 'index.html'), (err) => {
         if (err) {
             res.status(503).send('<html><head><meta http-equiv="refresh" content="5"></head><body style="font-family:sans-serif;text-align:center;padding:60px"><h2>系統重新建置中，請稍候...</h2><p>頁面將在 5 秒後自動重新整理</p></body></html>');
@@ -2561,16 +3901,47 @@ app.get(/.*/, (req, res) => {
 // ----------------------------------------------------
 // 啟動 server
 // ----------------------------------------------------
-app.listen(PORT, '0.0.0.0', () => {
+const httpServer = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Node server running on http://localhost:${PORT}`);
+
+    // 年菜：啟動時先把 Google 狀態與訂購需求讀進快取，第一次打開年菜頁面不用等 GAS
+    if (nianfaiGasConfigured()) {
+        setTimeout(async () => {
+            try {
+                const { data } = await supabase.from('app_settings').select('value').eq('key', 'nianfai_active_year').maybeSingle();
+                const year = data?.value ? parseInt(data.value, 10) : null;
+                if (!year) return;
+                await Promise.allSettled([
+                    refreshNianfaiDemand(year),
+                    fetchNianfaiGasStatus(year).then(body => nianfaiStatusCache.set(year, { at: Date.now(), body })),
+                ]);
+                console.log(`[年菜] ${year} 快取已預先載入`);
+            } catch (e) { console.warn('[年菜] 預先載入快取失敗：', e.message); }
+        }, 1000);
+    }
     console.log(`CUPS Printer: ${CUPS_PRINTER}`);
 
     // 啟動時清空 CUPS 佇列，避免藍牙重連後印出積壓的舊工作
-    execFile('cancel', ['-a', CUPS_PRINTER], (err, stdout, stderr) => {
-        if (err && !stderr.includes('No jobs')) {
-            console.warn('清空 CUPS 佇列失敗：', stderr || err.message);
-        } else {
-            console.log('CUPS 佇列已清空');
-        }
-    });
+    if (PRINT_SANDBOX) {
+        console.log('🧪 [沙盒] 略過清空 CUPS 佇列');
+    } else {
+        execFile('cancel', ['-a', CUPS_PRINTER], (err, stdout, stderr) => {
+            if (err && !stderr.includes('No jobs')) {
+                console.warn('清空 CUPS 佇列失敗：', stderr || err.message);
+            } else {
+                console.log('CUPS 佇列已清空');
+            }
+        });
+    }
+});
+
+// 連接埠被占用（例如已經有一份 server 在跑）就直接結束，不要留在背景：
+// 留下來的程序拿不到連接埠卻還會跑定時工作（資料庫保溫、補送年菜表單），
+// 2026-11 曾累積上百個這種程序，把 dev 資料庫拖垮。launchd 管的那份會自己重試。
+httpServer.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        console.error(`🔴 連接埠 ${PORT} 已被占用，這份 server 直接結束（已經有一份在跑）`);
+        process.exit(1);
+    }
+    throw err;
 });

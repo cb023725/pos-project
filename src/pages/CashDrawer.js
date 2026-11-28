@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { getInvoices, getInvoiceSequence, performDayClose, getCategorySettings, getQuickTags, saveQuickTags, DEFAULT_QUICK_TAGS, getSettingValue, saveSettingValue, getAbandonedOrders } from '../db';
+import { getInvoices, getInvoiceSequence, performDayClose, getCategorySettings, getQuickTags, saveQuickTags, DEFAULT_QUICK_TAGS, getSettingValue, saveSettingValue, getAbandonedOrders, getNianfaiCloseCheck } from '../db';
+import useDialog from '../components/useDialog';
 
 const BACKEND_URL = '';
 const RESERVE_KEY      = 'pos_reserve_amount';
@@ -397,6 +398,7 @@ const AdjustmentModal = ({ invoices, getDisplayInvNum, onConfirm, onCancel }) =>
 // 主頁面
 // ─────────────────────────────────────────────────────────────────────────────
 const CashDrawerPage = () => {
+    const { dialog, showAlert } = useDialog();
 
     // ── 結算狀態（需在 periodStart 之前宣告） ─────────────────────────────────
     const [withdrawalAmount, setWithdrawalAmount] = useState(0);
@@ -601,6 +603,14 @@ const CashDrawerPage = () => {
         customGroupsForDisplay.reduce((s, g) => s + g.amount, 0),
         [customGroupsForDisplay]);
 
+    // 年菜現金（WebPOS 現場單自算，含作廢以對齊本期營業額的扣除邏輯）。
+    // 只是從「本期營業額」拆出來單獨顯示，不影響 expectedCash 的加總，因為
+    // periodGrossSales 本來就已經含年菜發票金額（年菜訂單走 invoices 表同一條路）。
+    // Google 表單端的訂購量目前還沒串進來對帳，所以只能顯示 WebPOS 這邊看得到的金額。
+    const periodNianfaiSales = useMemo(() =>
+        [...activeInvoices, ...voidedInvoices].filter(i => i.isNianfai).reduce((s, i) => s + (i.amount || 0), 0),
+        [activeInvoices, voidedInvoices]);
+
     // ── 收支彙總 ──────────────────────────────────────────────────────────────
     const summary = useMemo(() =>
         transactions.reduce((acc, t) => {
@@ -627,7 +637,21 @@ const CashDrawerPage = () => {
                        - summary.expense - summary.nonCash - periodVoided + adjustmentTotal;
     const diff         = cashTotal - expectedCash;
     const finalReserve = cashTotal - withdrawalAmount;
-    const canComplete  = diff === 0 || (diff !== 0 && discrepancyNote.trim().length > 0);
+    // 年菜關帳限制（修正單 #01 第 6 節）：關帳區間內有「資料待補」的有效年菜單就不能關帳
+    const [nianfaiBlocking, setNianfaiBlocking] = useState([]);
+    const refreshNianfaiBlocking = useCallback(async () => {
+        try {
+            const r = await getNianfaiCloseCheck(new Date(periodStart).toISOString());
+            setNianfaiBlocking(r.blocking || []);
+            return r.blocking || [];
+        } catch (e) {
+            console.error('[關帳] 年菜待補檢查失敗:', e);
+            return null; // 查詢失敗不擋關帳，避免網路問題卡住整個關帳流程
+        }
+    }, [periodStart]);
+    useEffect(() => { refreshNianfaiBlocking(); }, [refreshNianfaiBlocking]);
+
+    const canComplete  = nianfaiBlocking.length === 0 && (diff === 0 || (diff !== 0 && discrepancyNote.trim().length > 0));
 
     // ── 開錢櫃 ────────────────────────────────────────────────────────────────
     const openDrawer = useCallback(async () => {
@@ -720,6 +744,12 @@ const CashDrawerPage = () => {
         }
 
         if (!canComplete) return;
+        // 按下當下再查一次，避免畫面停留期間又有新的年菜單結帳
+        const latestBlocking = await refreshNianfaiBlocking();
+        if (latestBlocking && latestBlocking.length > 0) {
+            await showAlert('請先到桌位頁「年菜」補齊資料', { title: '年菜資料待補', icon: 'warning', note: latestBlocking.map(b => b.label).join('、') });
+            return;
+        }
         if (!window.confirm(
             '確定執行關帳？\n\n' +
             '• 訂單流水號將從 001 重新計算\n' +
@@ -1111,19 +1141,27 @@ const CashDrawerPage = () => {
                                     <span className="text-xs text-gray-400 font-mono">+${fmt(reserveAmount)}</span>
                                 </div>
 
-                                {/* 本期營業額（含作廢，不含自訂分組） */}
+                                {/* 本期營業額（含作廢，不含自訂分組、不含年菜） */}
                                 <div className="flex justify-between items-center py-0.5">
                                     <span className="text-xs text-gray-400">本期營業額</span>
-                                    <span className="text-xs text-gray-400 font-mono">+${fmt(periodGrossSales - periodAllFrozenSales)}</span>
+                                    <span className="text-xs text-gray-400 font-mono">+${fmt(periodGrossSales - periodAllFrozenSales - periodNianfaiSales)}</span>
                                 </div>
 
-                                {/* 各自訂分組（冷凍包/年菜等，含作廢，有才顯示） */}
+                                {/* 各自訂分組（冷凍包等，含作廢，有才顯示） */}
                                 {customGroupsForDisplay.map(g => (
                                     <div key={g.name} className="flex justify-between items-center py-0.5">
                                         <span className="text-xs text-gray-400">{g.name}</span>
                                         <span className="text-xs text-gray-400 font-mono">+${fmt(g.amount)}</span>
                                     </div>
                                 ))}
+
+                                {/* 年菜現金（WebPOS 現場單自算，Google 表單端待串接對帳） */}
+                                {periodNianfaiSales > 0 && (
+                                    <div className="flex justify-between items-center py-0.5">
+                                        <span className="text-xs text-gray-400">年菜現金（WebPOS現場，待串接表單對帳）</span>
+                                        <span className="text-xs text-gray-400 font-mono">+${fmt(periodNianfaiSales)}</span>
+                                    </div>
+                                )}
 
                                 {/* 臨時收入 */}
                                 <div className="flex justify-between items-center py-0.5">
@@ -1199,6 +1237,13 @@ const CashDrawerPage = () => {
                                     <span className="text-sm font-black text-gray-900">${fmt(finalReserve)}</span>
                                 </div>
                             </div>
+
+                            {/* 年菜資料待補 → 不能關帳 */}
+                            {!isClosed && nianfaiBlocking.length > 0 && (
+                                <div className="bg-red-50 border border-red-200 text-red-600 rounded-xl px-3 py-2 text-sm font-bold">
+                                    還有年菜訂單資料待補，補齊送出後才能關帳：{nianfaiBlocking.map(b => b.label).join('、')}
+                                </div>
+                            )}
 
                             {/* 關帳按鈕 + 補印按鈕 */}
                             <div className="flex gap-2 items-stretch">
@@ -1327,6 +1372,7 @@ const CashDrawerPage = () => {
                     onClose={() => setTagManagerOpen(null)}
                 />
             )}
+            {dialog}
         </div>
     );
 };

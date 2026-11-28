@@ -14,9 +14,11 @@ import {
     saveStoreCalendarDay,
     recordTurnaway,
     resetDevTestData,
+    getNianfaiQueue,
 } from '../db';
 
 import TableCard from '../components/TableCard';
+import useNianfaiSeason from '../hooks/useNianfaiSeason';
 
 const TABLE_OPTIONS = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8'];
 
@@ -371,6 +373,15 @@ const TableManagementPage = () => {
     const [clearTarget, setClearTarget]         = useState(null);    // { tableNumber, orderId, label }
     const [paidClearTarget, setPaidClearTarget] = useState(null);    // { tableNumber, orderId, label }
     const [hasTakeoutOrders, setHasTakeoutOrders] = useState(false);
+    // 年菜卡片（修正單 #01 第 4 節）：preparing／selling／closed 顯示（archived 隱藏），標示資料待補／送出失敗張數
+    const { year: nianfaiYear, showTableCard: showNianfaiCard } = useNianfaiSeason();
+    const [nianfaiTodoCount, setNianfaiTodoCount] = useState(0);
+    useEffect(() => {
+        if (!showNianfaiCard || !nianfaiYear) return;
+        getNianfaiQueue(nianfaiYear)
+            .then(q => setNianfaiTodoCount(q.pending.filter(o => o.status === 'incomplete' || o.status === 'failed').length))
+            .catch(() => setNianfaiTodoCount(0));
+    }, [showNianfaiCard, nianfaiYear]);
     const [conflictData, setConflictData] = useState(null);      // { movedOrder, fromTable, toTable, toOrders }
     const [moveSource, setMoveSource] = useState(null);           // { tableId, order }
     const [mergeSource, setMergeSource] = useState(null);         // { tableId, order, allOrders }
@@ -386,7 +397,7 @@ const TableManagementPage = () => {
     }, []);
 
     const handleDevResetTestData = async () => {
-        if (!window.confirm('確定要清空測試資料嗎？\n\n會刪除所有進行中（尚未結帳歸檔）的訂單與發票，桌位全部重設為空桌，庫存連動品項統一設回 10 份。\n已歸檔的歷史訂單/發票/報表資料不受影響。')) return;
+        if (!window.confirm('確定要清空測試資料嗎？\n\n會刪除所有進行中（尚未結帳歸檔）的訂單與發票，桌位全部重設為空桌。\n年菜回到從未開賣：訂單、發票、保留中的訂購編號、測試試算表的表單回應全部清除，流水號從 001 起算，開賣狀態回到準備中、測試中；年菜限定庫存歸 0（平常也賣的品項庫存不動）。\n列印沙盒的預覽檔一併清除。\n已歸檔的一般歷史訂單/發票/報表資料不受影響。')) return;
         setIsResettingTestData(true);
         try {
             await resetDevTestData();
@@ -912,6 +923,25 @@ const TableManagementPage = () => {
                                 </div>
                             ))}
                         </div>
+                        {/* 年菜按鈕（右下角，archived 以外都顯示） */}
+                        {showNianfaiCard && (
+                            <div className="h-full min-h-0 overflow-hidden">
+                                <div
+                                    onClick={() => navigate('/nianfai-queue')}
+                                    className={`w-full h-full rounded-2xl flex flex-col items-center justify-center shadow-lg transition-all cursor-pointer border-2
+                                        ${nianfaiTodoCount > 0
+                                            ? 'bg-[#C1032F] border-[#C1032F] text-white hover:brightness-95'
+                                            : 'bg-white border-[#C1032F]/40 text-[#C1032F] hover:border-[#C1032F]'
+                                        }`}
+                                >
+                                    <span className="text-3xl leading-none mb-1">🧧</span>
+                                    <span className="text-xl font-black tracking-wide">年菜</span>
+                                    <span className={`text-xs font-bold mt-0.5 ${nianfaiTodoCount > 0 ? 'text-white/80' : 'text-[#C1032F]/60'}`}>
+                                        {nianfaiTodoCount > 0 ? `資料待補 ${nianfaiTodoCount} 張` : '點擊管理'}
+                                    </span>
+                                </div>
+                            </div>
+                        )}
 
                     </div>
                 </>

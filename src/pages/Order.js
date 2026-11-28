@@ -1294,6 +1294,11 @@ const RemarkSelectionModal = ({ item, groups, initialRemarks, onToggle, onCancel
 };
 
 // --- OrderPage 組件 ---
+
+// 訂單品項寫進 DB 的欄位（跟 saveOrderBeforeNavigate／handleGoBack 的欄位一致）
+const toDbItems = (arr) => arr.map(({ id, name, price, quantity, isSent, isServed, isPaid, sentBatch, isTakeoutPortion, category, internalId, sortOrder, remarks }) =>
+    ({ id, name, price, quantity, isSent: !!isSent, isServed: !!isServed, isPaid: !!isPaid, sentBatch: sentBatch || 0, isTakeoutPortion: !!isTakeoutPortion, category, internalId, sortOrder, remarks: remarks || [] }));
+
 const OrderPage = () => {
     const navigate = useNavigate();
     const location = useLocation();
@@ -1691,8 +1696,12 @@ const OrderPage = () => {
         if (categorySettings.length === 0) return CATEGORY_ORDER;
         return categorySettings
             .filter(c => isTakeout ? c.showInTakeout : c.showInDineIn)
+            // 修正單 #01 第 2 節：一般點單／外帶頁永遠不顯示「年菜」類別（就算類別設定被打開也一樣），年菜只走 /nianfai-order
+            .filter(c => c.name !== '年菜')
             .map(c => c.name);
     }, [categorySettings, isTakeout]);
+
+    // 年菜改成獨立頁面 /nianfai-order（修正單 #01 第 5 節），一般點餐頁不再有年菜 tab/彈窗。
 
     // 當類別清單載入或變更時，確保 selectedCategory 在清單中
     useEffect(() => {
@@ -2109,11 +2118,15 @@ const handleConfirmOrder = async () => {
             // 【關鍵修正】：結帳時若尚未計時，直接開始計時
             const newSendTime = sendTime || now; 
             
-            // 2. 【DB 主訂單狀態更新】儲存訂單到 DB
-            const orderId = await saveOrderBeforeNavigate(tableNumber, updatedOrderForDb, currentOrderId, customerCount, subTotal, finalStatus, newSendTime, newFinishTime);
+            // 2. 【先存未付款的訂單】確保訂單存在（沒有就建立）、品項與顧客資料寫入，但「還不標記付款」。
+            //    付款標記、發票、扣庫存一律交給下一步的 /complete 在同一個 request 裡完成：
+            //    之前這裡就先把品項標成 isPaid、訂單標成 paid，萬一下一步（開發票）沒送到
+            //    （重新整理、斷網、關分頁），會留下「已付款但沒有發票」的游離訂單，而且畫面上
+            //    已全部付清、無法再結帳補開。改成這樣之後任何一步中斷，訂單都還是未付款，重新結帳即可。
+            const orderId = await saveOrderBeforeNavigate(tableNumber, currentOrder, currentOrderId, customerCount, subTotal, 'served', newSendTime, finishTime);
 
             if (!orderId) {
-                throw new Error("DB 訂單主狀態更新失敗。");
+                throw new Error("DB 訂單儲存失敗。");
             }
 
             // 補派 dailyOrderNo（直接結帳但未曾送廚房單時）與結帳記錄同時執行
@@ -2123,13 +2136,15 @@ const handleConfirmOrder = async () => {
                           if (assigned) { setDailyOrderNo(assigned); pendingDailyOrderNoRef.current = assigned; }
                       })
                     : Promise.resolve(),
-                // 3. 【DB 結帳記錄/庫存扣減】建立結帳記錄
+                // 3. 【DB 結帳：付款標記＋發票＋扣庫存，同一個 request】
+                //    （原本傳的是 itemsToCheckout，但 completeOrderAndReport 只認 newItems，等於沒傳）
                 completeOrderAndReport({
                     orderId: currentOrderId || orderId,
-                    itemsToCheckout: itemsToCheckout,
+                    newItems: toDbItems(updatedOrderForDb),
                     tableNumber: tableNumber,
                     isFullyPaid: isFullyPaid,
                     sendTime: newSendTime,
+                    finishTime: newFinishTime,
                 }),
             ]);
 

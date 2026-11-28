@@ -14,7 +14,9 @@ async function api(method, path, body) {
     const res = await fetch(`${API}${path}`, opts);
     if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(err.error || res.statusText);
+        const e = new Error(err.message || err.error || res.statusText);
+        e.code = err.error;
+        throw e;
     }
     return res.json();
 }
@@ -120,12 +122,22 @@ export const DEFAULT_CATEGORY_SETTINGS = [
     { name: '飲品',   showInDineIn: true, showInTakeout: true, reportGroup: '營業額', printOnKitchen: false, includeInTotal: true,  showInKpi: true },
     { name: '冷凍包', showInDineIn: true, showInTakeout: true, reportGroup: '冷凍包', printOnKitchen: false, includeInTotal: false, showInKpi: true },
     { name: '單點',   showInDineIn: true, showInTakeout: true, reportGroup: '營業額', printOnKitchen: true,  includeInTotal: true,  showInKpi: true },
+    // 年菜：一般內用/外帶點餐頁永遠不顯示（修正單 #01 第 2 節），只在菜單管理頁可見
+    { name: '年菜',   showInDineIn: false, showInTakeout: false, reportGroup: '年菜', printOnKitchen: false, includeInTotal: false, showInKpi: false },
 ];
 
 export async function getCategorySettings() {
     try {
         const { value } = await api('GET', '/api/settings/category_settings');
-        if (value) return JSON.parse(value);
+        if (value) {
+            const saved = JSON.parse(value);
+            // 「年菜」分類在年菜功能上線前存的分類設定裡沒有（正式環境就是），缺了就補預設值：
+            // 一般點餐頁不顯示、不計入營業額與 KPI；菜單管理頁的年菜 tab 才會出現（顯示與否另外看年菜年度狀態）
+            if (Array.isArray(saved) && !saved.some(c => c.name === '年菜')) {
+                return [...saved, DEFAULT_CATEGORY_SETTINGS.find(c => c.name === '年菜')];
+            }
+            return saved;
+        }
     } catch {}
     return DEFAULT_CATEGORY_SETTINGS;
 }
@@ -319,6 +331,101 @@ export async function occupyTableWithoutOrder(tableNumber, timestamp) {
 export async function resetDevTestData() {
     return api('POST', '/api/dev/reset-test-data');
 }
+
+// ======================================================================
+// 年菜（nianfai）：訂單與一般內用外帶完全分開
+// ======================================================================
+export async function getNianfaiItems(year) {
+    return api('GET', `/api/nianfai/items?year=${year}`);
+}
+// 確認訂購：payload 不帶 reservationId 建新保留，帶了就沿用同一流水號改內容重印
+export async function confirmNianfaiReservation(payload) {
+    return api('POST', '/api/nianfai/reservations', payload);
+}
+export async function getNianfaiReservations(year) {
+    return api('GET', `/api/nianfai/reservations?year=${year}&status=reserved`);
+}
+export async function getNianfaiReservation(reservationId) {
+    return api('GET', `/api/nianfai/reservations/${reservationId}`);
+}
+export async function abandonNianfaiReservation(reservationId) {
+    return api('POST', `/api/nianfai/reservations/${reservationId}/abandon`);
+}
+export async function checkoutNianfaiReservation(reservationId, payload) {
+    return api('POST', `/api/nianfai/reservations/${reservationId}/checkout`, payload);
+}
+export async function getNianfaiGasStatus(year) {
+    return api('GET', `/api/nianfai/gas/status${year ? `?year=${year}` : ''}`);
+}
+export async function createNianfaiSheet(year) {
+    return api('POST', '/api/nianfai/gas/create-year', { year });
+}
+export async function nianfaiFormSync(year, apply) {
+    return api('POST', '/api/nianfai/gas/form-sync', { year, apply });
+}
+export async function checkNianfaiFormText(year) {
+    return api('POST', '/api/nianfai/gas/check-form-text', { year });
+}
+export async function checkNianfaiForm(year) {
+    return api('POST', '/api/nianfai/gas/check-form', { year });
+}
+export async function rebuildNianfaiTabs(year) {
+    return api('POST', '/api/nianfai/gas/rebuild-tabs', { year });
+}
+export async function getNianfaiMailOverview(year) {
+    return api('GET', `/api/nianfai/gas/mail-overview?year=${year}`);
+}
+export async function previewNianfaiMail(year, type, date) {
+    return api('POST', '/api/nianfai/gas/mail-preview', { year, type, date });
+}
+export async function sendNianfaiMail(year, type, ids, date, { resend = false } = {}) {
+    return api('POST', '/api/nianfai/gas/mail-send', { year, type, ids, date, resend });
+}
+export async function setNianfaiReminder(year, on) {
+    return api('POST', '/api/nianfai/gas/set-reminder', { year, on });
+}
+export async function setNianfaiDeliveryReminder(year, { on, at } = {}) {
+    return api('POST', '/api/nianfai/gas/set-delivery-reminder', { year, on, at });
+}
+export async function getNianfaiFormLinks(year) {
+    return api('GET', `/api/nianfai/gas/form-links?year=${year}`);
+}
+export async function goLiveNianfai(year) {
+    return api('POST', '/api/nianfai/gas/go-live', { year });
+}
+export async function clearNianfaiTestData(year) {
+    return api('POST', '/api/nianfai/gas/clear-test', { year });
+}
+export async function backToTestingNianfai(year) {
+    return api('POST', '/api/nianfai/gas/back-to-testing', { year });
+}
+export async function setNianfaiFormAccepting(year, accepting) {
+    return api('POST', '/api/nianfai/gas/set-accepting', { year, accepting });
+}
+export async function protectNianfaiSheet(year) {
+    return api('POST', '/api/nianfai/gas/protect', { year });
+}
+export async function syncNianfaiSettingsToSheet(year) {
+    return api('POST', '/api/nianfai/gas/sync-settings', { year });
+}
+export async function getNianfaiQueue(year) {
+    return api('GET', `/api/nianfai/queue?year=${year}`);
+}
+export async function saveNianfaiOrderDetails(orderId, details) {
+    return api('PATCH', `/api/nianfai/orders/${orderId}/details`, details);
+}
+export async function submitNianfaiOrder(orderId, details) {
+    return api('POST', `/api/nianfai/orders/${orderId}/submit`, details);
+}
+export async function getNianfaiOrderStatus(orderId) {
+    return api('GET', `/api/nianfai/orders/${orderId}/status`);
+}
+export async function getNianfaiCloseCheck(since) {
+    return api('GET', `/api/nianfai/close-check${since ? `?since=${encodeURIComponent(since)}` : ''}`);
+}
+export async function getNianfaiDemand(year) {
+    return api('GET', `/api/nianfai/demand?year=${year}`);
+}
 export async function moveOrderToTable(orderId, { newTable, fromTable, mergeWithOrderId = null }) {
     return api('POST', `/api/orders/${orderId}/move-table`, { newTable, fromTable, mergeWithOrderId });
 }
@@ -369,9 +476,9 @@ export async function assignOrderNo(orderId) {
     const result = await api('POST', `/api/orders/${orderId}/assign-no`, {});
     return result?.dailyOrderNo || null;
 }
-export async function completeOrderAndReport({ orderId, newItems, tableNumber, isFullyPaid, sendTime }) {
+export async function completeOrderAndReport({ orderId, newItems, tableNumber, isFullyPaid, sendTime, finishTime }) {
     if (!orderId) return false;
-    await api('POST', `/api/orders/${orderId}/complete`, { newItems, tableNumber, isFullyPaid, sendTime });
+    await api('POST', `/api/orders/${orderId}/complete`, { newItems, tableNumber, isFullyPaid, sendTime, finishTime });
     return true;
 }
 export async function payOrder(orderData) {

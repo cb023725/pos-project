@@ -23,7 +23,7 @@ const formatClockTime = (timestamp) => {
 const STATUS_MAP = {
     open:   { dot: 'bg-yellow-400', label: '點餐中',  rowBg: 'bg-white' },
     served: { dot: 'bg-[#2FB8B8]',  label: '已送出',  rowBg: 'bg-white' },
-    paid:   { dot: 'bg-[#5A7D85]',  label: '已結帳',  rowBg: 'bg-white' },
+    paid:   { dot: 'bg-[#6888A8]',  label: '已結帳',  rowBg: 'bg-white' },
 };
 
 const getStatus = (s) => STATUS_MAP[s] || { dot: 'bg-gray-300', label: s, rowBg: 'bg-white' };
@@ -280,7 +280,7 @@ const TakeoutPage = () => {
                                     onTouchMove={handleTouchMove}
                                     onTouchEnd={(e) => handleTouchEnd(e, order)}
                                     style={{ transform: isSwiped ? 'translateX(-96px)' : 'translateX(0)', transition: 'transform 0.2s ease' }}
-                                    className={`grid grid-cols-12 gap-2 px-4 py-3 cursor-pointer items-center select-none ${st.rowBg} hover:bg-gray-50`}
+                                    className={`grid grid-cols-12 gap-2 px-4 py-4 cursor-pointer items-center select-none ${st.rowBg} hover:bg-gray-50`}
                                 >
                                     {/* # 排序 */}
                                     <div className="col-span-1 text-center">

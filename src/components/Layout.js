@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import useNianfaiSeason from '../hooks/useNianfaiSeason';
 
 // ─── SVG Icon 元件 ───────────────────────────────────────────────────────────
 const Icon = ({ name, className = 'w-5 h-5' }) => {
@@ -83,6 +84,14 @@ const Icon = ({ name, className = 'w-5 h-5' }) => {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M8 13h2m4 0h2m-8 4h2m4 0h2" />
             </svg>
         ),
+        nianfai: (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <rect x="3" y="9" width="18" height="12" rx="1.5" strokeWidth="1.8" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M2 9h20M12 9v12" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8"
+                    d="M12 9c-2-3-6-4-6-1.5S9 9 12 9c3 0 6-1 6-3.5S14 6 12 9z" />
+            </svg>
+        ),
         hamburger: (
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
@@ -100,6 +109,7 @@ const navItems = [
     { name: '庫存',   path: '/inventory',   icon: 'inventory'  },
     { name: '菜單',   path: '/menu',        icon: 'menu'       },
     { name: '註記',   path: '/remarks',     icon: 'remarks'    },
+    { name: '年菜',   path: '/nianfai-admin', icon: 'nianfai'  },
     { name: '顧客',   path: '/customers',   icon: 'customers'  },
     { name: '設定',   path: '/settings',    icon: 'calendar'   },
 ];
@@ -123,6 +133,10 @@ const NavButton = ({ item, isExpanded, currentPath }) => {
 
 const Sidebar = ({ isSidebarOpen, toggleSidebar }) => {
     const location = useLocation();
+    // 修正單 #01 第 2 節：導覽列「年菜」只在 preparing/selling/closed 顯示，
+    // archived（平常營業）隱藏，入口改到設定頁常駐
+    const { showNavEntry: showNianfaiNav } = useNianfaiSeason();
+    const visibleNavItems = showNianfaiNav ? navItems : navItems.filter(item => item.name !== '年菜');
 
     const tableItem = { name: '桌位管理', path: '/tables', icon: 'table' };
     const isTableActive = location.pathname === tableItem.path;
@@ -170,7 +184,7 @@ const Sidebar = ({ isSidebarOpen, toggleSidebar }) => {
                 <div className="border-t border-gray-700 my-2 w-full opacity-40" />
 
                 {/* 其他項目 */}
-                {navItems.map(item => (
+                {visibleNavItems.map(item => (
                     <NavButton
                         key={item.name}
                         item={item}
@@ -185,7 +199,7 @@ const Sidebar = ({ isSidebarOpen, toggleSidebar }) => {
 
 const Layout = ({ children }) => {
     const location = useLocation();
-    const hideSidebar = ['/order'].includes(location.pathname);
+    const hideSidebar = ['/order', '/nianfai-order'].includes(location.pathname);
     const isTablePage = location.pathname === '/tables' || location.pathname === '/takeout';
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const toggleSidebar = () => setIsSidebarOpen(prev => !prev);

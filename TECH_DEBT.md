@@ -1,0 +1,117 @@
+# 待清理項目（Tech Debt）
+
+已知但刻意延後處理的項目，每項都寫明原因與處理時機。
+
+---
+
+## 1. `menu_items.nianfai_production_qty` 欄位已停用
+
+- **記錄日期：** 2026-11-27
+- **處理時機：** 正式環境年菜上線並穩定運作後
+- **狀態：** 待處理
+
+### 現況
+
+修正單 #01 之後，年菜的製作入庫量改在庫存管理頁的「年菜庫存」維護。2026-11-27 起「製作完成」與停售功能已整個移除（見 §2），也不再讀這個欄位。前端也沒有任何地方會寫入它。
+
+### 為什麼暫時保留
+
+1. **部署用的 migration 還需要讀它：** `supabase/migrations/20261124c_nianfai_stock_category.sql` 建立 5 個年菜庫存時，會把這個欄位的舊數量搬進新庫存。所以欄位必須存在到這支 migration 跑完。
+2. **刪欄位無法復原：** 欄位一刪資料就沒了。保留一個空欄位對資料庫沒有負擔。
+3. **程式仍有對應：** 一般菜單 API 還在讀寫這個欄位，見 `server.js` 菜單列表的 `nianfaiProductionQty: r.nianfai_production_qty`，以及菜單更新的 `updates.nianfai_production_qty`。只刪欄位不刪程式，菜單更新會失敗。
+
+### 容易誤會的地方
+
+年菜品項 API（`/api/nianfai/items`）回傳的 `nianfaiProductionQty`，值其實是**對應年菜庫存的數量**（`isSeasonalStock ? refStock : null`），不是這個資料庫欄位，只是名稱沒改。`src/pages/NianfaiAdmin.js` 用的就是這個值。
+
+### 處理方式（三件事一起做，先在 dev 驗證）
+
+1. 新增一支 migration：`alter table public.menu_items drop column if exists nianfai_production_qty;`
+2. 刪除 `server.js` 菜單 API 中讀寫這個欄位的兩行。
+3. 把年菜品項 API 與 `NianfaiAdmin.js` 中的 `nianfaiProductionQty` 改名為 `nianfaiStockQty`。
+4. 同步更新 `schema.sql` 的欄位說明。
+
+---
+
+## 2. 停售功能移除後留下的欄位與 Sheet 欄
+
+- **記錄日期：** 2026-11-27
+- **處理時機：** 和 §1 一起，正式環境年菜上線並穩定運作後
+- **狀態：** 待處理
+
+### 背景
+
+2026-11-27 Yw 決定：年菜不連動停售、不自動關 Google 表單（表單由 Yw 自己關），年菜管理頁只顯示庫存與訂購量，並顯示 Google 表單目前是開放或關閉。
+已移除：「製作完成」按鈕與 `/api/nianfai/items/:id/finish-production`、WebPOS 停售計算（年菜品項不再回傳 `soldOut`／`nianfaiSelloutCap`）、結帳後的停售檢查、GAS 的 `finishProduction` action、`nfCheckSellout_`、`nfSetSelloutCap_`、表單送出時的停售檢查。
+
+### 還留著、但已經沒有作用的
+
+1. **`menu_items.nianfai_sellout_cap` 欄位**（migration `20261123b_nianfai_phase2_sellout.sql` 新增）：不會再被寫入。`server.js` 只剩兩處把它清成 null（重設測試資料、正式上線），以及同步到 Sheet「設定」時帶出（永遠是空的）。
+2. **Sheet「設定」品項表的「停售上限」欄**（`gas/nianfai/Settings.gs` 的 `NF_SETTINGS_ITEM_HEADERS`）：GAS 不再讀它。直接刪欄會讓後面的「製作入庫」欄位位置跑掉，要連同 `nfReadSettings_` 的欄位對應一起改。
+
+### 為什麼暫時保留
+
+刪欄位不能復原；Sheet 欄位位置牽涉讀設定的程式，改錯會讓品項、價格讀錯。現在留著不影響任何功能。
+
+### 處理方式
+
+1. migration：`alter table public.menu_items drop column if exists nianfai_sellout_cap;`，同時刪掉 `server.js` 裡清空與同步這個欄位的程式。
+2. GAS：「設定」品項表移除「停售上限」欄，調整 `NF_SETTINGS_ITEM_HEADERS` 與讀取欄位的索引，跑 `node gas/tools/gas_mock_test.js` 全部通過後再部署。
+
+---
+
+## 3. 一般營運：沒有桌號的孤兒訂單 #449（2026-06-02）
+
+- **記錄日期：** 2026-11-29（2026-11-27 正式環境部署年菜後檢查時發現）
+- **處理時機：** 資料清理隨時可做（關帳後）；程式修正排在年菜上線穩定後
+- **狀態：** 待處理
+- **分類：** 一般營運（和年菜無關）
+
+### 歷史
+
+正式環境訂單 #449 的內容（2026-11-27 只讀查詢）：
+
+| 欄位 | 值 |
+|---|---|
+| 開單 | 2026-06-02 16:51（台北） |
+| 類型／桌號 | 內用，桌號是**空字串**，`tables_used` 空 |
+| 單號 | 1（送廚時才派） |
+| 品項 | 松阪豬拌麵 ×1，280 元 |
+| 狀態 | `paid`，`cleared_at` 空 |
+| 發票 | #478 `INV-1780390300087`，已開立，280 元，開單後約 6 秒結帳 |
+
+它有 `pickup_time`（開單後 20 分鐘）和 `needs_utensils = true`，這兩個通常是外帶才有。推測當時其實是外帶，但點餐頁沒帶到桌號（例如重新整理或從沒有桌號的路徑進入點餐頁），只是推測，無法從資料確認。
+之後近半年都一直是 `paid`，2026-11-27 部署檢查 `/api/orders/active` 時才看到（`DEPLOY_PROD_NIANFAI.md` 第 9 節也有記）。
+
+### 漏洞
+
+1. **建立訂單不檢查桌號：** `server.js` `/api/orders/new` 只判斷 `od.table === '外帶'`。桌號是空的也照樣建立，`order_type` 會被當成「內用」，而且因為 `od.table` 是空的，不會寫入 `tables`。
+2. **沒有任何地方能把它歸檔：**
+   - 內用訂單只有「清桌」（`/api/tables/:tableNumber/reset`）會改成 `archived_paid`，而清桌是從 `tables` 找訂單，這張單沒有桌位紀錄。
+   - 外帶頁只列 `table === '外帶'` 的訂單，點餐頁、桌位頁也都是用桌號比對。
+   - 結果這張單在所有畫面都看不到，也就永遠停在 `paid`。
+3. **類型標錯：** 報表 RPC 用 `order_type`，這張被算成內用 1 位客人；報表的桌號欄位則因為空字串退回顯示「外帶」，前後不一致。
+
+### 目前影響
+
+- **營業額正確：** 發票是有效的，6/2 營業額本來就包含這 280 元，關帳和錢櫃不受影響。
+- **只是殘留：** 一直出現在 `/api/orders/active` 的結果裡，各頁面都會過濾掉，畫面看不到。
+- **dev 會被清掉：** dev 的「一鍵清空測試資料」會刪所有 `paid` 訂單，dev 有同樣情況會被清掉；正式環境沒有這個按鈕（伺服器拒絕）。
+
+### 處理方式
+
+1. **資料清理（Yw 在 Supabase SQL Editor 執行）：** `data-fixes/prod-archive-orphan-order-449.sql`。
+   - 只把狀態改成 `archived_paid`、補 `cleared_at`，和正常清桌的結果一樣。
+   - 不刪訂單和發票，也不改類型，報表數字不變。
+   - 會先確認剛好 1 筆符合：id 449、`paid`、桌號空、不是年菜、發票已開立，否則停止。
+2. **防止再發生（先在 dev 驗證）：**
+   - `/api/orders/new`：桌號是空的直接回 400「缺少桌號」；前端點餐頁在沒有桌號時不送單，提示回桌位頁重新進入。
+   - 安全網：伺服器啟動或關帳時，查出 `status in ('open','served','paid')` 但桌號空、也不是外帶或年菜的訂單。在桌位頁顯示「有 N 張沒有桌號的訂單」，並提供「歸檔」按鈕，按下才改狀態，不自動改。
+3. **一次性檢查正式環境有沒有其他孤兒訂單：**
+
+   ```sql
+   select id, status, order_type, table_number, timestamp at time zone 'Asia/Taipei' as 開單, total
+   from public.orders
+   where status in ('open','served','paid') and coalesce(table_number,'') = '' and is_nianfai is not true;
+   ```
+

@@ -1,6 +1,13 @@
 // src/pages/Inventory.js
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { getInventoryItems, addMenuItem, updateMenuItem, deleteMenuItem, getMenuItems, getInventoryLogs, addInventoryLog } from '../db';
+import useNianfaiSeason from '../hooks/useNianfaiSeason';
+
+// 「年菜庫存」每年各自一組（id 為 nfstock_<年度>_…），只顯示目前年度、且年菜沒有封存時
+const nianfaiStockYear = (item) => {
+    const m = /^nfstock_(\d{4})_/.exec(item.id || '');
+    return m ? parseInt(m[1], 10) : null;
+};
 
 const DEFAULT_THRESHOLDS = { full: 30, low: 10, urgent: 5 };
 
@@ -150,9 +157,10 @@ const ThresholdSettingModal = ({ isOpen, onClose, item, onSave, onSaveLinks, all
 const StockOperationModal = ({ isOpen, onClose, item, onSave }) => {
     const [inputValue, setInputValue] = useState(0);
     const [operationType, setOperationType] = useState('replenish');
+    const [pendingChange, setPendingChange] = useState(null); // {finalStock} 非 null 時顯示確認彈窗，按下確認才真的送出
 
     useEffect(() => {
-        if (isOpen) { setInputValue(0); setOperationType('replenish'); }
+        if (isOpen) { setInputValue(0); setOperationType('replenish'); setPendingChange(null); }
     }, [isOpen, item]);
 
     const handleInput = (digit) => {
@@ -169,13 +177,19 @@ const StockOperationModal = ({ isOpen, onClose, item, onSave }) => {
         return cur.length > 1 ? Number(cur.slice(0, -1)) : 0;
     });
 
+    // 按下「確認執行」先跳確認彈窗，不直接送出；確認彈窗按下確認才真的呼叫 onSave
     const handleSave = () => {
         if (inputValue <= 0 && operationType !== 'inventory') { alert('數量必須大於 0'); return; }
         let finalStock = item.stock;
         if (operationType === 'replenish') finalStock = item.stock + inputValue;
         else if (operationType === 'consume') finalStock = item.stock - inputValue; // 允許負數
         else if (operationType === 'inventory') finalStock = inputValue;
-        onSave(item.id, finalStock, operationType);
+        setPendingChange({ finalStock });
+    };
+
+    const handleConfirmChange = () => {
+        if (!pendingChange) return;
+        onSave(item.id, pendingChange.finalStock, operationType);
         onClose();
     };
 
@@ -212,6 +226,41 @@ const StockOperationModal = ({ isOpen, onClose, item, onSave }) => {
                     確認執行{opLabel[operationType]}
                 </button>
             </div>
+
+            {/* 二次確認：按下「確認執行」不直接送出，先看一眼異動內容對不對 */}
+            {pendingChange && (
+                <div className="fixed inset-0 bg-black bg-opacity-60 z-[60] flex items-center justify-center">
+                    <div className="bg-white p-6 rounded-xl shadow-2xl w-[360px]">
+                        <h4 className="text-xl font-black mb-4 text-gray-800">確認{opLabel[operationType]}</h4>
+                        <div className="bg-gray-50 rounded-lg p-4 mb-5 space-y-2">
+                            <div className="flex justify-between text-sm text-gray-500">
+                                <span>品項</span><span className="font-bold text-gray-800">{item.name}</span>
+                            </div>
+                            <div className="flex justify-between text-sm text-gray-500">
+                                <span>目前庫存</span><span className="font-bold text-gray-800">{item.stock} 份</span>
+                            </div>
+                            <div className="flex justify-between text-sm text-gray-500">
+                                <span>異動後庫存</span>
+                                <span className="font-black text-lg text-[#4A9A7A]">{pendingChange.finalStock} 份</span>
+                            </div>
+                            <div className="flex justify-between text-sm text-gray-500 pt-2 border-t border-gray-200">
+                                <span>差額</span>
+                                <span className={`font-black ${pendingChange.finalStock - item.stock >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                                    {pendingChange.finalStock - item.stock >= 0 ? '+' : ''}{pendingChange.finalStock - item.stock}
+                                </span>
+                            </div>
+                        </div>
+                        <div className="flex gap-3">
+                            <button onClick={() => setPendingChange(null)} className="flex-1 py-2.5 rounded-lg font-bold text-sm bg-gray-100 text-gray-600 hover:bg-gray-200">
+                                取消
+                            </button>
+                            <button onClick={handleConfirmChange} className="flex-1 py-2.5 rounded-lg font-bold text-sm bg-[#4A9A7A] text-white hover:bg-[#3A8A6A]">
+                                確認送出
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
@@ -219,7 +268,7 @@ const StockOperationModal = ({ isOpen, onClose, item, onSave }) => {
 // ----------------------------------------------------------------------
 // AddItemModal - 新增庫存品項
 // ----------------------------------------------------------------------
-const AddItemModal = ({ isOpen, onClose, onSave, existingCategories }) => {
+const AddItemModal = ({ isOpen, onClose, onSave, existingCategories, nianfaiYear }) => {
     const [name, setName] = useState('');
     const [category, setCategory] = useState('');
     const [stock, setStock] = useState(0);
@@ -235,9 +284,12 @@ const AddItemModal = ({ isOpen, onClose, onSave, existingCategories }) => {
         if (!category.trim()) { alert('請輸入類別'); return; }
         const { full, low, urgent } = thresholds;
         if (!(urgent < low && low < full)) { alert('閾值設定錯誤：必須滿足 緊急 < 偏低 < 充足'); return; }
+        // 年菜庫存：id 一定要是 nfstock_<年度>_…，才會出現在庫存頁（只顯示目前年度）和菜單管理的「對應庫存」選單
+        const isNianfaiStock = category.trim() === '年菜庫存';
+        if (isNianfaiStock && !nianfaiYear) { alert('目前沒有進行中的年菜年度，請先到年菜管理頁建立年度'); return; }
         setSaving(true);
         try {
-            const id = 'inv_' + Date.now();
+            const id = isNianfaiStock ? `nfstock_${nianfaiYear}_${Date.now()}` : 'inv_' + Date.now();
             await onSave({ id, name: name.trim(), category: category.trim(), stock, thresholds, price: null, sortOrder: 99 });
             onClose();
         } finally {
@@ -271,7 +323,7 @@ const AddItemModal = ({ isOpen, onClose, onSave, existingCategories }) => {
                         <datalist id="category-list">
                             {existingCategories.map(c => <option key={c} value={c} />)}
                         </datalist>
-                        <p className="text-xs text-gray-400 mt-1">輸入現有類別或新建類別名稱</p>
+                        <p className="text-xs text-gray-400 mt-1">輸入現有類別或新建類別名稱。年節限定的年菜品項請選「年菜庫存」（會自動歸在今年的年度）</p>
                     </div>
                     <div>
                         <label className="block text-sm font-bold text-gray-700 mb-1">初始庫存（份）</label>
@@ -308,7 +360,7 @@ const LogModal = ({ isOpen, onClose, item, logs, isLoading }) => {
     if (!isOpen || !item) return null;
     const fmtTime = (iso) => {
         const d = new Date(iso);
-        return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+        return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
     };
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
@@ -317,7 +369,7 @@ const LogModal = ({ isOpen, onClose, item, logs, isLoading }) => {
                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
                 </button>
                 <h3 className="text-2xl font-black mb-1 text-gray-800">📒 {item.name}</h3>
-                <p className="text-xs text-gray-400 mb-4">近 3 天異動紀錄（最新在最上）</p>
+                <p className="text-xs text-gray-400 mb-4">近 1 個月異動紀錄（最新在最上）</p>
                 {isLoading ? (
                     <div className="flex-grow flex items-center justify-center text-gray-400">載入中...</div>
                 ) : logs.length === 0 ? (
@@ -395,6 +447,7 @@ const InventoryPage = () => {
     const [batchOpType, setBatchOpType] = useState('replenish');
     const [batchValues, setBatchValues] = useState({});
     const [batchSaving, setBatchSaving] = useState(false);
+    const [pendingBatch, setPendingBatch] = useState(null); // 非 null 時顯示批次確認彈窗，確認後才真的送出
 
     const load = useCallback(async () => {
         setIsLoading(true);
@@ -539,7 +592,8 @@ const InventoryPage = () => {
         setBatchOpType('replenish');
     };
 
-    const handleBatchSave = async () => {
+    // 按下「確認儲存」先跳確認彈窗列出每一項異動，不直接送出
+    const handleBatchSaveClick = () => {
         const toSave = Object.entries(batchValues)
             .filter(([, val]) => val !== '' && Number(val) !== 0 && !isNaN(Number(val)))
             .map(([id, val]) => {
@@ -555,10 +609,15 @@ const InventoryPage = () => {
             .filter(Boolean);
 
         if (toSave.length === 0) { alert('請輸入至少一項數量'); return; }
+        setPendingBatch(toSave);
+    };
+
+    const handleConfirmBatchSave = async () => {
+        if (!pendingBatch) return;
         setBatchSaving(true);
         try {
             const noteMap = { replenish: '補貨', consume: '消耗', inventory: '盤點' };
-            for (const { id, newStock, item } of toSave) {
+            for (const { id, newStock, item } of pendingBatch) {
                 const delta = newStock - item.stock;
                 await updateMenuItem(id, { stock: newStock });
                 if (delta !== 0) {
@@ -566,11 +625,12 @@ const InventoryPage = () => {
                 }
             }
             setInventory(prev => prev.map(i => {
-                const saved = toSave.find(s => s.id === i.id);
+                const saved = pendingBatch.find(s => s.id === i.id);
                 return saved ? { ...i, stock: saved.newStock } : i;
             }));
             setBatchValues({});
             setBatchMode(false);
+            setPendingBatch(null);
         } catch (e) {
             alert('批次儲存失敗：' + e.message);
         } finally {
@@ -588,10 +648,13 @@ const InventoryPage = () => {
 
     const existingCategories = useMemo(() => [...new Set(inventory.map(i => i.category))], [inventory]);
 
+    const { year: nianfaiYear, isArchived: nianfaiArchived } = useNianfaiSeason();
     const filteredInventory = useMemo(() => {
-        if (filterStatus === '全部') return inventory;
-        return inventory.filter(item => getStockStatus(item).status === filterStatus);
-    }, [inventory, filterStatus, getStockStatus]);
+        const visible = inventory.filter(item => item.category !== '年菜庫存'
+            || (!nianfaiArchived && nianfaiStockYear(item) === nianfaiYear));
+        if (filterStatus === '全部') return visible;
+        return visible.filter(item => getStockStatus(item).status === filterStatus);
+    }, [inventory, filterStatus, getStockStatus, nianfaiYear, nianfaiArchived]);
 
     const groupedInventory = useMemo(() =>
         filteredInventory.reduce((acc, item) => {
@@ -680,7 +743,7 @@ const InventoryPage = () => {
                             <span className="text-xs text-orange-600 flex-1">
                                 {batchOpType === 'replenish' ? '輸入要增加的數量' : batchOpType === 'consume' ? '輸入要扣除的數量' : '輸入盤點後的實際數量'}
                             </span>
-                            <button onClick={handleBatchSave} disabled={batchSaving}
+                            <button onClick={handleBatchSaveClick} disabled={batchSaving}
                                 className="px-5 py-2 bg-[#4A9A7A] hover:bg-[#3A8A6A] disabled:opacity-50 text-white rounded-lg font-bold text-sm shadow-sm transition-colors">
                                 {batchSaving ? '儲存中...' : `確認儲存 (${Object.values(batchValues).filter(v => v !== '' && Number(v) !== 0).length} 項)`}
                             </button>
@@ -797,9 +860,43 @@ const InventoryPage = () => {
                 <ThresholdSettingModal isOpen={isThresholdModalOpen} onClose={() => setIsThresholdModalOpen(false)} item={selectedItem} onSave={handleThresholdSave} onSaveLinks={handleLinksUpdate} allMenuItems={allMenuItems} consumesMapping={inventoryConsumesMapping} />
             )}
             {isAddModalOpen && (
-                <AddItemModal isOpen={isAddModalOpen} onClose={() => setIsAddModalOpen(false)} onSave={handleAddItem} existingCategories={existingCategories} />
+                <AddItemModal isOpen={isAddModalOpen} onClose={() => setIsAddModalOpen(false)} onSave={handleAddItem} existingCategories={[...new Set([...existingCategories, ...(nianfaiYear && !nianfaiArchived ? ['年菜庫存'] : [])])]} nianfaiYear={nianfaiArchived ? null : nianfaiYear} />
             )}
             <LogModal isOpen={isLogModalOpen} onClose={() => setIsLogModalOpen(false)} item={selectedItem} logs={logModalLogs} isLoading={isLogLoading} />
+
+            {/* 批次調整二次確認：按下「確認儲存」不直接送出，先列出每一項異動內容 */}
+            {pendingBatch && (
+                <div className="fixed inset-0 bg-black bg-opacity-60 z-[60] flex items-center justify-center">
+                    <div className="bg-white p-6 rounded-xl shadow-2xl w-[420px] max-h-[80vh] flex flex-col">
+                        <h4 className="text-xl font-black mb-4 text-gray-800">
+                            確認{{ replenish: '補貨', consume: '消耗', inventory: '盤點' }[batchOpType]}（{pendingBatch.length} 項）
+                        </h4>
+                        <div className="overflow-y-auto flex-grow mb-5 space-y-2">
+                            {pendingBatch.map(({ id, newStock, item }) => {
+                                const delta = newStock - item.stock;
+                                return (
+                                    <div key={id} className="flex justify-between items-center text-sm bg-gray-50 rounded-lg px-3 py-2">
+                                        <span className="font-bold text-gray-700">{item.name}</span>
+                                        <span className="text-gray-500">{item.stock} → <span className="font-black text-gray-800">{newStock}</span>
+                                            <span className={`ml-2 font-black ${delta >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                                                ({delta >= 0 ? '+' : ''}{delta})
+                                            </span>
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        <div className="flex gap-3">
+                            <button onClick={() => setPendingBatch(null)} disabled={batchSaving} className="flex-1 py-2.5 rounded-lg font-bold text-sm bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-50">
+                                取消
+                            </button>
+                            <button onClick={handleConfirmBatchSave} disabled={batchSaving} className="flex-1 py-2.5 rounded-lg font-bold text-sm bg-[#4A9A7A] text-white hover:bg-[#3A8A6A] disabled:opacity-50">
+                                {batchSaving ? '儲存中...' : '確認送出'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
