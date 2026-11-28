@@ -257,3 +257,9 @@ where id in ('inv_1775499142948','inv_1775499157078','inv_1775499177326','inv_17
 - 正式 GAS @4（新增 clearTestData：只限測試中，已上線會拒絕）。
 - 前端 main.6c101d55.js（舊版在 build_prev），server.js 新增 `/api/nianfai/gas/clear-test`（只清該年度年菜單／發票／保留編號、流水號歸 1；phase=live 拒絕），已重啟 posserver（重啟前 lpstat 佇列空）。
 - 檢查：/api/health `dev:false`（dev 的一鍵清空按鈕不顯示、API 403）；年度 2027 phase testing；按鈕在收合的「10. 維護工具」最下方，只在測試中出現（未按）。
+
+### 2026-11-29 正式環境整理
+- 配色調整（原本只在 pos-project 未 commit）補 commit 為 7b66067，pos-project 已 ff，工作目錄乾淨；備份 `~/pos-project-deploy-backup-20261127/color-tweaks-20261129.patch`。以後部署不用再 stash。
+- `start.sh`（launchd com.kai.posserver 開機執行）納入版本控制（b3096e2），**拿掉開機自動 build**，只啟動 server；舊版備份 `start.sh.old-20261129`。
+- `start-dev.sh`（舊 dev 啟動腳本，dev 已改從 ~/webpos-dev 啟動）移到備份資料夾 `start-dev.sh.removed-20261129`。
+- `.gitignore` 加 `/build_next`、`/build_prev*`。目前執行中的 server 沒重啟，新 start.sh 下次開機／重啟才生效。
