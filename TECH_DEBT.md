@@ -115,3 +115,42 @@
    where status in ('open','served','paid') and coalesce(table_number,'') = '' and is_nianfai is not true;
    ```
 
+
+---
+
+## 4. GitHub 上的 main 落後正式環境；正式環境 `.env` 沒有異地備份
+
+- **記錄日期：** 2026-11-29
+- **處理時機：** 年菜季結束、正式環境穩定之後
+- **狀態：** 待處理
+- **分類：** 一般營運（版本與備份）
+
+### 現況
+
+| 位置 | 版本 |
+|---|---|
+| 正式環境 `~/pos-project` 的本機 main | 和 `feature/nianfai` 相同（2026-11-29 為 ff01427 之後），就是目前正式在跑的程式 |
+| GitHub `origin/feature/nianfai` | 2026-11-29 已推送，和正式環境相同 |
+| GitHub `origin/main` | 還停在 dcb13d5（年菜開發前，dev 一鍵清空按鈕），比本機 main 落後 130 個 commit |
+
+- 本機 main 只比 GitHub main 多出新的 commit，沒有分岔，之後可以直接 fast-forward。
+- 目前正式程式在 GitHub 上只存在 `feature/nianfai` 分支。這個分支被刪掉或改寫的話，GitHub 上就沒有正式版本的程式。
+
+### 為什麼現在不推 main
+
+Yw 交代過不要推 main，要等年菜季結束、確定穩定之後再決定。
+
+### `.env` 沒有備份
+
+- 正式環境的 `~/pos-project/.env` 存有 Supabase 連線資訊、年菜 GAS 密鑰等，在 `.gitignore` 裡，不會、也不該推上 GitHub。
+- 目前只存在這台 Mac。電腦壞了，程式可以從 GitHub 還原，但 `.env` 要重新從 Supabase、GAS 後台找回各項金鑰。
+- 建議 Yw 自己把 `.env` 內容存進密碼管理器之類的安全地方。Claude 不讀、也不在對話顯示正式 `.env`。
+
+### 處理方式
+
+1. 年菜季結束、確認穩定後，Yw 決定方式：
+   - 直接推：`cd ~/pos-project && git push origin main`（fast-forward，不需要 force）。
+   - 或者在 GitHub 開 PR，把 `feature/nianfai` 合進 main。
+2. 推完確認 `git rev-list --count origin/main..main` 是 0。
+3. 之後的部署流程照舊：先 commit 到 `feature/nianfai`，再 ff 到正式環境。看要不要改成每次部署後也推 main。
+4. `.env` 備份由 Yw 自己處理，完成後在這裡標記。
