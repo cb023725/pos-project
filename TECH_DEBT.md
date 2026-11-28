@@ -174,7 +174,42 @@ Yw 交代過不要推 main，要等年菜季結束、確定穩定之後再決定
 - 另外 `get_orders_customer_count` 是 security definer，也開放給 anon 呼叫，可以繞過 orders 的權限讀到訂單人數。
 - WebPOS 本身用 service key，不受這些規則影響。拿掉不會影響 WebPOS、報表頁、錢櫃。
 
-### 處理方式
+### 儀表板實際用到什麼（2026-11-29 查 `~/webopos-dashboard`，Yw 確認還在用）
+
+儀表板是 Vercel 上的靜態頁 `index.html`，沒有登入，網頁裡帶著匿名金鑰。它讀的資料：
+
+| 讀什麼 | 用途 | 需要的權限 |
+|---|---|---|
+| `report_sessions` RPC | KPI、期間比較、日趨勢 | 函式本身（不靠 policy） |
+| `invoices`（今天的逐張發票：金額、時間、品項、桌號、單號） | 只有「今日各時段」小時圖 | **invoices 匿名讀取**（但規則開放的是全部歷史發票） |
+| `get_orders_customer_count` RPC | 今天發票對應的人數 | 函式本身 |
+| `menu_items`（庫存類品項的名稱、庫存、門檻） | 庫存區塊 | menu_items 匿名讀取 |
+| `inventory_logs` | **沒有用到** | — |
+
+- 週報、月報（GitHub Actions `reports/send-report.js`）只呼叫 RPC。
+- 月備份（`monthly-backup.js`）用 service role key，不受 policy 影響。
+
+### 處理方式（建議，儀表板照常可用）
+
+1. **`inventory_logs` 的匿名讀取可以直接拿掉**，沒有任何地方用到：
+   `drop policy if exists "allow anon read" on public.inventory_logs;`
+2. **發票改成只給今天的小時彙總：**
+   - 新增 security definer 函式（例如 `report_today_hourly()`），只回傳今天每小時的營業額、冷凍包金額、人數，沒有單筆發票、品項、單號。
+   - 儀表板 `index.html` 的小時圖改呼叫它，`get_orders_customer_count` 也不用了。
+   - 確認儀表板正常後，拿掉 invoices 的匿名讀取，並 revoke `get_orders_customer_count` 的 anon 權限。
+   - 這樣拿到網址的人最多只看到彙總數字，跟現在 KPI 區塊看到的一樣。
+3. **`menu_items` 匿名讀取先保留：** 庫存區塊要用，內容是菜單、價格、庫存，不含營業額或個資。之後要收緊，可以照第 2 點改成函式。
+4. **順序：**
+   - dev 先建函式、改儀表板本機測試。
+   - Yw 在正式 SQL Editor 建函式（只新增，不影響現有）。
+   - 部署儀表板（push `webopos-dashboard`，Vercel 自動部署），確認畫面正常。
+   - 最後 Yw 執行拿掉 policy 的 SQL。
+   - 跑 `data-fixes/schema-fingerprint-1-summary.sql` 更新比對結果。
+5. dev 不補這 3 條規則。
+
+### 原本的處理方式（儀表板沒在用時才適用，保留參考）
+
+
 
 1. Yw 確認 Vercel 儀表板還有沒有在用。
 2. **沒在用：** Yw 在正式 SQL Editor 執行以下 SQL（只拿掉匿名讀取，不動資料）：
