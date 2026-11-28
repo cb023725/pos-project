@@ -17,7 +17,7 @@
 | 年菜 GAS | dev 部署 @58（`.env.dev`） | 正式部署 @4（`.env.prod-gas`） |
 | GitHub | `origin/feature/nianfai` 已推到 cd0ac2e | GitHub `origin/main` 還停在 dcb13d5（見 `TECH_DEBT.md` §4） |
 
-- **確認方式：** `git -C ~/webpos-dev rev-parse HEAD` 和 `git -C ~/pos-project rev-parse HEAD` 應該相同；`git -C ~/pos-project status --short` 應該只剩 `?? src/setupProxy.js`。
+- **確認方式：** `git -C ~/webpos-dev rev-parse HEAD` 和 `git -C ~/pos-project rev-parse HEAD` 應該相同；`git -C ~/pos-project status --short` 應該沒有任何輸出。
 - **GAS 程式相同：** 正式 @4 和 dev @58 都是從 57c9c64 的 `gas/nianfai/` 部署，之後的 commit 沒有改 GAS。
 - **正式環境原本有、dev 沒有的東西，全部已搬進 dev 並 commit：**
   - 配色調整：7b66067。
@@ -25,7 +25,7 @@
 - **不需要同步、刻意不同的：**
   - `.env`／`.env.dev`／`.env.prod-gas`：各環境設定，都在 `.gitignore`。
   - `build/`、`build_prev*`、`logs/`、`image-cache/`、`pos.db`：產物或本機資料，已忽略。
-  - `src/setupProxy.js`：只有正式資料夾有，未追蹤。用途是 `npm start` 開發模式時把 `/api` 轉到 3001，正式 build 用不到，無害；Yw 同意保留不動，**不要搬進 dev**。
+  - `src/setupProxy.js`：舊的 `npm start` 開發模式設定，2026-11-29 已從正式資料夾刪除（移到備份資料夾），兩個資料夾現在逐檔完全相同。
 - **Supabase 資料本來就不同：** dev 和正式是兩個資料庫，只同步 schema，不同步資料。正式資料庫已跑過的 migration 見第 3 節。
 
 ### 以後的同步規則（避免再分岔）
@@ -52,7 +52,7 @@
 | 11-27 22:2x | 「清空測試資料」按鈕：只限測試中，只清年菜，放在收合的「10. 維護工具」最下方 | 57c9c64＋1e42e12，GAS @4 | 是 |
 | 11-29 | 配色調整補 commit（原本只在正式資料夾未 commit） | 7b66067 | 否（build 本來就含） |
 | 11-29 | `start.sh` 納入版本控制、拿掉開機自動 build；`.gitignore` 加 `/build_next`、`/build_prev*` | b3096e2 | 否（下次開機生效，**尚未實際開機驗證**） |
-| 11-29 | 刪除 `start-dev.sh`（移到備份資料夾，舊 dev 啟動腳本，已不用） | — | 否 |
+| 11-29 | 刪除 `start-dev.sh`、`src/setupProxy.js`（移到備份資料夾，舊 dev 用的，已不用） | — | 否 |
 | 11-29 | 文件：孤兒訂單 #449、GitHub main／`.env` 備份（`TECH_DEBT.md` §3、§4），本交接文件 | e98e1c8、cd0ac2e 之後 | — |
 
 前端目前是 **main.6c101d55.js**（11-27 22:2x 部署的 build；之後只有文件、配色補 commit、start.sh 變更，畫面內容相同）。
@@ -93,7 +93,7 @@
   - `MenuManagement-color-1722.patch`、`color-tweaks-20261129.patch`：配色 patch，已 commit，留作備份。
   - `start.sh`、`start.sh.old-20261129`：舊啟動腳本（含自動 build）。
   - `start-dev.sh`、`start-dev.sh.removed-20261129`：已刪的舊 dev 腳本。
-  - `setupProxy.js`：複本。
+  - `setupProxy.js`、`setupProxy.js.removed-20261129`：已刪除的開發模式設定。
 - **git stash：** `~/pos-project` 有 `stash@{0}`「prod uncommitted color tweaks before nianfai deploy 2026-11-27」。內容已 commit（7b66067），可以由 Yw 決定是否 `git stash drop`。
 - **舊畫面：** `~/pos-project/build_prev`（上一版）、`build_prev_1307`（11-27 13:07 版），用來快速退回：`mv build build_bad && mv build_prev build`。
 - **`start.sh` 新版：** 只啟動 server，找不到 `build/index.html` 時只寫警告、不自動 build。舊版會在 src 比 build 新時背景重建 build，畫面會壞一分多鐘。
