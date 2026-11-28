@@ -94,7 +94,7 @@
   - `start.sh`、`start.sh.old-20261129`：舊啟動腳本（含自動 build）。
   - `start-dev.sh`、`start-dev.sh.removed-20261129`：已刪的舊 dev 腳本。
   - `setupProxy.js`、`setupProxy.js.removed-20261129`：已刪除的開發模式設定。
-- **git stash：** `~/pos-project` 有 `stash@{0}`「prod uncommitted color tweaks before nianfai deploy 2026-11-27」。內容已 commit（7b66067），可以由 Yw 決定是否 `git stash drop`。
+- **git stash：** 已於 2026-11-29 刪除（`~/pos-project` 沒有 stash）。內容先存成 `stash0-prod-color-and-schema-20261127.patch`：配色部分已 commit（7b66067）；`schema.sql` 部分是部署前正式環境對 `schema.sql`（說明文件，部署不會執行）的修改，部署時衝突改用新版，原修改和 `uncommitted.patch` 裡的相同。目前 `schema.sql` 沒有那些報表函式與欄位說明，實際資料庫是由 migration 建立，不受影響；之後整理 `schema.sql` 時可參考這份 patch。
 - **舊畫面：** `~/pos-project/build_prev`（上一版）、`build_prev_1307`（11-27 13:07 版），用來快速退回：`mv build build_bad && mv build_prev build`。
 - **`start.sh` 新版：** 只啟動 server，找不到 `build/index.html` 時只寫警告、不自動 build。舊版會在 src 比 build 新時背景重建 build，畫面會壞一分多鐘。
 
