@@ -154,3 +154,39 @@ Yw 交代過不要推 main，要等年菜季結束、確定穩定之後再決定
 2. 推完確認 `git rev-list --count origin/main..main` 是 0。
 3. 之後的部署流程照舊：先 commit 到 `feature/nianfai`，再 ff 到正式環境。看要不要改成每次部署後也推 main。
 4. `.env` 備份由 Yw 自己處理，完成後在這裡標記。
+
+---
+
+## 5. 正式資料庫開放匿名讀取發票、菜單、庫存紀錄（Vercel 儀表板遺留）
+
+- **記錄日期：** 2026-11-29（dev／正式資料庫結構比對時發現）
+- **處理時機：** Yw 確認 Vercel 儀表板還有沒有在用之後
+- **狀態：** 待 Yw 決定
+- **分類：** 一般營運（資料安全）
+
+### 現況
+
+正式資料庫有 3 條 dev 沒有的權限規則：`invoices`、`menu_items`、`inventory_logs` 各一條「allow anon read」（`for select to public using (true)`）。來源是 `schema.sql` 第 265 行起，註解寫明是給 Vercel 儀表板用的，也寫了風險：
+
+> 拿到儀表板網址的人可讀到全部營業額；改用 report_sessions 後可考慮移除。
+
+- 匿名金鑰（anon key）本來就是設計給前端公開使用的。所以拿到儀表板網址、從網頁裡取得匿名金鑰的人，可以直接讀**所有發票**（金額、品項、時間）、菜單和庫存異動紀錄。
+- 另外 `get_orders_customer_count` 是 security definer，也開放給 anon 呼叫，可以繞過 orders 的權限讀到訂單人數。
+- WebPOS 本身用 service key，不受這些規則影響。拿掉不會影響 WebPOS、報表頁、錢櫃。
+
+### 處理方式
+
+1. Yw 確認 Vercel 儀表板還有沒有在用。
+2. **沒在用：** Yw 在正式 SQL Editor 執行以下 SQL（只拿掉匿名讀取，不動資料）：
+
+   ```sql
+   drop policy if exists "allow anon read" on public.invoices;
+   drop policy if exists "allow anon read" on public.menu_items;
+   drop policy if exists "allow anon read" on public.inventory_logs;
+   revoke execute on function public.get_orders_customer_count(integer[]) from anon, authenticated;
+   ```
+
+   同時更新 `schema.sql` 的說明，跑完再用 `data-fixes/schema-fingerprint-1-summary.sql` 確認權限規則兩邊都剩 2 條。
+3. **還在用：** 改成讓儀表板只呼叫彙總函式（`report_sessions`，不含個資與單筆發票），再拿掉這 3 條。
+4. dev 不補這 3 條。
+

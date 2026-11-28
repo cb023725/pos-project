@@ -28,6 +28,18 @@
   - `src/setupProxy.js`：舊的 `npm start` 開發模式設定，2026-11-29 已從正式資料夾刪除（移到備份資料夾），兩個資料夾現在逐檔完全相同。
 - **Supabase 資料本來就不同：** dev 和正式是兩個資料庫，只同步 schema，不同步資料。正式資料庫已跑過的 migration 見第 3 節。
 
+### 資料庫結構比對（2026-11-29，`data-fixes/schema-fingerprint-*.sql`，Yw 在兩邊 SQL Editor 執行）
+
+| 類別 | 結果 |
+|---|---|
+| 資料表欄位 135、索引 21、限制 22、RLS 開關 13 張表、檢視表 3 | **完全相同** |
+| 報表函式 `report_sessions`／`report_order_invoices`／`report_items`／`report_attach`、`rls_auto_enable` | **完全相同** |
+| `get_orders_customer_count` | 內容相同、只有排版不同（dev 由 `20261122c` 補建，282 vs 258 字元）；程式沒有呼叫，不用處理 |
+| 權限規則 | 兩邊都有 adjustments 的 2 條；**正式多 3 條**「allow anon read」（invoices、menu_items、inventory_logs 開放匿名讀取，給以前的 Vercel 儀表板用）。dev 刻意不補，見 `TECH_DEBT.md` §5 |
+| 觸發器 | 兩邊都沒有 |
+
+結論：WebPOS 用到的結構兩邊一致（WebPOS 伺服器用 service key，不受權限規則影響）。以後新增 migration 要兩邊都跑，跑完可再用這兩份 SQL 比對。
+
 ### 以後的同步規則（避免再分岔）
 
 1. 所有改動都先在 `~/webpos-dev` 的 `feature/nianfai` 修改、測試、commit。
