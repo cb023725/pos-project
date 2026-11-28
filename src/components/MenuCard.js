@@ -99,7 +99,7 @@ const MenuCard = React.memo(({ item, onAddItem, onLongPress, allowOverride = fal
                 {/* 右上角庫存數量（僅有庫存連動且未售完時顯示） */}
                 {showStockBadge && (
                     <span className={`absolute top-1 right-1 px-2 py-0.5 rounded-full text-xs font-bold shadow-md z-10 ${
-                        linkedStock < 5 ? 'bg-orange-500 text-white' : 'bg-green-700 text-white'
+                        linkedStock < 5 ? 'bg-orange-100/90 text-orange-700 border border-orange-300' : 'bg-green-100/90 text-green-700 border border-green-300'
                     }`}>
                         庫存：{linkedStock}
                     </span>

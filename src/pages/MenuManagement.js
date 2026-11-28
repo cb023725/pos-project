@@ -16,7 +16,7 @@ const formatCurrency = (number) => {
 
 const getCategoryStyles = (category) => {
     const palette = [
-        'bg-teal-50 text-teal-700 border-teal-200',
+        'bg-[#4A9A7A]/10 text-[#4A9A7A] border-[#4A9A7A]/25',
         'bg-amber-50 text-amber-700 border-amber-200',
         'bg-lime-50 text-lime-700 border-lime-200',
         'bg-indigo-50 text-indigo-700 border-indigo-200',
@@ -103,7 +103,7 @@ const CategorySettingsModal = ({ category, allCategories, onClose, onSave, onDel
                         type="text"
                         value={form.name}
                         onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                        className="w-full border border-gray-300 rounded-lg p-2.5 text-base focus:ring-blue-500 focus:border-blue-500"
+                        className="w-full border border-gray-300 rounded-lg p-2.5 text-base focus:ring-[#4A9A7A] focus:border-[#4A9A7A]"
                     />
                 </div>
 
@@ -119,7 +119,7 @@ const CategorySettingsModal = ({ category, allCategories, onClose, onSave, onDel
                             <span className="text-base font-medium text-gray-700">{label}</span>
                             <div
                                 onClick={() => toggle(field)}
-                                className={`relative w-12 h-6 rounded-full transition-colors ${form[field] ? 'bg-blue-500' : 'bg-gray-300'}`}
+                                className={`relative w-12 h-6 rounded-full transition-colors ${form[field] ? 'bg-[#4A9A7A]' : 'bg-gray-300'}`}
                             >
                                 <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${form[field] ? 'translate-x-7' : 'translate-x-1'}`} />
                             </div>
@@ -161,7 +161,7 @@ const CategorySettingsModal = ({ category, allCategories, onClose, onSave, onDel
                             </div>
                             <div
                                 onClick={() => toggle('includeInTotal')}
-                                className={`relative w-12 h-6 rounded-full transition-colors flex-shrink-0 ml-4 ${form.includeInTotal !== false ? 'bg-blue-500' : 'bg-gray-300'}`}
+                                className={`relative w-12 h-6 rounded-full transition-colors flex-shrink-0 ml-4 ${form.includeInTotal !== false ? 'bg-[#4A9A7A]' : 'bg-gray-300'}`}
                             >
                                 <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${form.includeInTotal !== false ? 'translate-x-7' : 'translate-x-1'}`} />
                             </div>
@@ -175,7 +175,7 @@ const CategorySettingsModal = ({ category, allCategories, onClose, onSave, onDel
                             </div>
                             <div
                                 onClick={() => toggle('showInKpi')}
-                                className={`relative w-12 h-6 rounded-full transition-colors flex-shrink-0 ml-4 ${form.showInKpi !== false ? 'bg-blue-500' : 'bg-gray-300'}`}
+                                className={`relative w-12 h-6 rounded-full transition-colors flex-shrink-0 ml-4 ${form.showInKpi !== false ? 'bg-[#4A9A7A]' : 'bg-gray-300'}`}
                             >
                                 <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${form.showInKpi !== false ? 'translate-x-7' : 'translate-x-1'}`} />
                             </div>
@@ -230,11 +230,11 @@ const AddCategoryModal = ({ existingNames, onClose, onAdd }) => {
                     value={name}
                     onChange={e => setName(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && handleAdd()}
-                    className="w-full border border-gray-300 rounded-lg p-3 text-base mb-4 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full border border-gray-300 rounded-lg p-3 text-base mb-4 focus:ring-[#4A9A7A] focus:border-[#4A9A7A]"
                 />
                 <div className="flex justify-end gap-2">
                     <button onClick={onClose} className="px-4 py-2 text-sm text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300">取消</button>
-                    <button onClick={handleAdd} className="px-4 py-2 text-sm font-bold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700">新增</button>
+                    <button onClick={handleAdd} className="px-4 py-2 text-sm font-bold text-white bg-[#4A9A7A] rounded-lg hover:bg-[#3A8A6A]">新增</button>
                 </div>
             </div>
         </div>
@@ -327,7 +327,7 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
                 </h3>
                 <form onSubmit={handleSubmit}>
                     <div className="mb-6 border p-5 rounded-xl bg-gray-50">
-                        <h4 className="text-xl font-bold text-gray-700 mb-4 border-l-4 border-blue-400 pl-3">基本資訊</h4>
+                        <h4 className="text-xl font-bold text-gray-700 mb-4 border-l-4 border-[#4A9A7A] pl-3">基本資訊</h4>
                         <div className="mb-4 flex justify-center">
                             {formData.imageUrl ? (
                                 <img src={formData.imageUrl} alt="預覽圖" className="h-24 w-24 object-cover rounded-full border-2 border-gray-300 shadow-md" onError={e => { e.target.style.opacity = 0; }}/>
@@ -371,7 +371,7 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
                         </div>
                         <input type="hidden" name="stock" value={formData.stock}/>
                     </div>
-                    <div className="mb-6 border p-5 rounded-xl bg-green-50">
+                    <div className="mb-6 border p-5 rounded-xl bg-[#4A9A7A]/8">
                         <h4 className="text-xl font-bold text-gray-700 mb-4 border-l-4 border-green-500 pl-3">📦 庫存連動</h4>
                         <p className="text-sm text-gray-600 mb-3">勾選此品項售出時會消耗的庫存原料。</p>
                         <div className="space-y-4 max-h-72 overflow-y-auto pr-3">
@@ -384,12 +384,12 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
                                     return acc;
                                 }, {})).map(([category, items]) => (
                                     <div key={category} className="border border-green-200 p-3 rounded-lg bg-white shadow-sm">
-                                        <p className="text-base font-black text-green-800 mb-2">{category}</p>
+                                        <p className="text-base font-black text-[#4A9A7A] mb-2">{category}</p>
                                         <div className="grid grid-cols-2 gap-2">
                                             {items.map(inv => (
-                                                <label key={inv.id} className="flex items-center space-x-2 text-base cursor-pointer hover:bg-green-100 p-2 rounded-lg">
-                                                    <input type="checkbox" checked={formData.consumes.includes(inv.id)} onChange={() => handleConsumeToggle(inv.id)} className="form-checkbox text-green-600 h-5 w-5 rounded"/>
-                                                    <span className={formData.consumes.includes(inv.id) ? 'font-bold text-green-700' : 'text-gray-800'}>{inv.name}</span>
+                                                <label key={inv.id} className="flex items-center space-x-2 text-base cursor-pointer hover:bg-[#4A9A7A]/10 p-2 rounded-lg">
+                                                    <input type="checkbox" checked={formData.consumes.includes(inv.id)} onChange={() => handleConsumeToggle(inv.id)} className="form-checkbox text-[#4A9A7A] h-5 w-5 rounded"/>
+                                                    <span className={formData.consumes.includes(inv.id) ? 'font-bold text-[#4A9A7A]' : 'text-gray-800'}>{inv.name}</span>
                                                 </label>
                                             ))}
                                         </div>
@@ -447,7 +447,7 @@ const ItemModal = ({ item, onClose, onSave, isAdding = false, inventoryItems = [
                     )}
                     <div className="flex justify-end space-x-4 pt-4 border-t">
                         <button type="button" onClick={onClose} className="px-6 py-3 text-base font-medium text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300">取消</button>
-                        <button type="submit" disabled={submitting} className={`px-6 py-3 text-base font-bold text-white rounded-lg shadow-md transition-colors ${submitting ? 'bg-blue-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>{submitting ? '處理中...' : isAdding ? '確認新增' : '儲存變更'}</button>
+                        <button type="submit" disabled={submitting} className={`px-6 py-3 text-base font-bold text-white rounded-lg shadow-md transition-colors ${submitting ? 'bg-[#4A9A7A]/50 cursor-not-allowed' : 'bg-[#4A9A7A] hover:bg-[#3A8A6A]'}`}>{submitting ? '處理中...' : isAdding ? '確認新增' : '儲存變更'}</button>
                     </div>
                 </form>
             </div>
@@ -591,7 +591,7 @@ const MenuManagementPage = () => {
                 <h2 className="text-4xl font-black text-gray-800">菜單管理</h2>
                 <button
                     onClick={() => setIsAddingNew(true)}
-                    className="bg-emerald-600 text-white px-5 py-3 rounded-lg hover:bg-emerald-700 font-bold text-base shadow-md flex items-center space-x-2"
+                    className="bg-[#D47856] text-white px-5 py-3 rounded-lg hover:bg-[#C46848] font-bold text-base shadow-md flex items-center space-x-2"
                 >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"/></svg>
                     <span>新增菜單項目</span>
@@ -607,7 +607,7 @@ const MenuManagementPage = () => {
                                 onClick={() => setFilterCategory(cat.name)}
                                 className={`whitespace-nowrap py-3 px-2 border-b-4 text-lg font-medium transition-colors duration-150
                                     ${cat.name === filterCategory
-                                        ? 'border-blue-600 text-blue-600 font-black'
+                                        ? 'border-[#4A9A7A] text-[#4A9A7A] font-black'
                                         : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
                                     }`}
                             >
@@ -629,7 +629,7 @@ const MenuManagementPage = () => {
                     {/* 新增類別按鈕 */}
                     <button
                         onClick={() => setIsAddingCategory(true)}
-                        className="flex-shrink-0 ml-2 flex items-center gap-1 px-3 py-2 text-sm text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                        className="flex-shrink-0 ml-2 flex items-center gap-1 px-3 py-2 text-sm text-gray-400 hover:text-[#4A9A7A] hover:bg-[#4A9A7A]/10 rounded-lg transition-colors"
                         title="新增類別"
                     >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"/></svg>
